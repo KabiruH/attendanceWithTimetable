@@ -1,0 +1,343 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Users {
+  id            Int         @id @default(autoincrement())
+  name          String      @db.VarChar(100)
+  id_number     String      @unique @db.VarChar(50)
+  role          String      @db.VarChar(20)
+  phone_number  String      @db.VarChar(20)
+  department    String?      @db.VarChar(20)
+  gender        String      @db.VarChar(10)
+  email         String?       @unique @db.VarChar(100)
+  is_active     Boolean     @default(true)
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
+  created_by    String      @db.VarChar(100) 
+
+  Employee      Employees?  // One-to-one relation with Employees
+  webAuthnCredentials WebAuthnCredentials[]
+  LoginLogs     LoginLogs[] 
+  webAuthnCredentialChallenge WebAuthnCredentialChallenge?
+  trainerClassAssignments TrainerClassAssignments[]
+  classAttendance         ClassAttendance[]
+  biometricEnrollments    BiometricEnrollments[]
+  biometricLogs           BiometricLogs[]
+  attendance              Attendance[] @relation("EmployeeAttendance") 
+  trainerSchedule         TimetableSlots[] @relation("TrainerSchedule")  
+
+  @@map("Users")
+  @@index([id_number])
+}
+
+model Employees {
+  id              Int          @id @default(autoincrement())
+  employee_id     Int          @unique  // This will come from Users table id
+  name            String       @db.VarChar(100)  // For verification
+  id_number       String       @db.VarChar(50)   // For verification
+  role            String       @db.VarChar(20)   // For verification
+  email           String       @unique @db.VarChar(100)
+  password        String       @db.VarChar(255)
+  date_of_birth   DateTime     @db.Date
+  id_card_path    String       @db.VarChar(255)  // Path to stored ID card file
+  passport_photo  String       @db.VarChar(255)  // Path to stored passport photo
+  created_at      DateTime     @default(now())
+  user            Users        @relation(fields: [employee_id], references: [id], onDelete: Cascade)
+  LoginLogs       LoginLogs[]
+  PasswordReset   PasswordReset[] 
+
+  @@index([id_number, role]) // Index for faster verification lookups
+}
+
+model Attendance {
+  id             Int       @id @default(autoincrement())
+  employee_id    Int       
+  date           DateTime  @db.Date
+  check_in_time  DateTime?
+  check_out_time DateTime?
+  sessions       Json?
+  status         String    @default("Absent") @db.VarChar(10)
+  user           Users @relation("EmployeeAttendance", fields: [employee_id], references: [id])
+
+  @@unique([employee_id, date])  // Keep for data integrity
+  @@index([date])                // Add index for date-only queries
+  @@index([employee_id])         // Add index for employee queries
+}
+
+model PasswordReset {
+  id           Int      @id @default(autoincrement())
+  employee_id  Int
+  token        String   @unique
+  expires      DateTime
+  used         Boolean  @default(false)
+  employee     Employees @relation(fields: [employee_id], references: [id])
+  created_at   DateTime @default(now())
+
+  @@map("PasswordReset") 
+  @@index([token])
+}
+
+model AttendanceProcessingLog {
+  id                Int      @id @default(autoincrement())
+  date              DateTime
+  records_processed Int
+  status            String   // 'completed' | 'failed'
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@unique([date])
+}
+
+model WebAuthnCredentials {
+  id              String   @id @default(uuid())
+  userId          Int
+  email           String?  @db.VarChar(100)
+  user            Users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId    String   @unique
+  publicKey       String   @db.Text
+  counter         Int
+  transports      String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@map("WebAuthnCredentials")
+}
+
+model WebAuthnCredentialChallenge {
+  userId    Int       @id
+  user      Users     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge String    @db.Text
+  expires   DateTime
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("WebAuthnCredentialChallenge")
+}
+
+// Add this model to your existing schema.prisma file
+
+model LoginLogs {
+  id               Int       @id @default(autoincrement())
+  user_id          Int?      // Links to Users.id - nullable for failed attempts
+  employee_id      Int?      // Links to Employees.id - nullable for failed attempts  
+  email            String    @db.VarChar(100) // Always store email attempted
+  ip_address       String    @db.VarChar(45)  // IPv4/IPv6 support
+  user_agent       String    @db.Text         // Browser/device info
+  status           String    @db.VarChar(20)  // 'success', 'failed', 'blocked'
+  failure_reason   String?   @db.VarChar(100) // Detailed failure reason
+  login_method     String    @db.VarChar(20)  // 'password', 'biometric'
+  session_duration Int?      // In minutes - for successful logins
+  attempted_at     DateTime  @default(now())
+  
+  // Relations
+  user             Users?     @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  employee         Employees? @relation(fields: [employee_id], references: [id], onDelete: SetNull)
+  
+  @@map("LoginLogs")
+  @@index([user_id])
+  @@index([employee_id])
+  @@index([email])
+  @@index([attempted_at])
+  @@index([status])
+  @@index([ip_address])
+}
+
+// Classes that trainers can be assigned to
+model Classes {
+  id              Int       @id @default(autoincrement())
+  name            String    @db.VarChar(100)        // e.g., "Advanced Mathematics"
+  code            String    @unique @db.VarChar(20)  // e.g., "MATH301"
+  description     String?   @db.Text                 // Optional class description
+  department      String    @db.VarChar(50)          // Department offering the class
+  duration_hours  Int       @default(2)              // Class duration in hours
+  is_active       Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  created_by      String    @db.VarChar(100)
+  
+  // Relations
+  trainerAssignments TrainerClassAssignments[]
+  classAttendance    ClassAttendance[]
+  timetableSlots TimetableSlots[]  
+  termClasses        TermClasses[]
+
+  @@map("Classes")
+  @@index([code])
+  @@index([department])
+  @@index([is_active])
+}
+
+// Separate attendance tracking for classes
+model ClassAttendance {
+  id                Int       @id @default(autoincrement())
+  trainer_id        Int       // References Users.id (employee who is a trainer)
+  class_id          Int       // References Classes.id
+  date              DateTime  @db.Date
+  check_in_time     DateTime
+  check_out_time    DateTime? // Will be auto-set after duration_hours
+  status            String    @default("Present") @db.VarChar(20)
+  auto_checkout     Boolean   @default(false)     // Flag to track if auto-checked out
+  work_attendance_id Int?     // Reference to the work attendance record (optional link)
+  created_at        DateTime  @default(now())
+  
+  // Relations
+  trainer           Users     @relation(fields: [trainer_id], references: [id], onDelete: Cascade)
+  class             Classes   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  
+  @@unique([trainer_id, class_id, date])  // One check-in per trainer per class per day
+  @@map("ClassAttendance")
+  @@index([trainer_id])
+  @@index([class_id])
+  @@index([date])
+  @@index([check_in_time])
+  @@index([auto_checkout])
+}
+
+// Junction table to assign trainers to classes
+model TrainerClassAssignments {
+  id          Int       @id @default(autoincrement())
+  trainer_id  Int       // References Users.id (where role = 'employee' and assigned to classes)
+  class_id    Int       // References Classes.id
+  assigned_at DateTime  @default(now())
+  is_active   Boolean   @default(true)
+  assigned_by String    @db.VarChar(100)  // Who made the assignment
+  
+  // Relations
+  trainer     Users     @relation(fields: [trainer_id], references: [id], onDelete: Cascade)
+  class       Classes   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  
+  @@unique([trainer_id, class_id])  // A trainer can only be assigned to a class once
+  @@map("TrainerClassAssignments")
+  @@index([trainer_id])
+  @@index([class_id])
+  @@index([is_active])
+}
+
+// Biometric enrollment tracking for mobile app
+model BiometricEnrollments {
+  id              Int       @id @default(autoincrement())
+  user_id         Int       // References Users.id
+  biometric_hash  String    @db.Text  // Hashed biometric data (for security)
+  enrolled_at     DateTime  @default(now())
+  device_info     Json?     // Store device information
+  ip_address      String?   @db.VarChar(45)
+  user_agent      String?   @db.Text
+  is_active       Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  // Relations
+  user            Users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  @@map("BiometricEnrollments")
+  @@index([user_id])
+  @@index([user_id, is_active])
+}
+
+// Biometric activity logs for security tracking
+model BiometricLogs {
+  id          Int       @id @default(autoincrement())
+  user_id     Int       // References Users.id
+  action      String    @db.VarChar(50)  // 'enrollment', 'authentication', 'deletion'
+  status      String    @db.VarChar(20)  // 'success', 'failed'
+  ip_address  String?   @db.VarChar(45)
+  user_agent  String?   @db.Text
+  timestamp   DateTime  @default(now())
+  details     Json?     // Additional details about the action
+  
+  // Relations
+  user        Users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+    @@map("BiometricLogs")
+  @@index([user_id])
+  @@index([timestamp])
+  @@index([action])
+  @@index([status])
+}
+
+model Terms {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(100)
+  start_date   DateTime @db.Date
+  end_date     DateTime @db.Date
+  is_active    Boolean  @default(true)
+  working_days Json?    // [1,2,3,4,5] for Mon-Fri
+  holidays     Json?    // Array of holiday dates
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  timetableSlots TimetableSlots[]
+  termClasses    TermClasses[]
+}
+
+model Rooms {
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  capacity    Int?
+  room_type   String? @db.VarChar(50) // "classroom", "lab"
+  equipment   Json?
+  department  String? @db.VarChar(50)
+  is_active   Boolean @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  timetableSlots TimetableSlots[]
+}
+
+model LessonPeriods {
+  id         Int      @id @default(autoincrement())
+  name       String   @db.VarChar(50)  // "Period 1"
+  start_time DateTime @db.Time         // 09:00:00
+  end_time   DateTime @db.Time         // 10:30:00
+  duration   Int                       // minutes
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  timetableSlots TimetableSlots[]
+}
+
+model TimetableSlots {
+  id               String   @id @default(uuid())
+  term_id          Int
+  class_id         Int
+  employee_id      Int      // Trainer (References Users.id)
+  room_id          Int
+  lesson_period_id Int
+  day_of_week      Int      // 0-6 (Sunday-Saturday)
+  status           String   @default("scheduled") @db.VarChar(20)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  
+  term             Terms           @relation(fields: [term_id], references: [id])
+  class            Classes         @relation(fields: [class_id], references: [id])
+  trainer          Users           @relation("TrainerSchedule", fields: [employee_id], references: [id])
+  room             Rooms           @relation(fields: [room_id], references: [id])
+  lessonPeriod     LessonPeriods   @relation(fields: [lesson_period_id], references: [id])
+  
+  @@unique([term_id, day_of_week, lesson_period_id, room_id])
+  @@unique([term_id, day_of_week, lesson_period_id, employee_id])
+  @@index([employee_id])
+  @@index([class_id])
+  @@index([term_id])
+}
+
+model TermClasses {
+  id         Int      @id @default(autoincrement())
+  term_id    Int
+  class_id   Int
+  assigned_at DateTime @default(now())
+  assigned_by String   @db.VarChar(100)
+  
+  term       Terms    @relation(fields: [term_id], references: [id], onDelete: Cascade)
+  class      Classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  
+  @@unique([term_id, class_id])
+  @@map("TermClasses")
+  @@index([term_id])
+  @@index([class_id])
+}
