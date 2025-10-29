@@ -2,7 +2,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Calendar } from "lucide-react";
+import { PlusCircle, Calendar, Filter, X } from "lucide-react";
 import TimetableGrid from '@/components/timetable/TimetableGrid';
 import WeekNavigator from '@/components/timetable/WeekNavigator';
 import GenerateTimetableDialog from '@/components/timetable/GenerateTimetableDialog';
@@ -27,6 +27,13 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 
 interface User {
   id: number;
@@ -86,6 +93,9 @@ export default function TimetablePage() {
   // Filter states
   const [filterTrainer, setFilterTrainer] = useState<number | null>(null);
   const [filterDepartment, setFilterDepartment] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'all' | 'mine'>('all'); // For admin toggle
+  const [availableTrainers, setAvailableTrainers] = useState<Array<{id: number, name: string}>>([]);
+  const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
 
   useEffect(() => {
     fetchUserData();
@@ -96,7 +106,7 @@ export default function TimetablePage() {
     if (selectedTerm) {
       fetchTimetableData();
     }
-  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment]);
+  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, viewMode]);
 
   // Fetch current user
   const fetchUserData = async () => {
@@ -106,8 +116,9 @@ export default function TimetablePage() {
       const data = await response.json();
       setUser(data.user);
       
-      // If not admin, set filter to current user
+      // If not admin, automatically set view to their schedule
       if (data.user.role !== 'admin') {
+        setViewMode('mine');
         setFilterTrainer(data.user.id);
       }
     } catch (error) {
@@ -146,14 +157,40 @@ export default function TimetablePage() {
       
       const params = new URLSearchParams();
       if (selectedTerm) params.append('term_id', selectedTerm.toString());
-      if (filterTrainer) params.append('trainer_id', filterTrainer.toString());
-      if (filterDepartment) params.append('department', filterDepartment);
+      
+      // Apply filters based on view mode
+      if (viewMode === 'mine' && user) {
+        params.append('trainer_id', user.id.toString());
+      } else if (viewMode === 'all') {
+        if (filterTrainer) params.append('trainer_id', filterTrainer.toString());
+        if (filterDepartment) params.append('department', filterDepartment);
+      }
       
       const response = await fetch(`/api/timetable?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to fetch timetable');
       
       const data = await response.json();
       setTimetableSlots(data.data);
+
+      // Extract unique trainers and departments for filters
+      if (viewMode === 'all' && user?.role === 'admin') {
+        const trainers = new Map<number, string>();
+        const departments = new Set<string>();
+
+        data.data.forEach((slot: TimetableSlot) => {
+          if (slot.trainer) {
+            trainers.set(slot.trainer.id, slot.trainer.name);
+          }
+          if (slot.class?.department) {
+            departments.add(slot.class.department);
+          }
+        });
+
+        setAvailableTrainers(
+          Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
+        );
+        setAvailableDepartments(Array.from(departments));
+      }
     } catch (error) {
       console.error('Error fetching timetable:', error);
       setError('Failed to load timetable data');
@@ -227,6 +264,15 @@ export default function TimetablePage() {
     setCurrentWeek(newWeek);
   };
 
+  // Clear all filters
+  const clearFilters = () => {
+    setFilterTrainer(null);
+    setFilterDepartment(null);
+  };
+
+  // Count active filters
+  const activeFiltersCount = [filterTrainer, filterDepartment].filter(Boolean).length;
+
   const isAdmin = user?.role === 'admin';
 
   if (isLoading) {
@@ -288,25 +334,145 @@ export default function TimetablePage() {
         </div>
 
         {isAdmin && (
-          <div className="flex-1">
-            <Label>Filter by Department</Label>
-            <Select
-              value={filterDepartment || 'all'}
-              onValueChange={(value) => setFilterDepartment(value === 'all' ? null : value)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="All departments" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Departments</SelectItem>
-                <SelectItem value="Mathematics">Mathematics</SelectItem>
-                <SelectItem value="Science">Science</SelectItem>
-                <SelectItem value="Engineering">Engineering</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <>
+            {/* View Mode Toggle */}
+            <div className="flex-1">
+              <Label>View Mode</Label>
+              <Select
+                value={viewMode}
+                onValueChange={(value: 'all' | 'mine') => {
+                  setViewMode(value);
+                  if (value === 'mine') {
+                    setFilterTrainer(user?.id || null);
+                    setFilterDepartment(null);
+                  } else {
+                    setFilterTrainer(null);
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Classes</SelectItem>
+                  <SelectItem value="mine">My Classes Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Advanced Filters (only show when viewing all) */}
+            {viewMode === 'all' && (
+              <div className="flex items-end">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="relative">
+                      <Filter className="mr-2 h-4 w-4" />
+                      Filters
+                      {activeFiltersCount > 0 && (
+                        <Badge 
+                          variant="destructive" 
+                          className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs"
+                        >
+                          {activeFiltersCount}
+                        </Badge>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80" align="end">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-semibold text-sm">Filter Timetable</h4>
+                        {activeFiltersCount > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearFilters}
+                            className="h-7 text-xs"
+                          >
+                            <X className="mr-1 h-3 w-3" />
+                            Clear
+                          </Button>
+                        )}
+                      </div>
+
+                      <Separator />
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">Filter by Trainer</Label>
+                        <Select
+                          value={filterTrainer?.toString() || 'all'}
+                          onValueChange={(value) => 
+                            setFilterTrainer(value === 'all' ? null : parseInt(value))
+                          }
+                        >
+                          <SelectTrigger className="text-sm">
+                            <SelectValue placeholder="All trainers" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Trainers</SelectItem>
+                            {availableTrainers.map((trainer) => (
+                              <SelectItem key={trainer.id} value={trainer.id.toString()}>
+                                {trainer.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">Filter by Department</Label>
+                        <Select
+                          value={filterDepartment || 'all'}
+                          onValueChange={(value) => 
+                            setFilterDepartment(value === 'all' ? null : value)
+                          }
+                        >
+                          <SelectTrigger className="text-sm">
+                            <SelectValue placeholder="All departments" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Departments</SelectItem>
+                            {availableDepartments.map((dept) => (
+                              <SelectItem key={dept} value={dept}>
+                                {dept}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
+          </>
         )}
       </div>
+
+      {/* Active Filters Display */}
+      {isAdmin && viewMode === 'all' && activeFiltersCount > 0 && (
+        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <span className="text-sm text-blue-900 font-medium">Active Filters:</span>
+          {filterTrainer && (
+            <Badge variant="secondary" className="gap-1">
+              Trainer: {availableTrainers.find(t => t.id === filterTrainer)?.name}
+              <X 
+                className="h-3 w-3 cursor-pointer hover:text-red-600" 
+                onClick={() => setFilterTrainer(null)}
+              />
+            </Badge>
+          )}
+          {filterDepartment && (
+            <Badge variant="secondary" className="gap-1">
+              Department: {filterDepartment}
+              <X 
+                className="h-3 w-3 cursor-pointer hover:text-red-600" 
+                onClick={() => setFilterDepartment(null)}
+              />
+            </Badge>
+          )}
+        </div>
+      )}
 
       <WeekNavigator
         currentWeek={currentWeek}

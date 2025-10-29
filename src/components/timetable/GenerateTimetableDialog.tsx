@@ -18,13 +18,22 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Upload, FileSpreadsheet } from "lucide-react";
+import { Zap, Upload, Loader2, AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChevronDown, ChevronUp } from "lucide-react";
 
 interface Term {
   id: number;
   name: string;
   is_active: boolean;
+  start_date: string;
 }
 
 interface GenerateTimetableDialogProps {
@@ -34,6 +43,47 @@ interface GenerateTimetableDialogProps {
   terms: Term[];
 }
 
+interface ClassWithoutTrainer {
+  id: number;
+  code: string;
+  name: string;
+  department: string;
+  duration_hours: number;
+}
+
+interface PreFlightCheckResult {
+  passed: boolean;
+  term_info: {
+    name: string;
+    start_date: string;
+    days_count: number;
+  };
+  classes: {
+    total: number;
+    with_trainer: number;
+    without_trainer: number;
+    details_without_trainer: ClassWithoutTrainer[];
+  };
+  trainers: {
+    total: number;
+  };
+  rooms: {
+    active: number;
+  };
+  lesson_periods: {
+    active: number;
+  };
+  existing_timetable: {
+    exists: boolean;
+    slots_count: number;
+    can_regenerate: boolean;
+    days_since_term_start: number;
+  };
+  errors: string[];
+  warnings: string[];
+  error_details?: any;
+}
+
 export default function GenerateTimetableDialog({
   open,
   onOpenChange,
@@ -41,90 +91,138 @@ export default function GenerateTimetableDialog({
   terms
 }: GenerateTimetableDialogProps) {
   const [selectedTerm, setSelectedTerm] = useState<string>('');
-  const [method, setMethod] = useState<'manual' | 'excel'>('manual');
-  const [file, setFile] = useState<File | null>(null);
+  const [method, setMethod] = useState<'auto' | 'manual'>('auto');
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      // Validate file type
-      if (!selectedFile.name.endsWith('.xlsx') && !selectedFile.name.endsWith('.xls')) {
-        setError('Please select an Excel file (.xlsx or .xls)');
-        return;
-      }
-      setFile(selectedFile);
-      setError('');
-    }
+  // Auto-generation settings
+  const [sessionsPerWeek, setSessionsPerWeek] = useState(1);
+  const [minClassesPerDay, setMinClassesPerDay] = useState(3);
+  
+  // Pre-flight check state
+  const [isCheckingPreFlight, setIsCheckingPreFlight] = useState(false);
+  const [preFlightResults, setPreFlightResults] = useState<PreFlightCheckResult | null>(null);
+  const [showPreFlight, setShowPreFlight] = useState(false);
+
+  // Generation state
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Collapsible states for error details
+  const [showClassesWithoutTrainer, setShowClassesWithoutTrainer] = useState(false);
+
+  const handleTermChange = (termId: string) => {
+    setSelectedTerm(termId);
+    setPreFlightResults(null);
+    setShowPreFlight(false);
+    setError('');
+    setSuccess('');
+    setShowClassesWithoutTrainer(false);
   };
 
-  const handleUpload = async () => {
+  const runPreFlightChecks = async () => {
     if (!selectedTerm) {
       setError('Please select a term');
       return;
     }
 
-    if (!file) {
-      setError('Please select a file to upload');
+    setIsCheckingPreFlight(true);
+    setError('');
+    setPreFlightResults(null);
+
+    try {
+      const response = await fetch(`/api/timetable/generate/pre-flight?term_id=${selectedTerm}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Pre-flight checks failed');
+      }
+
+      setPreFlightResults(data);
+      setShowPreFlight(true);
+    } catch (error) {
+      console.error('Error running pre-flight checks:', error);
+      setError(error instanceof Error ? error.message : 'Failed to run pre-flight checks');
+    } finally {
+      setIsCheckingPreFlight(false);
+    }
+  };
+
+  const handleAutoGenerate = async () => {
+    if (!selectedTerm || !preFlightResults) return;
+
+    // Check if there are blocking errors
+    if (!preFlightResults.passed) {
+      setError('Cannot generate timetable. Please fix the errors listed above.');
       return;
     }
 
-    setIsUploading(true);
+    setIsGenerating(true);
     setError('');
     setSuccess('');
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('term_id', selectedTerm);
-
-      const response = await fetch('/api/timetable/import', {
+      const response = await fetch('/api/timetable/generate', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          term_id: parseInt(selectedTerm),
+          sessions_per_week: sessionsPerWeek,
+          min_classes_per_day: minClassesPerDay,
+          regenerate: preFlightResults.existing_timetable.exists,
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to upload timetable');
+        throw new Error(data.error || 'Failed to generate timetable');
       }
 
-      setSuccess(`Successfully created ${data.created} timetable slots!`);
+      setSuccess(
+        `Successfully generated timetable! Created ${data.stats.slots_created} slots for ${data.stats.classes_scheduled} classes.`
+      );
+      
       setTimeout(() => {
         onSuccess();
         onOpenChange(false);
         resetForm();
       }, 2000);
     } catch (error) {
-      console.error('Upload error:', error);
-      setError(error instanceof Error ? error.message : 'Failed to upload timetable');
+      console.error('Generation error:', error);
+      setError(error instanceof Error ? error.message : 'Failed to generate timetable');
     } finally {
-      setIsUploading(false);
+      setIsGenerating(false);
     }
   };
 
   const handleManualRedirect = () => {
-    // Close dialog and user can use the "Add Slot" button to add manually
     onOpenChange(false);
   };
 
   const resetForm = () => {
     setSelectedTerm('');
-    setMethod('manual');
-    setFile(null);
+    setMethod('auto');
+    setSessionsPerWeek(1);
+    setMinClassesPerDay(3);
     setError('');
     setSuccess('');
+    setPreFlightResults(null);
+    setShowPreFlight(false);
+    setShowClassesWithoutTrainer(false);
   };
+
+  const canGenerate = preFlightResults?.passed && !isGenerating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Generate Timetable</DialogTitle>
           <DialogDescription>
-            Create timetable slots for a term using Excel import or manual entry.
+            Automatically create timetable slots or add them manually.
           </DialogDescription>
         </DialogHeader>
 
@@ -132,7 +230,7 @@ export default function GenerateTimetableDialog({
           {/* Term Selection */}
           <div className="space-y-2">
             <Label htmlFor="term">Select Term *</Label>
-            <Select value={selectedTerm} onValueChange={setSelectedTerm}>
+            <Select value={selectedTerm} onValueChange={handleTermChange}>
               <SelectTrigger>
                 <SelectValue placeholder="Select a term" />
               </SelectTrigger>
@@ -152,12 +250,12 @@ export default function GenerateTimetableDialog({
             <div className="grid grid-cols-2 gap-4">
               <Button
                 type="button"
-                variant={method === 'excel' ? 'default' : 'outline'}
-                onClick={() => setMethod('excel')}
+                variant={method === 'auto' ? 'default' : 'outline'}
+                onClick={() => setMethod('auto')}
                 className="h-20 flex-col gap-2"
               >
-                <FileSpreadsheet className="h-6 w-6" />
-                <span>Excel Import</span>
+                <Zap className="h-6 w-6" />
+                <span>Auto Generate</span>
               </Button>
               <Button
                 type="button"
@@ -171,26 +269,227 @@ export default function GenerateTimetableDialog({
             </div>
           </div>
 
-          {/* Excel Upload Section */}
-          {method === 'excel' && (
-            <div className="space-y-3 p-4 bg-gray-50 rounded-lg">
-              <Label htmlFor="file">Upload Excel File</Label>
-              <Input
-                id="file"
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleFileChange}
-                disabled={isUploading}
-              />
-              {file && (
-                <div className="text-sm text-gray-600">
-                  Selected: <span className="font-medium">{file.name}</span>
+          {/* Auto Generate Section */}
+          {method === 'auto' && (
+            <div className="space-y-4">
+              {/* Settings */}
+              <div className="space-y-3 p-4 bg-gray-50 rounded-lg border">
+                <h3 className="font-semibold text-sm">Generation Settings</h3>
+                
+                <div className="space-y-2">
+                  <Label htmlFor="sessionsPerWeek">Sessions per Week</Label>
+                  <Input
+                    id="sessionsPerWeek"
+                    type="number"
+                    min="1"
+                    max="5"
+                    value={sessionsPerWeek}
+                    onChange={(e) => setSessionsPerWeek(parseInt(e.target.value) || 1)}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500">
+                    How many times each class meets per week (1-5)
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="minClassesPerDay">Minimum Classes per Trainer/Day</Label>
+                  <Input
+                    id="minClassesPerDay"
+                    type="number"
+                    min="1"
+                    max="8"
+                    value={minClassesPerDay}
+                    onChange={(e) => setMinClassesPerDay(parseInt(e.target.value) || 3)}
+                    className="w-full"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Minimum number of classes a trainer should teach per day (Mon-Fri)
+                  </p>
+                </div>
+              </div>
+
+              {/* Pre-flight Check Button */}
+              {selectedTerm && !showPreFlight && (
+                <Button
+                  onClick={runPreFlightChecks}
+                  disabled={isCheckingPreFlight}
+                  variant="outline"
+                  className="w-full"
+                >
+                  {isCheckingPreFlight ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Running Checks...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      Run Tests
+                    </>
+                  )}
+                </Button>
+              )}
+
+              {/* Pre-flight Results */}
+              {showPreFlight && preFlightResults && (
+                <div className="space-y-3 p-4 bg-white rounded-lg border">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-sm">Pre-Flight Check Results</h3>
+                    {preFlightResults.passed ? (
+                      <Badge className="bg-green-500">Ready to Generate</Badge>
+                    ) : (
+                      <Badge variant="destructive">Cannot Generate</Badge>
+                    )}
+                  </div>
+
+                  <Separator />
+
+                  {/* Stats */}
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-gray-500">Classes</p>
+                      <p className="font-semibold">
+                        {preFlightResults.classes.total} total
+                        {preFlightResults.classes.without_trainer > 0 && (
+                          <span className="text-red-600 ml-1">
+                            ({preFlightResults.classes.without_trainer} no trainer)
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Trainers</p>
+                      <p className="font-semibold">{preFlightResults.trainers.total}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Rooms</p>
+                      <p className="font-semibold">{preFlightResults.rooms.active} available</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500">Lesson Periods</p>
+                      <p className="font-semibold">{preFlightResults.lesson_periods.active}</p>
+                    </div>
+                  </div>
+
+                  {/* Existing Timetable Warning */}
+                  {preFlightResults.existing_timetable.exists && (
+                    <Alert className="bg-amber-50 border-amber-200">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                      <AlertDescription className="text-amber-800">
+                        <strong>Existing timetable found ({preFlightResults.existing_timetable.slots_count} slots)</strong>
+                        <br />
+                        {preFlightResults.existing_timetable.can_regenerate ? (
+                          <span>
+                            Regeneration allowed (within 2 weeks of term start). 
+                            Existing slots will be deleted.
+                          </span>
+                        ) : (
+                          <span className="text-red-600 font-semibold">
+                            Cannot regenerate: More than 2 weeks since term start 
+                            ({preFlightResults.existing_timetable.days_since_term_start} days)
+                          </span>
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {/* Errors with Details */}
+                  {preFlightResults.errors.length > 0 && (
+                    <Alert variant="destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertDescription>
+                        <strong>Errors ({preFlightResults.errors.length}):</strong>
+                        <ul className="list-disc list-inside mt-1 text-sm space-y-1">
+                          {preFlightResults.errors.map((err, idx) => (
+                            <li key={idx}>{err}</li>
+                          ))}
+                        </ul>
+
+                        {/* Expandable Classes Without Trainer */}
+                        {preFlightResults.classes.without_trainer > 0 && 
+                         preFlightResults.classes.details_without_trainer.length > 0 && (
+                          <Collapsible
+                            open={showClassesWithoutTrainer}
+                            onOpenChange={setShowClassesWithoutTrainer}
+                            className="mt-3"
+                          >
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="w-full justify-between text-xs"
+                              >
+                                <span>View Classes Without Trainer</span>
+                                {showClassesWithoutTrainer ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent className="mt-2 space-y-2">
+                              <div className="max-h-48 overflow-y-auto border rounded-lg">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-gray-50 sticky top-0">
+                                    <tr>
+                                      <th className="px-2 py-1 text-left font-semibold">Code</th>
+                                      <th className="px-2 py-1 text-left font-semibold">Name</th>
+                                      <th className="px-2 py-1 text-left font-semibold">Department</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y">
+                                    {preFlightResults.classes.details_without_trainer.map((cls) => (
+                                      <tr key={cls.id} className="hover:bg-gray-50">
+                                        <td className="px-2 py-1 font-mono">{cls.code}</td>
+                                        <td className="px-2 py-1">{cls.name}</td>
+                                        <td className="px-2 py-1">
+                                          <Badge variant="outline" className="text-xs">
+                                            {cls.department}
+                                          </Badge>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <p className="text-xs text-gray-600 italic">
+                                💡 Assign trainers to these classes before generating the timetable.
+                              </p>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {/* Warnings */}
+                  {preFlightResults.warnings.length > 0 && (
+                    <Alert className="bg-yellow-50 border-yellow-200">
+                      <Info className="h-4 w-4 text-yellow-600" />
+                      <AlertDescription className="text-yellow-800">
+                        <strong>Warnings ({preFlightResults.warnings.length}):</strong>
+                        <ul className="list-disc list-inside mt-1 text-sm">
+                          {preFlightResults.warnings.map((warn, idx) => (
+                            <li key={idx}>{warn}</li>
+                          ))}
+                        </ul>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {/* Re-run button */}
+                  <Button
+                    onClick={runPreFlightChecks}
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    disabled={isCheckingPreFlight}
+                  >
+                    Re-run Checks
+                  </Button>
                 </div>
               )}
-              <div className="text-xs text-gray-500">
-                <p className="font-medium mb-1">Excel Format:</p>
-                <p>Columns: Trainer Name, Class Code, Day (Mon-Sun), Period, Room</p>
-              </div>
             </div>
           )}
 
@@ -213,32 +512,44 @@ export default function GenerateTimetableDialog({
           {/* Error/Success Messages */}
           {error && (
             <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
 
           {success && (
             <Alert className="bg-green-50 border-green-200">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
               <AlertDescription className="text-green-800">{success}</AlertDescription>
             </Alert>
           )}
 
           {/* Action Buttons */}
-          {method === 'excel' && (
+          {method === 'auto' && showPreFlight && (
             <div className="flex justify-end gap-2 pt-4">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => onOpenChange(false)}
-                disabled={isUploading}
+                disabled={isGenerating}
               >
                 Cancel
               </Button>
               <Button
-                onClick={handleUpload}
-                disabled={isUploading || !file || !selectedTerm}
+                onClick={handleAutoGenerate}
+                disabled={!canGenerate}
               >
-                {isUploading ? 'Uploading...' : 'Upload & Generate'}
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="mr-2 h-4 w-4" />
+                    Generate Timetable
+                  </>
+                )}
               </Button>
             </div>
           )}
