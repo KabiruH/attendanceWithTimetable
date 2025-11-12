@@ -199,29 +199,35 @@ export default function TimetablePage() {
     }
   };
 
-  // Handle slot drag and drop
-  const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId: number) => {
-    try {
-      const response = await fetch(`/api/timetable/${slotId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          day_of_week: newDayOfWeek,
-          lesson_period_id: newPeriodId
-        })
-      });
+// Handle slot drag and drop
+const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId: number) => {
+  try {
+    const response = await fetch(`/api/timetable/${slotId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        day_of_week: newDayOfWeek,
+        lesson_period_id: newPeriodId
+      })
+    });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to move slot');
-      }
-
-      await fetchTimetableData();
-    } catch (error) {
-      console.error('Error moving slot:', error);
-      setError(error instanceof Error ? error.message : 'Failed to move slot');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.details || error.error || 'Failed to move slot');
     }
-  };
+
+    await fetchTimetableData();
+    
+    // Show success message
+    setError(''); // Clear any previous errors
+  } catch (error) {
+    console.error('Error moving slot:', error);
+    setError(error instanceof Error ? error.message : 'Failed to move slot');
+    
+    // Refresh to show original state
+    await fetchTimetableData();
+  }
+};
 
   // Handle slot click for details
   const handleSlotClick = (slot: TimetableSlot) => {
