@@ -1,0 +1,186 @@
+// app/api/classes/[id]/subjects/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { jwtVerify } from 'jose';
+import { db } from '@/lib/db/db';
+
+// Helper function to verify authentication
+async function verifyAuth() {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get('token');
+   
+    if (!token) {
+      return { error: 'No token found', status: 401 };
+    }
+
+    const { payload } = await jwtVerify(
+      token.value,
+      new TextEncoder().encode(process.env.JWT_SECRET)
+    );
+
+    const userId = Number(payload.id);
+    const role = payload.role as string;
+    const name = payload.name as string;
+
+    const user = await db.users.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, role: true, department: true, is_active: true, email: true }
+    });
+
+    if (!user || !user.is_active) {
+      return { error: 'User not found or inactive', status: 401 };
+    }
+
+    return { user: { ...user, id: userId, role, name } };
+  } catch (error) {
+    return { error: 'Invalid token', status: 401 };
+  }
+}
+
+// GET /api/classes/[id]/subjects - Get subjects assigned to this class
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    const { user } = authResult;
+
+    if (user.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Unauthorized. Admin access required.' },
+        { status: 403 }
+      );
+    }
+
+    const params = await context.params;
+    const classId = parseInt(params.id);
+
+    if (isNaN(classId)) {
+      return NextResponse.json(
+        { error: 'Invalid class ID' },
+        { status: 400 }
+      );
+    }
+
+    const assignedSubjects = await db.classSubjects.findMany({
+      where: {
+        class_id: classId,
+      },
+      include: {
+        subject: true,
+        term: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: {
+        assigned_at: 'desc',
+      },
+    });
+
+    return NextResponse.json(assignedSubjects);
+  } catch (error) {
+    console.error('Error fetching assigned subjects:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch assigned subjects' },
+      { status: 500 }
+    );
+  }
+}
+
+// POST /api/classes/[id]/subjects - Assign subject to class
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    const { user } = authResult;
+
+    if (user.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Unauthorized. Admin access required.' },
+        { status: 403 }
+      );
+    }
+
+    const params = await context.params;
+    const classId = parseInt(params.id);
+
+    if (isNaN(classId)) {
+      return NextResponse.json(
+        { error: 'Invalid class ID' },
+        { status: 400 }
+      );
+    }
+
+    const body = await request.json();
+    const { subjectId } = body;
+
+    if (!subjectId) {
+      return NextResponse.json(
+        { error: 'Subject ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Check if already assigned
+    const existing = await db.classSubjects.findUnique({
+      where: {
+        class_id_subject_id: {
+          class_id: classId,
+          subject_id: subjectId,
+        },
+      },
+    });
+
+    if (existing) {
+      return NextResponse.json(
+        { error: 'Subject already assigned to this class' },
+        { status: 400 }
+      );
+    }
+
+    // Create assignment
+    const assignment = await db.classSubjects.create({
+      data: {
+        class_id: classId,
+        subject_id: subjectId,
+        assigned_by: user.email || user.name,
+        is_active: false, // Not activated yet
+      },
+      include: {
+        subject: true,
+        term: true,
+      },
+    });
+
+    return NextResponse.json(assignment);
+  } catch (error) {
+    console.error('Error assigning subject:', error);
+    return NextResponse.json(
+      { error: 'Failed to assign subject' },
+      { status: 500 }
+    );
+  }
+}

@@ -6,7 +6,27 @@ import {
   SidebarGroup,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { LayoutDashboard, ClipboardCheck, FileBarChart, BookOpen, Users, LogOut, User as UserIcon, Shield, Calendar, Clock } from "lucide-react";
+import { 
+  LayoutDashboard, 
+  ClipboardCheck, 
+  FileBarChart, 
+  BookOpen, 
+  Users, 
+  LogOut, 
+  User as UserIcon, 
+  Shield, 
+  Calendar, 
+  Clock,
+  Settings,
+  ChevronDown,
+  ChevronRight,
+  Building2,
+  GraduationCap,
+  DoorOpen,
+  ClockIcon,
+  CalendarDays,
+  UserCog
+} from "lucide-react";
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -27,11 +47,18 @@ type NavItem = {
   action?: () => void;
 };
 
+type SubMenuItem = {
+  label: string;
+  icon: React.ReactNode;
+  href: string;
+};
+
 export function DashboardSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const { setOpen, isMobile } = useSidebar();
 
   useEffect(() => {
@@ -57,6 +84,14 @@ export function DashboardSidebar() {
     };
     checkAuth();
   }, [router]);
+
+  // Auto-expand admin menu if on an admin page
+  useEffect(() => {
+    const adminPaths = ['/departments', '/subjects', '/classes', '/term', '/rooms', '/lesson-periods', '/timetable', '/users', '/login-logs'];
+    if (adminPaths.some(path => pathname.startsWith(path))) {
+      setIsAdminOpen(true);
+    }
+  }, [pathname]);
 
   const handleLogout = async () => {
     try {
@@ -86,7 +121,6 @@ export function DashboardSidebar() {
   };
 
   const handleNavClick = () => {
-    // Close sidebar on mobile after clicking a link
     if (isMobile) {
       setOpen(false);
     }
@@ -112,15 +146,9 @@ export function DashboardSidebar() {
       type: 'link'
     },
     {
-      label: 'Curriculum',
+      label: 'Classes',
       icon: <BookOpen size={20} />,
       href: '/classes',
-      type: 'link'
-    },
-    {
-      label: 'Timetable',
-      icon: <Clock size={20} />,
-      href: '/timetable',
       type: 'link'
     },
     {
@@ -138,50 +166,53 @@ export function DashboardSidebar() {
     }
   ];
 
-
-  // Combine navigation items based on user role
-  const navItems = currentUser?.role === 'admin'
-    ? [
-      ...baseNavItems.slice(0, 4), // Dashboard, Attendance, Reports, Curriculum
-      {
-        label: 'Terms',
-        icon: <Calendar size={20} />,
-        href: '/term',
-        type: 'link' as const
-      },
-      {
-        label: 'Rooms',
-        icon: <Clock size={20} />,
-        href: '/rooms',
-        type: 'link' as const
-      },
-       {
-        label: 'Lesson-Period',
-        icon: <Clock size={20} />,
-        href: '/lesson-periods',
-        type: 'link' as const
-      },
-        {
-        label: 'Timetable',
-        icon: <Clock size={20} />,
-        href: '/timetable',
-        type: 'link' as const
-      },
-      {
-        label: 'Employees',
-        icon: <Users size={20} />,
-        href: '/users',
-        type: 'link' as const
-      },
-      {
-        label: 'Login Logs',
-        icon: <Shield size={20} />,
-        href: '/login-logs',
-        type: 'link' as const
-      },
-      ...baseNavItems.slice(5) // Profile, Logout
-    ]
-    : baseNavItems;
+  const adminSubMenuItems: SubMenuItem[] = [
+    {
+      label: 'Departments',
+      icon: <Building2 size={18} />,
+      href: '/departments'
+    },
+     {
+      label: 'Classes',
+      icon: <GraduationCap size={18} />,
+      href: '/classes'
+    },
+    {
+      label: 'Subjects',
+      icon: <BookOpen size={18} />,
+      href: '/subjects'
+    },
+    {
+      label: 'Terms',
+      icon: <Calendar size={18} />,
+      href: '/term'
+    },
+    {
+      label: 'Rooms',
+      icon: <DoorOpen size={18} />,
+      href: '/rooms'
+    },
+    {
+      label: 'Lesson Periods',
+      icon: <ClockIcon size={18} />,
+      href: '/lesson-periods'
+    },
+    {
+      label: 'Timetable',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable'
+    },
+    {
+      label: 'Employees',
+      icon: <Users size={18} />,
+      href: '/users'
+    },
+    {
+      label: 'Login Logs',
+      icon: <Shield size={18} />,
+      href: '/login-logs'
+    }
+  ];
 
   if (!currentUser) {
     return null;
@@ -193,7 +224,76 @@ export function DashboardSidebar() {
         <SidebarGroup>
           <nav className="p-4">
             <ul className="space-y-2">
-              {navItems.map((item) => (
+              {baseNavItems.slice(0, 4).map((item) => (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    onClick={handleNavClick}
+                    className={`flex items-center space-x-3 p-3 rounded-lg
+                      transition-all duration-200
+                      ${pathname === item.href
+                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                        : 'text-black hover:bg-blue-500 hover:text-white'
+                      }`}
+                  >
+                    <span className="transition-transform duration-200 hover:scale-110">
+                      {item.icon}
+                    </span>
+                    <span className="font-medium">{item.label}</span>
+                  </Link>
+                </li>
+              ))}
+
+              {/* Admin Settings Dropdown (Admin Only) */}
+              {currentUser?.role === 'admin' && (
+                <li>
+                  <button
+                    onClick={() => setIsAdminOpen(!isAdminOpen)}
+                    className={`w-full flex items-center justify-between space-x-3 p-3 rounded-lg
+                      transition-all duration-200 text-left
+                      ${adminSubMenuItems.some(item => pathname.startsWith(item.href))
+                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                        : 'text-black hover:bg-blue-500 hover:text-white'
+                      }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Settings size={20} />
+                      <span className="font-medium">Admin Setup</span>
+                    </div>
+                    {isAdminOpen ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )}
+                  </button>
+
+                  {/* Submenu */}
+                  {isAdminOpen && (
+                    <ul className="mt-1 ml-4 space-y-1 border-l-2 border-slate-700 pl-3">
+                      {adminSubMenuItems.map((subItem) => (
+                        <li key={subItem.href}>
+                          <Link
+                            href={subItem.href}
+                            onClick={handleNavClick}
+                            className={`flex items-center space-x-2 p-2 rounded-lg text-sm
+                              transition-all duration-200
+                              ${pathname === subItem.href || pathname.startsWith(subItem.href)
+                                ? 'bg-blue-500 text-white font-medium'
+                                : 'text-black hover:bg-blue-400 hover:text-white'
+                              }`}
+                          >
+                            <span>{subItem.icon}</span>
+                            <span>{subItem.label}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              )}
+
+              {/* Profile and Logout */}
+              {baseNavItems.slice(4).map((item) => (
                 <li key={item.href}>
                   {item.type === 'link' ? (
                     <Link
@@ -218,7 +318,7 @@ export function DashboardSidebar() {
                         handleNavClick();
                       }}
                       className="w-full flex items-center space-x-3 p-3 rounded-lg
-                        text-black hover:bg-red-600 
+                        text-black hover:bg-red-600 hover:text-white
                         transition-all duration-200 text-left"
                     >
                       <span className="transition-transform duration-200 hover:scale-110">

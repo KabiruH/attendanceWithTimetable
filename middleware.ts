@@ -5,32 +5,53 @@ import { jwtVerify } from 'jose'
 
 // Arrays of public and protected paths
 const publicPaths = ['/login', '/signup', '/'];
-const protectedPaths = ['/dashboard', '/attendance', '/reports', '/profile', '/users'];
-const adminOnlyPaths = ['/users'];
+
+const protectedPaths = [
+  '/dashboard', 
+  '/attendance', 
+  '/reports', 
+  '/profile', 
+  '/classes'
+];
+
+const adminOnlyPaths = [
+  '/departments',
+  '/subjects',
+  '/classes',
+  '/users',
+  '/login-logs',
+  '/term',
+  '/rooms',
+  '/lesson-periods',
+  '/timetable'
+];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Check path types
-  const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path));
-  const isPublicPath = publicPaths.some(path => pathname.startsWith(path));
+  const isPublicPath = publicPaths.some(path => pathname === path);
   const isAdminPath = adminOnlyPaths.some(path => pathname.startsWith(path));
+  const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path)) || isAdminPath;
 
   try {
     // Get token from cookies
     const token = request.cookies.get('token');
 
-    if (!token && (isProtectedPath || isAdminPath)) {
-      // Redirect to login if trying to access protected route without token
-      return NextResponse.redirect(new URL('/login', request.url));
+    // No token - redirect to login if trying to access protected routes
+    if (!token && isProtectedPath) {
+      const loginUrl = new URL('/login', request.url);
+      loginUrl.searchParams.set('redirect', pathname);
+      return NextResponse.redirect(loginUrl);
     }
 
-    if (token && isPublicPath) {
-      // Redirect to dashboard if trying to access public route with token
+    // Has token and trying to access public routes - redirect to dashboard
+    if (token && isPublicPath && pathname !== '/') {
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }
 
-    if (token && (isProtectedPath || isAdminPath)) {
+    // Token exists and accessing protected routes
+    if (token && isProtectedPath) {
       try {
         // Verify the token and decode its payload
         const { payload } = await jwtVerify(
@@ -38,25 +59,37 @@ export async function middleware(request: NextRequest) {
           new TextEncoder().encode(process.env.JWT_SECRET)
         );
 
-        // Check role for admin paths
+        // Check if user role exists
+        if (!payload.role) {
+          console.error('No role found in token payload');
+          return NextResponse.redirect(new URL('/login', request.url));
+        }
+
+        // Admin-only path check
         if (isAdminPath && payload.role !== 'admin') {
-          // Redirect non-admin users to dashboard
+          console.log(`Access denied: User role "${payload.role}" attempted to access admin path: ${pathname}`);
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 
-        // Token is valid and role check passed (if required), allow access
+        // Token is valid and role check passed, allow access
         return NextResponse.next();
       } catch (error) {
-        // Token is invalid, redirect to login
-        return NextResponse.redirect(new URL('/login', request.url));
+        console.error('Token verification failed:', error);
+        // Token is invalid, clear it and redirect to login
+        const response = NextResponse.redirect(new URL('/login', request.url));
+        response.cookies.delete('token');
+        return response;
       }
     }
 
     // Allow access to public routes
     return NextResponse.next();
   } catch (error) {
+    console.error('Middleware error:', error);
     // Handle any errors by redirecting to login
-    return NextResponse.redirect(new URL('/login', request.url));
+    const response = NextResponse.redirect(new URL('/login', request.url));
+    response.cookies.delete('token');
+    return response;
   }
 }
 
@@ -69,7 +102,8 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
+     * - public files
      */
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    '/((?!api|_next/static|_next/image|favicon.ico|logo.png|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.svg).*)',
   ],
 }

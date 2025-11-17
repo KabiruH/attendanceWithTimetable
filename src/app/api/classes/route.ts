@@ -39,7 +39,7 @@ async function verifyAuth() {
     }
 }
 
-// GET /api/classes - Fetch all classes (Admin) or active classes (Trainers)
+// GET /api/classes - Fetch all classes (Admin) or active classes (Trainers) WITH SUBJECT COUNT
 export async function GET(request: NextRequest) {
     try {
         const authResult = await verifyAuth();
@@ -47,12 +47,11 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: authResult.error }, { status: authResult.status });
         }
 
-        // ✅ NEW: Explicit check for user existence
         if (!authResult.user) {
             return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
 
-        const { user } = authResult; // ✅ Now TypeScript knows user exists
+        const { user } = authResult;
         const url = new URL(request.url);
         const activeOnly = url.searchParams.get('active_only') === 'true';
 
@@ -69,10 +68,35 @@ export async function GET(request: NextRequest) {
             orderBy: [
                 { department: 'asc' },
                 { name: 'asc' }
-            ]
+            ],
+            select: {
+                id: true,
+                name: true,
+                code: true,
+                description: true,
+                department: true,
+                duration_hours: true,
+                is_active: true,
+                created_at: true,
+                created_by: true,
+                updated_at: true,
+                _count: {
+                    select: {
+                        classSubjects: true, // Count assigned subjects
+                    },
+                },
+            },
         });
 
-        return NextResponse.json(classes);
+        // Transform response to have cleaner structure
+        const formattedClasses = classes.map(classItem => ({
+            ...classItem,
+            _count: {
+                subjects: classItem._count.classSubjects,
+            },
+        }));
+
+        return NextResponse.json(formattedClasses);
     } catch (error) {
         console.error('Error fetching classes:', error);
         return NextResponse.json(
@@ -90,12 +114,11 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: authResult.error }, { status: authResult.status });
         }
 
-        // ✅ NEW: Explicit check for user existence
         if (!authResult.user) {
             return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
 
-        const { user } = authResult; // ✅ Now TypeScript knows user exists
+        const { user } = authResult;
 
         // Check if user is admin
         if (user.role !== 'admin') {
@@ -158,12 +181,11 @@ export async function PUT(request: NextRequest) {
             return NextResponse.json({ error: authResult.error }, { status: authResult.status });
         }
 
-        // ✅ NEW: Explicit check for user existence
         if (!authResult.user) {
             return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
 
-        const { user } = authResult; // ✅ Now TypeScript knows user exists
+        const { user } = authResult;
 
         // Check if user is admin
         if (user.role !== 'admin') {

@@ -13,24 +13,28 @@ model Users {
   id_number     String      @unique @db.VarChar(50)
   role          String      @db.VarChar(20)
   phone_number  String      @db.VarChar(20)
-  department    String?      @db.VarChar(20)
+  department    String?     @db.VarChar(20)
   gender        String      @db.VarChar(10)
-  email         String?       @unique @db.VarChar(100)
+  email         String?     @unique @db.VarChar(100)
   is_active     Boolean     @default(true)
   created_at    DateTime    @default(now())
   updated_at    DateTime    @updatedAt
   created_by    String      @db.VarChar(100) 
 
-  Employee      Employees?  // One-to-one relation with Employees
+  // Keep all existing relations
+  Employee      Employees?
   webAuthnCredentials WebAuthnCredentials[]
   LoginLogs     LoginLogs[] 
   webAuthnCredentialChallenge WebAuthnCredentialChallenge?
-  trainerClassAssignments TrainerClassAssignments[]
+  trainerClassAssignments TrainerClassAssignments[]  // Keep for now
   classAttendance         ClassAttendance[]
   biometricEnrollments    BiometricEnrollments[]
   biometricLogs           BiometricLogs[]
   attendance              Attendance[] @relation("EmployeeAttendance") 
-  trainerSchedule         TimetableSlots[] @relation("TrainerSchedule")  
+  trainerSchedule         TimetableSlots[] @relation("TrainerSchedule")
+  
+  // ADD this new relation
+  trainerSubjects         TrainerSubjectAssignments[] @relation("TrainerSubjects")  // NEW
 
   @@map("Users")
   @@index([id_number])
@@ -151,22 +155,25 @@ model LoginLogs {
 // Classes that trainers can be assigned to
 model Classes {
   id              Int       @id @default(autoincrement())
-  name            String    @db.VarChar(100)        // e.g., "Advanced Mathematics"
-  code            String    @unique @db.VarChar(20)  // e.g., "MATH301"
-  description     String?   @db.Text                 // Optional class description
-  department      String    @db.VarChar(50)          // Department offering the class
-  duration_hours  Int       @default(2)              // Class duration in hours
+  name            String    @db.VarChar(100)
+  code            String    @unique @db.VarChar(20)
+  description     String?   @db.Text  // ADD THIS
+  department      String    @db.VarChar(50)
+  duration_hours  Int       @default(2)
   is_active       Boolean   @default(true)
   created_at      DateTime  @default(now())
   updated_at      DateTime  @updatedAt
   created_by      String    @db.VarChar(100)
   
-  // Relations
-  trainerAssignments TrainerClassAssignments[]
+  // Keep existing relations
+  trainerAssignments TrainerClassAssignments[]  // Keep for now, will remove later
   classAttendance    ClassAttendance[]
-  timetableSlots TimetableSlots[]  
+  timetableSlots     TimetableSlots[]
   termClasses        TermClasses[]
-
+  
+  // ADD these new relations
+  classSubjects      ClassSubjects[]  // NEW
+  
   @@map("Classes")
   @@index([code])
   @@index([department])
@@ -266,13 +273,18 @@ model Terms {
   start_date   DateTime @db.Date
   end_date     DateTime @db.Date
   is_active    Boolean  @default(true)
-  working_days Json?    // [1,2,3,4,5] for Mon-Fri
-  holidays     Json?    // Array of holiday dates
+  working_days Json?
+  holidays     Json?
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
 
+  // Keep existing relations
   timetableSlots TimetableSlots[]
   termClasses    TermClasses[]
+  
+  // ADD these new relations
+  classSubjects            ClassSubjects[]  // NEW
+  trainerSubjectAssignments TrainerSubjectAssignments[]  // NEW
 }
 
 model Rooms {
@@ -301,20 +313,37 @@ model LessonPeriods {
   timetableSlots TimetableSlots[]
 }
 
+model Departments {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique @db.VarChar(100)
+  code        String   @unique @db.VarChar(20)
+  description String?  @db.Text
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String   @db.VarChar(100)
+
+  @@map("Departments")
+  @@index([code])
+  @@index([is_active])
+}
+
 model TimetableSlots {
   id               String   @id @default(uuid())
   term_id          Int
   class_id         Int
-  employee_id      Int      // Trainer (References Users.id)
+  subject_id       Int      // ADD THIS FIELD
+  employee_id      Int
   room_id          Int
   lesson_period_id Int
-  day_of_week      Int      // 0-6 (Sunday-Saturday)
+  day_of_week      Int
   status           String   @default("scheduled") @db.VarChar(20)
   created_at       DateTime @default(now())
   updated_at       DateTime @updatedAt
   
   term             Terms           @relation(fields: [term_id], references: [id])
   class            Classes         @relation(fields: [class_id], references: [id])
+  subject          Subjects        @relation(fields: [subject_id], references: [id])  // ADD THIS
   trainer          Users           @relation("TrainerSchedule", fields: [employee_id], references: [id])
   room             Rooms           @relation(fields: [room_id], references: [id])
   lessonPeriod     LessonPeriods   @relation(fields: [lesson_period_id], references: [id])
@@ -323,6 +352,7 @@ model TimetableSlots {
   @@unique([term_id, day_of_week, lesson_period_id, employee_id])
   @@index([employee_id])
   @@index([class_id])
+  @@index([subject_id])  // ADD THIS
   @@index([term_id])
 }
 
@@ -340,4 +370,72 @@ model TermClasses {
   @@map("TermClasses")
   @@index([term_id])
   @@index([class_id])
+}
+
+// New Subjects table
+model Subjects {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(100)  // "Programming Fundamentals"
+  code        String   @unique @db.VarChar(20)  // "PROG101"
+  department  String   @db.VarChar(50)
+  credit_hours Int?
+  description String?  @db.Text
+  is_active   Boolean  @default(true)  // Subject exists in system
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  created_by  String   @db.VarChar(100)
+  
+  classSubjects      ClassSubjects[]
+  trainerSubjects    TrainerSubjectAssignments[]
+  timetableSlots     TimetableSlots[]
+  
+  @@map("Subjects")
+  @@index([code])
+  @@index([department])
+  @@index([is_active])
+}
+
+// Links subjects to classes and activates them per term
+model ClassSubjects {
+  id          Int      @id @default(autoincrement())
+  class_id    Int
+  subject_id  Int
+  term_id     Int?     // NULL = assigned but not activated; NOT NULL = active for this term
+  assigned_by String   @db.VarChar(100)
+  assigned_at DateTime @default(now())
+  activated_at DateTime?  // When admin activated this for the term
+  is_active   Boolean  @default(false)  // TRUE only when assigned to a term
+  
+  class       Classes  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  subject     Subjects @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  term        Terms?   @relation(fields: [term_id], references: [id], onDelete: SetNull)
+  trainerSubjectAssignments TrainerSubjectAssignments[]
+  
+  @@unique([class_id, subject_id])  // Each subject assigned to class only once
+  @@map("ClassSubjects")
+  @@index([term_id, is_active])
+  @@index([class_id])
+  @@index([subject_id])
+}
+
+// New TrainerSubjectAssignments - replaces old TrainerClassAssignments
+model TrainerSubjectAssignments {
+  id               Int      @id @default(autoincrement())
+  trainer_id       Int
+  subject_id       Int
+  term_id          Int
+  class_subject_id Int      // Reference to the activated ClassSubject
+  assigned_at      DateTime @default(now())
+  is_active        Boolean  @default(true)
+  
+  trainer       Users         @relation("TrainerSubjects", fields: [trainer_id], references: [id], onDelete: Cascade)
+  subject       Subjects      @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  term          Terms         @relation(fields: [term_id], references: [id], onDelete: Cascade)
+  classSubject  ClassSubjects @relation(fields: [class_subject_id], references: [id], onDelete: Cascade)
+  
+  @@unique([trainer_id, subject_id, term_id, class_subject_id])
+  @@map("TrainerSubjectAssignments")
+  @@index([term_id])
+  @@index([trainer_id])
+  @@index([class_subject_id])
 }

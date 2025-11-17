@@ -167,7 +167,7 @@ export default function ClassesForm({
             </Select>
           </div>
 
-          <div className="space-y-2">
+          {/* <div className="space-y-2">
             <Label htmlFor="duration">Duration (Hours)</Label>
             <Select
               value={formData.duration_hours.toString()}
@@ -185,7 +185,7 @@ export default function ClassesForm({
                 <SelectItem value="8">8 hours</SelectItem>
               </SelectContent>
             </Select>
-          </div>
+          </div> */}
 
           {editingClass && (
             <div className="space-y-2">

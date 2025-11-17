@@ -3,7 +3,27 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Menu, X, LayoutDashboard, Shield, BookIcon, ClipboardCheck, FileBarChart, Users, LogOut, User as UserIcon } from 'lucide-react';
+import { 
+  Menu, 
+  X, 
+  LayoutDashboard, 
+  Shield, 
+  BookIcon, 
+  ClipboardCheck, 
+  FileBarChart, 
+  Users, 
+  LogOut, 
+  User as UserIcon,
+  Settings,
+  ChevronDown,
+  ChevronRight,
+  Building2,
+  GraduationCap,
+  DoorOpen,
+  Clock,
+  Calendar,
+  CalendarDays
+} from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -22,9 +42,16 @@ type NavItem = {
   action?: () => void;
 };
 
+type SubMenuItem = {
+  label: string;
+  icon: React.ReactNode;
+  href: string;
+};
+
 const Navbar = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
@@ -50,13 +77,21 @@ const Navbar = () => {
       }
     };
     
-    // Check auth whenever pathname changes (including after login redirect)
     checkAuth();
+  }, [pathname]);
+
+  // Auto-expand admin menu if on an admin page
+  useEffect(() => {
+    const adminPaths = ['/departments', '/subjects', '/classes', '/term', '/rooms', '/lesson-periods', '/timetable', '/users', '/login-logs'];
+    if (adminPaths.some(path => pathname.startsWith(path))) {
+      setIsAdminOpen(true);
+    }
   }, [pathname]);
 
   // Close mobile menu when route changes
   useEffect(() => {
     setMobileMenuOpen(false);
+    setIsAdminOpen(false);
   }, [pathname]);
 
   const handleLogout = async () => {
@@ -105,12 +140,12 @@ const Navbar = () => {
       href: '/reports',
       type: 'link'
     },
-     {
-          label: 'Classes',
-          icon: <BookIcon size={20} />,
-          href: '/classes',
-          type: 'link'
-        },
+    {
+      label: 'Curriculum',
+      icon: <BookIcon size={20} />,
+      href: '/classes',
+      type: 'link'
+    },
     {
       label: 'Profile',
       icon: <UserIcon size={20} />,
@@ -126,50 +161,53 @@ const Navbar = () => {
     }
   ];
 
-  // Combine navigation items based on user role
-  const navItems = currentUser?.role === 'admin'
-    ? [
-        ...baseNavItems.slice(0, 4),
-        {
-          label: 'Employees',
-          icon: <Users size={20} />,
-          href: '/users',
-          type: 'link' as const
-        },
-         {
-        label: 'Login Logs',
-        icon: <Shield size={20} />,
-        href: '/login-logs',
-        type: 'link' as const
-      },
-        ...baseNavItems.slice(4)
-      ]
-    : baseNavItems;
-
-  // Check auth on mount and when pathname changes
-  useEffect(() => {
-    const checkAuthStatus = async () => {
-      try {
-        const response = await fetch('/api/auth/check', {
-          method: 'GET',
-          credentials: 'include',
-        });
-       
-        if (response.ok) {
-          const data = await response.json();
-          setCurrentUser(data.user);
-        } else {
-          setCurrentUser(null);
-        }
-      } catch (error) {
-        console.error('Navbar auth check error:', error);
-        setCurrentUser(null);
-      }
-    };
-    
-    // Always check auth when pathname changes
-    checkAuthStatus();
-  }, [pathname]);
+  const adminSubMenuItems: SubMenuItem[] = [
+    {
+      label: 'Departments',
+      icon: <Building2 size={18} />,
+      href: '/departments'
+    },
+    {
+      label: 'Subjects',
+      icon: <BookIcon size={18} />,
+      href: '/subjects'
+    },
+    {
+      label: 'Classes',
+      icon: <GraduationCap size={18} />,
+      href: '/classes'
+    },
+    {
+      label: 'Terms',
+      icon: <Calendar size={18} />,
+      href: '/term'
+    },
+    {
+      label: 'Rooms',
+      icon: <DoorOpen size={18} />,
+      href: '/rooms'
+    },
+    {
+      label: 'Lesson Periods',
+      icon: <Clock size={18} />,
+      href: '/lesson-periods'
+    },
+    {
+      label: 'Timetable',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable'
+    },
+    {
+      label: 'Employees',
+      icon: <Users size={18} />,
+      href: '/users'
+    },
+    {
+      label: 'Login Logs',
+      icon: <Shield size={18} />,
+      href: '/login-logs'
+    }
+  ];
 
   // Don't show menu button if not authenticated
   const showMenu = currentUser && !pathname.includes('/login') && !pathname.includes('/register');
@@ -245,14 +283,84 @@ const Navbar = () => {
       {showMenu && mobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setMobileMenuOpen(false)}>
           <div 
-            className="fixed left-0 top-0 h-full w-64 bg-slate-300 shadow-xl transform transition-transform duration-300 ease-in-out"
+            className="fixed left-0 top-0 h-full w-64 bg-slate-300 shadow-xl transform transition-transform duration-300 ease-in-out overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Mobile Menu Content */}
-            <div className="pt-20 px-4">
+            <div className="pt-20 px-4 pb-20">
               <nav>
                 <ul className="space-y-2">
-                  {navItems.map((item) => (
+                  {/* Regular Menu Items */}
+                  {baseNavItems.slice(0, 4).map((item) => (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        onClick={() => setMobileMenuOpen(false)}
+                        className={`flex items-center space-x-3 p-3 rounded-lg
+                          transition-all duration-200
+                          ${pathname === item.href 
+                            ? 'bg-blue-600 text-white font-semibold shadow-lg' 
+                            : 'text-black hover:bg-blue-500 hover:text-white'
+                          }`}
+                      >
+                        <span className="transition-transform duration-200 hover:scale-110">
+                          {item.icon}
+                        </span>
+                        <span className="font-medium">{item.label}</span>
+                      </Link>
+                    </li>
+                  ))}
+
+                  {/* Admin Settings Dropdown (Admin Only) */}
+                  {currentUser?.role === 'admin' && (
+                    <li>
+                      <button
+                        onClick={() => setIsAdminOpen(!isAdminOpen)}
+                        className={`w-full flex items-center justify-between space-x-3 p-3 rounded-lg
+                          transition-all duration-200 text-left
+                          ${adminSubMenuItems.some(item => pathname.startsWith(item.href))
+                            ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                            : 'text-black hover:bg-blue-500 hover:text-white'
+                          }`}
+                      >
+                        <div className="flex items-center space-x-3">
+                          <Settings size={20} />
+                          <span className="font-medium">Admin Settings</span>
+                        </div>
+                        {isAdminOpen ? (
+                          <ChevronDown size={16} />
+                        ) : (
+                          <ChevronRight size={16} />
+                        )}
+                      </button>
+
+                      {/* Submenu */}
+                      {isAdminOpen && (
+                        <ul className="mt-1 ml-4 space-y-1 border-l-2 border-slate-600 pl-3">
+                          {adminSubMenuItems.map((subItem) => (
+                            <li key={subItem.href}>
+                              <Link
+                                href={subItem.href}
+                                onClick={() => setMobileMenuOpen(false)}
+                                className={`flex items-center space-x-2 p-2 rounded-lg text-sm
+                                  transition-all duration-200
+                                  ${pathname === subItem.href || pathname.startsWith(subItem.href)
+                                    ? 'bg-blue-500 text-white font-medium'
+                                    : 'text-black hover:bg-blue-400 hover:text-white'
+                                  }`}
+                              >
+                                <span>{subItem.icon}</span>
+                                <span>{subItem.label}</span>
+                              </Link>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  )}
+
+                  {/* Profile and Logout */}
+                  {baseNavItems.slice(4).map((item) => (
                     <li key={item.href}>
                       {item.type === 'link' ? (
                         <Link
@@ -277,7 +385,7 @@ const Navbar = () => {
                             setMobileMenuOpen(false);
                           }}
                           className="w-full flex items-center space-x-3 p-3 rounded-lg
-                            text-black hover:bg-red-600 
+                            text-black hover:bg-red-600 hover:text-white
                             transition-all duration-200 text-left"
                         >
                           <span className="transition-transform duration-200 hover:scale-110">
@@ -290,12 +398,12 @@ const Navbar = () => {
                   ))}
                 </ul>
               </nav>
+            </div>
 
-              {/* Footer */}
-              <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700">
-                <div className="text-sm text-white/80 text-center font-medium">
-                  Licensed by Optimum Computer Services
-                </div>
+            {/* Footer */}
+            <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-600 bg-slate-300">
+              <div className="text-sm text-slate-700 text-center font-medium">
+                Licensed by Optimum Computer Services
               </div>
             </div>
           </div>
