@@ -12,21 +12,18 @@ export async function DELETE(
     const authResult = await checkAuth();
     
     if (!authResult.authenticated || !authResult.user) {
-      console.log('Unauthorized:', authResult.error || 'No user in auth result');
       return NextResponse.json({ error: authResult.error || 'Unauthorized' }, { status: authResult.status || 401 });
     }
 
     const {credentialId} = await params;
-    console.log(`Attempting to delete credential ID: ${credentialId}`);
     
     // Find the credential
-    const credential = await prisma.webAuthnCredentials.findUnique({
+    const credential = await prisma.webauthncredentials.findUnique({
       where: { credentialId },
       select: { userId: true },
     });
 
     if (!credential) {
-      console.log('Credential not found');
       return NextResponse.json(
         { error: 'Credential not found' },
         { status: 404 }
@@ -35,7 +32,6 @@ export async function DELETE(
 
     // Check if the credential belongs to the logged-in user
     if (credential.userId !== authResult.user.userId) {
-      console.log(`Credential belongs to user ${credential.userId}, not ${authResult.user.userId}`);
       return NextResponse.json(
         { error: 'Unauthorized to delete this credential' },
         { status: 403 }
@@ -43,11 +39,10 @@ export async function DELETE(
     }
 
     // Delete the credential
-    await prisma.webAuthnCredentials.delete({
+    await prisma.webauthncredentials.delete({
       where: { credentialId },
     });
 
-    console.log('Credential deleted successfully');
     return NextResponse.json({ 
       success: true,
       message: 'Credential deleted successfully' 

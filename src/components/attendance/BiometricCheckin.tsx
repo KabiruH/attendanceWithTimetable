@@ -84,7 +84,6 @@ export default function BiometricCheckin() {
       }
     } catch (error) {
       // Class assignments require full login - ignore error for now
-      console.log('Class assignments require login');
     }
   };
 

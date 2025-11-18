@@ -103,7 +103,6 @@ export async function POST(
       // 2. Set assignments to inactive
       // 3. Handle ongoing attendance sessions
       
-      console.log(`Class ${updatedClass.code} has been deactivated. Consider handling active assignments.`);
     }
 
     return NextResponse.json({

@@ -63,13 +63,13 @@ export async function GET(req: NextRequest) {
     const endOfMonth = new Date(nowInKenya.year, nowInKenya.month, 0);
 
     // Get today's class attendance
-    const todayAttendance = await db.classAttendance.findMany({
+    const todayAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: user.id,
         date: new Date(currentDate)
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -85,7 +85,7 @@ export async function GET(req: NextRequest) {
     });
 
     // Get class attendance history for the current month
-    const monthlyAttendance = await db.classAttendance.findMany({
+    const monthlyAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: user.id,
         date: {
@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
         }
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -110,11 +110,11 @@ export async function GET(req: NextRequest) {
     });
 
     // Get total number of active class assignments
-    const activeClassAssignments = await db.trainerClassAssignments.count({
+    const activeClassAssignments = await db.trainerclassassignments.count({
       where: {
         trainer_id: user.id,
         is_active: true,
-        class: {
+        classes: {
           is_active: true
         }
       }

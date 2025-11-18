@@ -129,7 +129,7 @@ function getClientIP(request: NextRequest): string {
 async function performAutomaticClassCheckout(trainerId: number, classId: number, checkoutTime: Date) {
   const todayDate = new Date(checkoutTime.toISOString().split('T')[0]);
   
-  const existingClassAttendance = await db.classAttendance.findFirst({
+  const existingClassAttendance = await db.classattendance.findFirst({
     where: {
       trainer_id: trainerId,
       class_id: classId,
@@ -139,7 +139,7 @@ async function performAutomaticClassCheckout(trainerId: number, classId: number,
   });
 
   if (existingClassAttendance) {
-    await db.classAttendance.update({
+    await db.classattendance.update({
       where: { id: existingClassAttendance.id },
       data: {
         check_out_time: checkoutTime,
@@ -162,14 +162,14 @@ async function hasActiveClassSession(trainerId: number, currentDate: Date): Prom
     class_name?: string;
   };
 }> {
-  const activeSession = await db.classAttendance.findFirst({
+  const activeSession = await db.classattendance.findFirst({
     where: {
       trainer_id: trainerId,
       date: currentDate,
       check_out_time: null
     },
     include: {
-      class: {
+      classes: {
         select: {
           name: true
         }
@@ -195,7 +195,7 @@ async function hasActiveClassSession(trainerId: number, currentDate: Date): Prom
 async function checkAndPerformClassAutoCheckout(trainerId: number, currentTime: Date) {
   const currentDate = new Date(currentTime.toISOString().split('T')[0]);
   
-  const activeClassSessions = await db.classAttendance.findMany({
+  const activeClassSessions = await db.classattendance.findMany({
     where: {
       trainer_id: trainerId,
       date: currentDate,
@@ -229,34 +229,21 @@ export async function GET(request: NextRequest) {
      const url = new URL(request.url);
     const queryEmployeeId = url.searchParams.get('employee_id');
     
-    console.log("🔍 DEBUG - Request URL:", request.url);
-    console.log("🔍 DEBUG - Query employee_id:", queryEmployeeId);
-    
-
-    console.log("🔍 DEBUG - Authenticated user:", {
-      id: user.id,
-      name: user.name,
-      role: user.role,
-      authMethod: user.authMethod
-    });
-
-
         const userIdToUse = user.role === 'admin' && queryEmployeeId ? 
       Number(queryEmployeeId) : user.id;
     
-    console.log("🔍 DEBUG - User ID being used for query:", userIdToUse);
-    
+  
     if (isMobileRequest) {
     } else {
       
       // Get assignments
-      const assignments = await db.trainerClassAssignments.findMany({
+      const assignments = await db.trainerclassassignments.findMany({
         where: {
           trainer_id: Number(user.id),
           is_active: true
         },
         include: {
-          class: {
+          classes: {
             select: {
               id: true,
               name: true,
@@ -269,17 +256,15 @@ export async function GET(request: NextRequest) {
           }
         },
         orderBy: {
-          class: {
+          classes: {
             name: 'asc'
           }
         }
       });
 
-      console.log("Assignments for user:", user.id, JSON.stringify(assignments, null, 2));
+      const activeAssignments = assignments.filter(assignment => assignment.classes.is_active);
 
-      const activeAssignments = assignments.filter(assignment => assignment.class.is_active);
-
-      const todayAttendance = await db.classAttendance.findMany({
+      const todayAttendance = await db.classattendance.findMany({
         where: {
           trainer_id: user.id,
           date: new Date(currentDate)
@@ -404,7 +389,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if trainer is assigned to this class
-  const assignment = await db.trainerClassAssignments.findFirst({
+  const assignment = await db.trainerclassassignments.findFirst({
   where: {
     trainer_id: trainer_id,
     class_id: class_id,
@@ -459,7 +444,7 @@ if (!employee) {
       );
     }
 
-    const existingClassAttendance = await db.classAttendance.findFirst({
+    const existingClassAttendance = await db.classattendance.findFirst({
       where: {
         trainer_id: trainer_id,
         class_id: class_id,
@@ -474,7 +459,7 @@ if (!employee) {
           // Mobile: Check if it was auto-checked out
           if (existingClassAttendance.check_out_time && existingClassAttendance.auto_checkout) {
             // Allow re-checkin if it was auto-checked out
-            await db.classAttendance.update({
+            await db.classattendance.update({
               where: { id: existingClassAttendance.id },
               data: {
                 check_in_time: currentTime,
@@ -511,14 +496,14 @@ if (!employee) {
       }
 
       // Check if user has any active class sessions
-      const activeClassSessions = await db.classAttendance.findMany({
+      const activeClassSessions = await db.classattendance.findMany({
         where: {
           trainer_id: trainer_id,
           date: new Date(currentDate),
           check_out_time: null
         },
         include: {
-          class: {
+          classes: {
             select: { name: true }
           }
         }
@@ -527,7 +512,7 @@ if (!employee) {
       if (activeClassSessions.length > 0) {
         const currentActiveSession = activeClassSessions[0];
         return NextResponse.json(
-          { success: false, error: `You are already checked into ${currentActiveSession.class.name}. Please check out first.` },
+          { success: false, error: `You are already checked into ${currentActiveSession.classes.name}. Please check out first.` },
           { status: 400 }
         );
       }
@@ -538,7 +523,7 @@ if (!employee) {
       autoCheckoutTime.setHours(autoCheckoutTime.getHours() + maxClassDuration);
 
       // Create class attendance record
-      const classAttendance = await db.classAttendance.create({
+      const classAttendance = await db.classattendance.create({
         data: {
           trainer_id: trainer_id,
           class_id: class_id,
@@ -607,7 +592,7 @@ if (!employee) {
       const hoursDiff = Math.floor(minutesDiff / 60);
       const remainingMinutes = minutesDiff % 60;
 
-      await db.classAttendance.update({
+      await db.classattendance.update({
         where: { id: existingClassAttendance.id },
         data: {
           check_out_time: currentTime,
@@ -680,13 +665,13 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const attendance = await db.classAttendance.findFirst({
+    const attendance = await db.classattendance.findFirst({
       where: {
         id: attendance_id,
         trainer_id: user.id
       },
       include: {
-        class: true
+        classes: true
       }
     });
 
@@ -700,21 +685,21 @@ export async function PATCH(request: NextRequest) {
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentTime = nowInKenya.toJSDate();
 
-    const updatedAttendance = await db.classAttendance.update({
+    const updatedAttendance = await db.classattendance.update({
       where: { id: attendance_id },
       data: {
         check_out_time: currentTime,
         auto_checkout: false
       },
       include: {
-        class: true
+        classes: true
       }
     });
 
     return NextResponse.json({
       success: true,
-      message: `Successfully checked out of ${attendance.class.name}`,
-      className: attendance.class.name,
+      message: `Successfully checked out of ${attendance.classes.name}`,
+      className: attendance.classes.name,
       attendance: updatedAttendance
     });
 

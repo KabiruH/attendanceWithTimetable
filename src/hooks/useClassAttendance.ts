@@ -54,7 +54,6 @@ export const useClassAttendance = (userId?: string | null) => {
 
     } catch (error) {
       // Fail silently for now since this is optional functionality
-      console.log('Class attendance data not available yet');
     }
   };
 

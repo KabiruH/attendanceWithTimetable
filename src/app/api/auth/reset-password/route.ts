@@ -8,13 +8,13 @@ export async function POST(request: NextRequest) {
     const { token, newPassword } = await request.json();
 
     // Validate token and check expiration
-    const resetRequest = await db.passwordReset.findUnique({
+    const resetRequest = await db.passwordreset.findUnique({
       where: { 
         token,
         expires: { gt: new Date() },
         used: false 
       },
-      include: { employee: true }
+      include: { employees: true }
     });
 
     // Invalid or expired token
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       });
 
       // Mark reset token as used
-      await tx.passwordReset.update({
+      await tx.passwordreset.update({
         where: { id: resetRequest.id },
         data: { used: true }
       });

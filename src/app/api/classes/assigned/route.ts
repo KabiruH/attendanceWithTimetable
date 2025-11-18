@@ -60,13 +60,13 @@ export async function GET(request: NextRequest) {
     const currentDate = new Date(new Date().toDateString()); // Keeps only date, drops time
 
     // Get assigned classes for the trainer
-    const assignedClasses = await db.trainerClassAssignments.findMany({
+    const assignedClasses = await db.trainerclassassignments.findMany({
       where: {
         trainer_id: trainerId,
         is_active: true
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
 
     // Get today's class attendance for these classes
     const classIds = assignedClasses.map(assignment => assignment.class_id);
-    const todayClassAttendance = await db.classAttendance.findMany({
+    const todayClassAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: trainerId,
         class_id: {
@@ -103,13 +103,13 @@ export async function GET(request: NextRequest) {
       const attendance = attendanceMap.get(assignment.class_id);
      
       return {
-        id: assignment.class.id,
-        name: assignment.class.name,
-        code: assignment.class.code,
-        description: assignment.class.description,
-        department: assignment.class.department,
-        duration_hours: assignment.class.duration_hours,
-        is_active: assignment.class.is_active,
+        id: assignment.classes.id,
+        name: assignment.classes.name,
+        code: assignment.classes.code,
+        description: assignment.classes.description,
+        department: assignment.classes.department,
+        duration_hours: assignment.classes.duration_hours,
+        is_active: assignment.classes.is_active,
         assigned_at: assignment.assigned_at,
         attendance_status: {
           checked_in: !!attendance?.check_in_time,

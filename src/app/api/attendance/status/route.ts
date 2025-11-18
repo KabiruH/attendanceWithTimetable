@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
             }
           },
           include: {
-            user: {
+            users: {
               select: {
                 name: true
               }
@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
             }
           },
           include: {
-            user: {
+            users: {
               select: {
                 name: true
               }
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
       // Process personal attendance data and calculate statistics
       const processedPersonalAttendance = personalAttendance.map(record => ({
         ...record,
-        employee_name: record.user.name,
+        employee_name: record.users.name,
         date: record.date.toISOString(),
         check_in_time: record.check_in_time?.toISOString() || null,
         check_out_time: record.check_out_time?.toISOString() || null
@@ -113,7 +113,7 @@ export async function GET(request: NextRequest) {
         },
         attendanceData: allAttendance.map(record => ({
           ...record,
-          employee_name: record.user.name,
+          employee_name: record.users.name,
           date: record.date.toISOString(),
           check_in_time: record.check_in_time?.toISOString() || null,
           check_out_time: record.check_out_time?.toISOString() || null
@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
           }
         },
         include: {
-          user: {
+          users: {
             select: {
               name: true
             }
@@ -149,7 +149,7 @@ export async function GET(request: NextRequest) {
           }
         },
         include: {
-          user: {
+          users: {
             select: {
               name: true
             }
@@ -172,7 +172,7 @@ export async function GET(request: NextRequest) {
 
     const processedMonthlyRecords = monthlyRecords.map(record => ({
       ...record,
-      employee_name: record.user.name,
+      employee_name: record.users.name,
       date: record.date.toISOString(),
       check_in_time: record.check_in_time?.toISOString() || null,
       check_out_time: record.check_out_time?.toISOString() || null
@@ -190,7 +190,7 @@ export async function GET(request: NextRequest) {
       },
       todayRecord: todayRecord ? {
         ...todayRecord,
-        employee_name: todayRecord.user.name,
+        employee_name: todayRecord.users.name,
         date: todayRecord.date.toISOString(),
         check_in_time: todayRecord.check_in_time?.toISOString() || null,
         check_out_time: todayRecord.check_out_time?.toISOString() || null

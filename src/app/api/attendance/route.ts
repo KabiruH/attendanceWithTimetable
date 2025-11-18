@@ -175,24 +175,17 @@ function parseSessionsFromJson(sessionsJson: any): WorkSession[] {
 
 function hasActiveSession(attendance: any): boolean {
   if (!attendance) {
-    console.log('❌ hasActiveSession: No attendance record');
     return false;
   }
 
   if (attendance.sessions && Array.isArray(attendance.sessions)) {
-    console.log('Using sessions array, count:', attendance.sessions.length);
     
     const activeSession = attendance.sessions.some((session: any) => {
       // Handle both formats: check_in/check_out AND check_in_time/check_out_time
       const hasCheckIn = session.check_in || session.check_in_time;
       const hasCheckOut = session.check_out || session.check_out_time;
       const isActive = hasCheckIn && !hasCheckOut;
-      
-      console.log('Session:', {
-        hasCheckIn: !!hasCheckIn,
-        hasCheckOut: !!hasCheckOut,
-        isActive
-      });
+     
       
       return isActive;
     });
@@ -202,8 +195,6 @@ function hasActiveSession(attendance: any): boolean {
 
   // Fallback to old format
   const fallbackResult = !!(attendance.check_in_time && !attendance.check_out_time);
-  console.log('Using fallback logic:', fallbackResult);
-  console.log('=== END hasActiveSession DEBUG ===');
   
   return fallbackResult;
 }
@@ -219,33 +210,19 @@ async function handleCheckIn(
   clientIP?: string,
   userAgent?: string
 ): Promise<AttendanceResponse> {
-  console.log('=== HANDLE CHECK-IN DEBUG ===');
-  console.log('employee_id:', employee_id);
-  console.log('currentTime:', currentTime);
-  console.log('currentDate:', currentDate);
-  console.log('isMobileRequest:', isMobileRequest);
-  console.log('Current hour:', currentTime.getHours());
+
  
   if (currentTime.getHours() < TIME_CONSTRAINTS.CHECK_IN_START) {
-    console.log('❌ Too early - before', TIME_CONSTRAINTS.CHECK_IN_START);
     return { success: false, error: 'Check-in not allowed before 7 AM' };
   }
 
   if (currentTime.getHours() >= TIME_CONSTRAINTS.WORK_END) {
-    console.log('❌ Too late - after', TIME_CONSTRAINTS.WORK_END);
     return { success: false, error: 'Check-in not allowed after 5 PM' };
   }
 
   const existingAttendance = await db.attendance.findFirst({
     where: { employee_id, date: new Date(currentDate) },
   });
-
-  console.log('Existing attendance found:', !!existingAttendance);
-  if (existingAttendance) {
-    console.log('Existing attendance ID:', existingAttendance.id);
-    console.log('Has check_in_time:', !!existingAttendance.check_in_time);
-    console.log('Has sessions:', !!existingAttendance.sessions);
-  }
 
   const startTime = new Date(currentTime);
   startTime.setHours(TIME_CONSTRAINTS.WORK_START, 0, 0, 0);
@@ -255,11 +232,9 @@ async function handleCheckIn(
     if (isMobileRequest) {
       // Mobile: Check if already checked in for work
       if (existingAttendance.check_in_time) {
-        console.log('❌ Mobile: Already checked in');
         return { success: false, error: 'You have already checked in for work today' };
       }
      
-      console.log('✅ Mobile: Updating existing attendance record');
       // Update existing record with mobile check-in
       let existingSessions: any[] = [];
      
@@ -298,7 +273,6 @@ async function handleCheckIn(
         },
       });
 
-      console.log('✅ Mobile: Updated attendance record');
       return {
         success: true,
         data: attendance,
@@ -306,17 +280,13 @@ async function handleCheckIn(
       };
     } else {
       // WEB: Handle multiple sessions
-      console.log('🌐 Web: Processing existing attendance');
       
       const existingSessions: WorkSession[] = parseSessionsFromJson(existingAttendance.sessions);
-      console.log('Existing sessions count:', existingSessions.length);
       
       const activeSession = existingSessions.find(session => session.check_in && !session.check_out);
-      console.log('Active session found:', !!activeSession);
 
       if (activeSession) {
         // Update existing active session's check-in time
-        console.log('✅ Web: Updating active session check-in time');
         activeSession.check_in = currentTime;
 
         const attendance = await db.attendance.update({
@@ -334,7 +304,6 @@ async function handleCheckIn(
         };
       } else {
         // Create new session
-        console.log('✅ Web: Creating new session');
         existingSessions.push({
           check_in: currentTime,
           check_out: undefined
@@ -358,7 +327,6 @@ async function handleCheckIn(
   }
 
   // Create new attendance record (only if none exists)
-  console.log('🆕 Creating new attendance record');
   const initialSessions: any[] = isMobileRequest
     ? [{
         check_in: currentTime,
@@ -384,7 +352,6 @@ async function handleCheckIn(
     },
   });
 
-  console.log('✅ Created new attendance record with ID:', attendance.id);
 
   const message = isMobileRequest
     ? (status === 'Late'
@@ -572,13 +539,13 @@ export async function GET(request: NextRequest) {
       const attendanceData = await db.attendance.findMany({
         where: { date: { gte: sevenDaysAgo } },
         include: {
-          user: {
+          users: {
             select: { id: true, name: true },
           },
         },
         orderBy: [
           { date: 'desc' },
-          { user: { name: 'asc' } },
+          { users: { name: 'asc' } },
         ],
       });
 
@@ -693,7 +660,7 @@ export async function POST(request: NextRequest) {
     const employee = await db.employees.findUnique({
       where: { employee_id: userId },
        include: {
-    user: true  // Include user data
+    users: true  // Include user data
   }
     });
 
@@ -732,7 +699,7 @@ export async function POST(request: NextRequest) {
     if (result.success) {
       const loginMethod = authMethod === 'mobile_jwt' ? 'mobile_biometric' : 'jwt';
       
-      await db.loginLogs.create({
+      await db.loginlogs.create({
         data: {
           user_id: employee.employee_id,
           employee_id: employee.id,
@@ -777,7 +744,7 @@ export async function POST(request: NextRequest) {
       const bodyForLog = await request.json();
       const isMobileForLog = bodyForLog?.type?.startsWith('work_') || !!bodyForLog?.location;
       
-      await db.loginLogs.create({
+      await db.loginlogs.create({
         data: {
           user_id: null,
           employee_id: null,

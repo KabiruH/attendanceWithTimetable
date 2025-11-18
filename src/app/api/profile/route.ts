@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
                 id: userId
             },
             include: {
-                user: true  // Include the related user data
+                users: true  // Include the related user data
             }
         });
 
@@ -50,11 +50,11 @@ export async function GET(request: NextRequest) {
             id_card_path: employeeData.id_card_path,
             passport_photo: employeeData.passport_photo,
             // User specific fields
-            id_number: employeeData.user.id_number,
-            department: employeeData.user.department,
-            phone_number: employeeData.user.phone_number,
-            gender: employeeData.user.gender,
-            created_at: employeeData.user.created_at.toISOString()
+            id_number: employeeData.users.id_number,
+            department: employeeData.users.department,
+            phone_number: employeeData.users.phone_number,
+            gender: employeeData.users.gender,
+            created_at: employeeData.users.created_at.toISOString()
         };
 
         return NextResponse.json(profileData);

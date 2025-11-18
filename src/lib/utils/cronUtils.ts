@@ -35,7 +35,7 @@ export async function processAbsentRecords(date: Date = new Date()) {
 
     const activeEmployees = await db.employees.findMany({
       where: {
-        user: { is_active: true }
+        users: { is_active: true }
       },
       select: { id: true }
     });
@@ -116,7 +116,7 @@ export async function processMissedDays() {
 
       // Process each missed day
       for (const date of dates) {
-          const existingProcessing = await db.attendanceProcessingLog.findFirst({
+          const existingProcessing = await db.attendanceprocessinglog.findFirst({
               where: {
                   date: date,
                   status: 'completed'
@@ -128,7 +128,7 @@ export async function processMissedDays() {
               const processedCount = await processAbsentRecords(date);
               
               // Log the processing
-              await db.attendanceProcessingLog.create({
+              await db.attendanceprocessinglog.create({
                   data: {
                       date: date,
                       records_processed: processedCount,
@@ -153,7 +153,7 @@ export async function processClassAutoCheckouts(currentTime: Date) {
     const todayDate = new Date(currentTime.toISOString().split('T')[0]);
     
     // Find all active class sessions
-    const activeClassSessions = await db.classAttendance.findMany({
+    const activeClassSessions = await db.classattendance.findMany({
       where: {
         date: todayDate,
         check_out_time: null
@@ -169,7 +169,7 @@ export async function processClassAutoCheckouts(currentTime: Date) {
         
         // Auto-checkout after 2 hours
         if (hoursDiff >= ATTENDANCE_RULES.CLASS_DURATION_HOURS) {
-          await db.classAttendance.update({
+          await db.classattendance.update({
             where: { id: session.id },
             data: {
               check_out_time: currentTime,
@@ -178,7 +178,6 @@ export async function processClassAutoCheckouts(currentTime: Date) {
           });
           classCheckoutCount++;
           
-          console.log(`Auto-checked out class session for trainer ${session.trainer_id}, class ${session.class_id}`);
         }
       }
     }
@@ -346,7 +345,7 @@ export async function ensureCheckouts() {
       }
 
       // Also check yesterday's class sessions
-      const yesterdayClassSessions = await db.classAttendance.findMany({
+      const yesterdayClassSessions = await db.classattendance.findMany({
         where: {
           date: new Date(yesterdayDate),
           check_out_time: null
@@ -356,7 +355,7 @@ export async function ensureCheckouts() {
       for (const session of yesterdayClassSessions) {
         if (session.check_in_time) {
           // Force checkout for any unclosed sessions from yesterday
-          await db.classAttendance.update({
+          await db.classattendance.update({
             where: { id: session.id },
             data: {
               check_out_time: yesterdayCheckoutTime,

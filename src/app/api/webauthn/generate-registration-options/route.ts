@@ -10,28 +10,23 @@ export async function POST(req: Request) {
     const authResult = await checkAuth();
 
     if (!authResult.authenticated || !authResult.user) {
-      console.log('Generate registration options - Unauthorized:', authResult.error || 'No user in auth result');
       return NextResponse.json({ error: authResult.error || 'Unauthorized' }, { status: authResult.status || 401 });
     }
 
     const { userId } = await req.json();
-    console.log(`Generating registration options for user ID: ${userId}`);
 
     // Convert string ID to number if needed
     const userIdNum = typeof userId === 'string' ? parseInt(userId) : userId;
 
     // Verify that the authenticated user matches the requested user
     if (userIdNum !== authResult.user.userId) {
-      console.log(`User IDs do not match: ${userIdNum} vs ${authResult.user.userId}`);
       return NextResponse.json({ error: 'Unauthorized to register for this user' }, { status: 403 });
     }
 
     // Get existing credentials for this user
-    const existingCredentials = await prisma.webAuthnCredentials.findMany({
+    const existingCredentials = await prisma.webauthncredentials.findMany({
       where: { userId: userIdNum },
     });
-
-    console.log(`Found ${existingCredentials.length} existing credentials`);
 
     // Determine RP ID and RP Name based on environment
     const host = req.headers.get('host') || '';
@@ -41,8 +36,6 @@ export async function POST(req: Request) {
     const rpID = isLocalhost ? 'localhost' : (process.env.WEBAUTHN_RP_ID || 'localhost');
     const rpName = 'Employee Attendance System';
     
-    console.log(`Using RP ID: ${rpID} (host: ${host})`);
-
     // Generate registration options
     const options = await generateRegistrationOptions({
       rpName,
@@ -62,7 +55,7 @@ export async function POST(req: Request) {
     });
 
     // Store the challenge with the user ID
-    await prisma.webAuthnCredentialChallenge.upsert({
+    await prisma.webauthncredentialchallenge.upsert({
       where: { userId: userIdNum },
       update: {
         challenge: options.challenge,
@@ -74,8 +67,6 @@ export async function POST(req: Request) {
         expires: new Date(Date.now() + 5 * 60 * 1000), // 5 minutes
       },
     });
-
-    console.log('Stored challenge in database');
 
     return NextResponse.json(options);
   } catch (error) {

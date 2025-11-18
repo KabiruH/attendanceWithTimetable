@@ -28,7 +28,7 @@ model attendanceprocessinglog {
   records_processed Int
   status            String
   created_at        DateTime @default(now())
-  updated_at        DateTime
+  updated_at        DateTime @default(now())
 }
 
 model biometricenrollments {
@@ -41,7 +41,7 @@ model biometricenrollments {
   user_agent     String?  @db.Text
   is_active      Boolean  @default(true)
   created_at     DateTime @default(now())
-  updated_at     DateTime
+  updated_at     DateTime @default(now())
   users          users    @relation(fields: [user_id], references: [id], onDelete: Cascade, map: "BiometricEnrollments_user_id_fkey")
 
   @@index([user_id], map: "BiometricEnrollments_user_id_idx")
@@ -96,7 +96,7 @@ model classes {
   duration_hours          Int                       @default(2)
   is_active               Boolean                   @default(true)
   created_at              DateTime                  @default(now())
-  updated_at              DateTime
+  updated_at              DateTime                  @default(now())
   created_by              String                    @db.VarChar(100)
   classattendance         classattendance[]
   classsubjects           classsubjects[]
@@ -136,7 +136,7 @@ model departments {
   description String?  @db.Text
   is_active   Boolean  @default(true)
   created_at  DateTime @default(now())
-  updated_at  DateTime
+  updated_at  DateTime @default(now())
   created_by  String   @db.VarChar(100)
 
   @@index([code], map: "Departments_code_idx")
@@ -348,7 +348,7 @@ model users {
   email                       String?                      @unique(map: "Users_email_key") @db.VarChar(100)
   is_active                   Boolean                      @default(true)
   created_at                  DateTime                     @default(now())
-  updated_at                  DateTime
+  updated_at                  DateTime                     @default(now())
   created_by                  String                       @db.VarChar(100)
   attendance                  attendance[]
   biometricenrollments        biometricenrollments[]
@@ -370,21 +370,21 @@ model webauthncredentialchallenge {
   challenge String   @db.Text
   expires   DateTime
   createdAt DateTime @default(now())
-  updatedAt DateTime
+  updatedAt DateTime @default(now())
   users     users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentialChallenge_userId_fkey")
 }
 
-model webauthncredentials {
-  id           String   @id
-  userId       Int
-  email        String?  @db.VarChar(100)
-  credentialId String   @unique(map: "WebAuthnCredentials_credentialId_key")
-  publicKey    String   @db.Text
-  counter      Int
-  transports   String?
-  created_at   DateTime @default(now())
-  updated_at   DateTime
-  users        users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentials_userId_fkey")
+    model webauthncredentials {
+      id           String   @id
+      userId       Int
+      email        String?  @db.VarChar(100)
+      credentialId String   @unique(map: "WebAuthnCredentials_credentialId_key")
+      publicKey    String   @db.Text
+      counter      Int
+      transports   String?
+      created_at   DateTime @default(now())
+      updated_at   DateTime @default(now())
+      users        users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentials_userId_fkey")
 
-  @@index([userId], map: "WebAuthnCredentials_userId_fkey")
-}
+      @@index([userId], map: "WebAuthnCredentials_userId_fkey")
+    }

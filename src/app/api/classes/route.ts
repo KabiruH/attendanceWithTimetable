@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
                 updated_at: true,
                 _count: {
                     select: {
-                        classSubjects: true, // Count assigned subjects
+                        classsubjects: true, // Count assigned subjects
                     },
                 },
             },
@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
         const formattedClasses = classes.map(classItem => ({
             ...classItem,
             _count: {
-                subjects: classItem._count.classSubjects,
+                subjects: classItem._count.classsubjects,
             },
         }));
 

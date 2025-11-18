@@ -53,7 +53,7 @@ export async function GET(request: Request) {
 
     const users = await db.users.findMany({
       include: {
-        Employee: {
+        employees: {
           select: {
             id_card_path: true,
             passport_photo: true,
@@ -76,11 +76,11 @@ export async function GET(request: Request) {
       is_active: user.is_active,
       created_at: user.created_at,
       // Employee data if it exists
-      email: user.Employee?.email || null,
-      date_of_birth: user.Employee?.date_of_birth ? 
-        user.Employee.date_of_birth.toISOString().split('T')[0] : null,
-      id_card_path: user.Employee?.id_card_path || null,
-      passport_photo: user.Employee?.passport_photo || null,
+      email: user.employees?.email || null,
+      date_of_birth: user.employees?.date_of_birth ? 
+        user.employees.date_of_birth.toISOString().split('T')[0] : null,
+      id_card_path: user.employees?.id_card_path || null,
+      passport_photo: user.employees?.passport_photo || null,
     }));
 
     return NextResponse.json(transformedUsers);

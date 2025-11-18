@@ -87,19 +87,11 @@ export default function QuickCheckIn({ onSuccess }: QuickCheckInProps) {
       throw new Error(authData.error || 'Failed to get authentication challenge');
     }
 
-    console.log('WebAuthn challenge received:', {
-      challengeLength: authData.challenge.length,
-      allowCredentialsCount: authData.allowCredentials.length,
-      challengeId: authData.challengeId
-    });
+
 
     // Log credential details for debugging
     authData.allowCredentials.forEach((cred: any, index: number) => {
-      console.log(`Credential ${index}:`, {
-        idLength: cred.id.length,
-        type: cred.type,
-        transports: cred.transports
-      });
+   
     });
 
     try {
@@ -122,7 +114,6 @@ export default function QuickCheckIn({ onSuccess }: QuickCheckInProps) {
         throw new Error('Biometric authentication was cancelled');
       }
 
-      console.log('WebAuthn authentication successful');
 
       // Store credential for later use
       const publicKeyCredential = credential as PublicKeyCredential;
@@ -216,7 +207,6 @@ export default function QuickCheckIn({ onSuccess }: QuickCheckInProps) {
         }
       }
     } catch (error) {
-      console.log('User has no trainer classes, proceeding to success');
     }
 
     // If no classes or not a trainer, go to success

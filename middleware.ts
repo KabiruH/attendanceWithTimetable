@@ -67,7 +67,6 @@ export async function middleware(request: NextRequest) {
 
         // Admin-only path check
         if (isAdminPath && payload.role !== 'admin') {
-          console.log(`Access denied: User role "${payload.role}" attempted to access admin path: ${pathname}`);
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 

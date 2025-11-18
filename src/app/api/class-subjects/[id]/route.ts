@@ -73,7 +73,7 @@ export async function DELETE(
     }
 
     // Check if subject is activated for a term
-    const classSubject = await db.classSubjects.findUnique({
+    const classSubject = await db.classsubjects.findUnique({
       where: { id: classSubjectId },
     });
 
@@ -93,7 +93,7 @@ export async function DELETE(
       );
     }
 
-    await db.classSubjects.delete({
+    await db.classsubjects.delete({
       where: { id: classSubjectId },
     });
 

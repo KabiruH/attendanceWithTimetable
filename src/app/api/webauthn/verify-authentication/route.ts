@@ -8,8 +8,6 @@ export async function POST(req: Request) {
   try {
     const { authenticationResponse, username } = await req.json();
 
-    console.log(`Verifying authentication for username: ${username}`);
-
     // Find the user
     const user = await prisma.users.findUnique({
       where: { id_number: username },
@@ -20,7 +18,7 @@ export async function POST(req: Request) {
     }
 
     // Get the expected challenge
-    const challengeRecord = await prisma.webAuthnCredentialChallenge.findUnique({
+    const challengeRecord = await prisma.webauthncredentialchallenge.findUnique({
       where: { userId: user.id },
     });
 
@@ -33,7 +31,7 @@ export async function POST(req: Request) {
 
     // Get the credential being used
     const credentialId = authenticationResponse.id;
-    const credential = await prisma.webAuthnCredentials.findFirst({
+    const credential = await prisma.webauthncredentials.findFirst({
       where: { credentialId },
     });
 
@@ -43,8 +41,6 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
-    console.log('Found credential, verifying response...');
 
     // Determine origin and RP ID based on environment
     const host = req.headers.get('host') || '';
@@ -58,8 +54,6 @@ export async function POST(req: Request) {
     const expectedRPID = isLocalhost
       ? 'localhost'
       : (process.env.WEBAUTHN_RP_ID || 'localhost');
-
-    console.log(`Verifying with origin: ${expectedOrigin}, RP ID: ${expectedRPID}`);
 
     // Verify the authentication response
 const verification = await verifyAuthenticationResponse({
@@ -76,20 +70,17 @@ const verification = await verifyAuthenticationResponse({
 });
 
     if (!verification.verified) {
-      console.log('Verification failed');
       return NextResponse.json({ error: 'Verification failed' }, { status: 400 });
     }
 
-    console.log('Verification successful');
-
     // Update counter
-    await prisma.webAuthnCredentials.update({
+    await prisma.webauthncredentials.update({
       where: { id: credential.id },
       data: { counter: verification.authenticationInfo.newCounter },
     });
 
     // Clean up the challenge
-    await prisma.webAuthnCredentialChallenge.delete({
+    await prisma.webauthncredentialchallenge.delete({
       where: { userId: user.id },
     });
 

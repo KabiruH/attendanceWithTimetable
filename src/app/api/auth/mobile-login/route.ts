@@ -33,7 +33,7 @@ export async function POST(request: Request) {
         gender: true,
         email: true,
         is_active: true,
-        Employee: {
+        employees: {
           select: {
             id: true,
             name: true,
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
     }
     
     // Check if employee record exists (required for password)
-    if (!user.Employee) {
+    if (!user.employees) {
       await logMobileLoginAttempt({
         user_id: user.id,
         id_number: validatedData.id_number,
@@ -91,7 +91,7 @@ export async function POST(request: Request) {
     if (!user.is_active) {
       await logMobileLoginAttempt({
         user_id: user.id,
-        employee_id: user.Employee.id,
+        employee_id: user.employees.id,
         id_number: validatedData.id_number,
         ip_address: clientIP,
         user_agent: userAgent,
@@ -112,14 +112,14 @@ export async function POST(request: Request) {
     // Verify password
     const passwordMatch = await bcrypt.compare(
       validatedData.password,
-      user.Employee.password
+      user.employees.password
     );
     
     // Log attempt - wrong password
     if (!passwordMatch) {
       await logMobileLoginAttempt({
         user_id: user.id,
-        employee_id: user.Employee.id,
+        employee_id: user.employees.id,
         id_number: validatedData.id_number,
         ip_address: clientIP,
         user_agent: userAgent,
@@ -138,7 +138,7 @@ export async function POST(request: Request) {
     }
 
     // Check if biometrics are enrolled for this user
-    const biometricEnrollment = await db.biometricEnrollments.findFirst({
+    const biometricEnrollment = await db.biometricenrollments.findFirst({
       where: { 
         user_id: user.id,
         is_active: true 
@@ -148,7 +148,7 @@ export async function POST(request: Request) {
     // Log successful login
     await logMobileLoginAttempt({
       user_id: user.id,
-      employee_id: user.Employee.id,
+      employee_id: user.employees.id,
       id_number: validatedData.id_number,
       ip_address: clientIP,
       user_agent: userAgent,
@@ -159,8 +159,8 @@ export async function POST(request: Request) {
     // Create JWT token
     const token = await createMobileJWT({
       userId: user.id,
-      employeeId: user.Employee.id,
-      email: user.Employee.email || user.email || '',
+      employeeId: user.employees.id,
+      email: user.employees.email || user.email || '',
       role: user.role,
       name: user.name,
       id_number: user.id_number
@@ -181,11 +181,11 @@ export async function POST(request: Request) {
           is_active: user.is_active
         },
         employee: {
-          id: user.Employee.id,
-          name: user.Employee.name,
-          email: user.Employee.email,
-          date_of_birth: user.Employee.date_of_birth,
-          employee_id: user.Employee.employee_id
+          id: user.employees.id,
+          name: user.employees.name,
+          email: user.employees.email,
+          date_of_birth: user.employees.date_of_birth,
+          employee_id: user.employees.employee_id
         },
         token: token,
         biometric_enrolled: !!biometricEnrollment
@@ -280,7 +280,7 @@ async function logMobileLoginAttempt({
   login_method: string;
 }) {
   try {
-    await db.loginLogs.create({
+    await db.loginlogs.create({
       data: {
         user_id,
         employee_id,

@@ -7,24 +7,21 @@ import crypto from 'crypto';
 
 export async function POST(req: Request) {
   try {
-    console.log('Quick check-in endpoint called');
 
     // Determine RP ID based on environment
     const host = req.headers.get('host') || '';
     const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1');
     const rpID = isLocalhost ? 'localhost' : (process.env.WEBAUTHN_RP_ID || 'localhost');
     
-    console.log(`Using RP ID: ${rpID}`);
-
     // Get all registered credentials for active users
-    const credentials = await db.webAuthnCredentials.findMany({
+    const credentials = await db.webauthncredentials.findMany({
       where: {
-        user: {
+        users: {
           is_active: true
         }
       },
       include: {
-        user: {
+        users: {
           select: {
             id: true,
             name: true,
@@ -34,8 +31,6 @@ export async function POST(req: Request) {
         }
       }
     });
-
-    console.log(`Found ${credentials.length} registered credentials`);
 
     if (credentials.length === 0) {
       return NextResponse.json(
@@ -77,7 +72,6 @@ export async function POST(req: Request) {
         credential.transports = ['internal'];
       }
 
-      console.log(`Credential ${cred.credentialId.substring(0, 12)}... has transports:`, credential.transports);
       return credential;
     });
 
@@ -91,7 +85,6 @@ export async function POST(req: Request) {
 
     // Generate a unique challenge ID for tracking
     const challengeId = crypto.randomUUID();
-    console.log(`Generated challenge ID: ${challengeId}`);
 
     // Store the challenge in global memory (matching your existing pattern)
     if (!global.quickCheckInChallenges) {
@@ -102,14 +95,6 @@ export async function POST(req: Request) {
       challenge: options.challenge,
       expires: Date.now() + 5 * 60 * 1000, // 5 minutes
     });
-
-    console.log('Formatted allowCredentials:', allowCredentials.map(cred => ({
-      idLength: cred.id.length,
-      type: cred.type,
-      transports: cred.transports
-    })));
-
-    console.log('Returning WebAuthn challenge data');
 
     // Return the authentication options with challenge ID
     return NextResponse.json({

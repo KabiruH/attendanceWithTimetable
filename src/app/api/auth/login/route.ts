@@ -72,7 +72,7 @@ async function handlePasswordLogin(body: any, clientIP: string, userAgent: strin
       name: true,
       password: true,
       employee_id: true,
-      user: {
+      users: {
         select: {
           id: true,
           is_active: true,
@@ -101,9 +101,9 @@ async function handlePasswordLogin(body: any, clientIP: string, userAgent: strin
   }
   
   // Log attempt - account inactive
-  if (!employee.user?.is_active) {
+  if (!employee.users?.is_active) {
     await logLoginAttempt({
-      user_id: employee.user?.id,
+      user_id: employee.users?.id,
       employee_id: employee.id,
       email: validatedData.email,
       ip_address: clientIP,
@@ -128,7 +128,7 @@ async function handlePasswordLogin(body: any, clientIP: string, userAgent: strin
   // Log attempt - wrong password
   if (!passwordMatch) {
     await logLoginAttempt({
-      user_id: employee.user?.id,
+      user_id: employee.users?.id,
       employee_id: employee.id,
       email: validatedData.email,
       ip_address: clientIP,
@@ -146,7 +146,7 @@ async function handlePasswordLogin(body: any, clientIP: string, userAgent: strin
   
   // Log successful login
   await logLoginAttempt({
-    user_id: employee.user?.id,
+    user_id: employee.users?.id,
     employee_id: employee.id,
     email: validatedData.email,
     ip_address: clientIP,
@@ -168,7 +168,7 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
       email: true,
       name: true,
       employee_id: true,
-      user: {
+      users: {
         select: {
           id: true,
           is_active: true,
@@ -197,9 +197,9 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
   }
   
   // Verify that the userId matches
-  if (employee.user?.id !== validatedData.userId) {
+  if (employee.users?.id !== validatedData.userId) {
     await logLoginAttempt({
-      user_id: employee.user?.id,
+      user_id: employee.users?.id,
       employee_id: employee.id,
       email: validatedData.email,
       ip_address: clientIP,
@@ -216,9 +216,9 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
   }
   
   // Check if user is active
-  if (!employee.user?.is_active) {
+  if (!employee.users?.is_active) {
     await logLoginAttempt({
-      user_id: employee.user?.id,
+      user_id: employee.users?.id,
       employee_id: employee.id,
       email: validatedData.email,
       ip_address: clientIP,
@@ -236,7 +236,7 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
   
   // Log successful biometric login
   await logLoginAttempt({
-    user_id: employee.user?.id,
+    user_id: employee.users?.id,
     employee_id: employee.id,
     email: validatedData.email,
     ip_address: clientIP,
@@ -318,7 +318,7 @@ async function logLoginAttempt({
   login_method: 'password' | 'biometric';
 }) {
   try {
-    await db.loginLogs.create({
+    await db.loginlogs.create({
       data: {
         user_id,
         employee_id,

@@ -137,7 +137,7 @@ export async function GET(
     }
 
     // Verify lesson period exists
-    const lessonPeriod = await db.lessonPeriods.findUnique({
+    const lessonPeriod = await db.lessonperiods.findUnique({
       where: { id: parsedLessonPeriodId },
       select: {
         id: true,
@@ -170,16 +170,16 @@ export async function GET(
       whereClause.id = { not: excludeSlotId };
     }
 
-    const conflictingSlot = await db.timetableSlots.findFirst({
+    const conflictingSlot = await db.timetableslots.findFirst({
       where: whereClause,
       include: {
-        class: {
+        classes: {
           select: {
             name: true,
             code: true
           }
         },
-        room: {
+        rooms: {
           select: {
             name: true
           }
@@ -213,13 +213,13 @@ export async function GET(
         conflict: conflictingSlot ? {
           timetable_slot_id: conflictingSlot.id,
           class: {
-            name: conflictingSlot.class.name,
-            code: conflictingSlot.class.code
+            name: conflictingSlot.classes.name,
+            code: conflictingSlot.classes.code
           },
           room: {
-            name: conflictingSlot.room.name
+            name: conflictingSlot.rooms.name
           },
-          message: `Trainer is already scheduled for "${conflictingSlot.class.name}" in ${conflictingSlot.room.name} at this time`
+          message: `Trainer is already scheduled for "${conflictingSlot.classes.name}" in ${conflictingSlot.rooms.name} at this time`
         } : null
       }
     });

@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     const validatedData = biometricEnrollSchema.parse(body);
 
     // Check if user already has biometric enrollment
-    const existingEnrollment = await db.biometricEnrollments.findFirst({
+    const existingEnrollment = await db.biometricenrollments.findFirst({
       where: { 
         user_id: userId,
         is_active: true 
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
 
     if (existingEnrollment) {
       // Update existing enrollment
-      await db.biometricEnrollments.update({
+      await db.biometricenrollments.update({
         where: { id: existingEnrollment.id },
         data: {
           enrolled_at: new Date(),
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
       });
     } else {
       // Create new enrollment
-      await db.biometricEnrollments.create({
+      await db.biometricenrollments.create({
         data: {
           user_id: userId,
           biometric_hash: validatedData.biometric_data, // In production, hash this
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     }
 
     // Log the enrollment
-    await db.biometricLogs.create({
+    await db.biometriclogs.create({
       data: {
         user_id: userId,
         action: 'enrollment',
@@ -127,7 +127,7 @@ export async function GET(request: Request) {
     const { userId } = authResult.payload;
 
     // Check biometric enrollment status
-    const enrollment = await db.biometricEnrollments.findFirst({
+    const enrollment = await db.biometricenrollments.findFirst({
       where: { 
         user_id: userId,
         is_active: true 

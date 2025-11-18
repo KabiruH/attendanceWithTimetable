@@ -32,7 +32,7 @@ export async function GET(request: Request) {
         gender: true,
         email: true,
         is_active: true,
-        Employee: {  // FIXED: Capital E, singular - matches your schema
+        employees: {  // FIXED: Capital E, singular - matches your schema
           select: {
             id: true,
             name: true,
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
     // Get biometric status (temporarily commented out until you add the biometric models)
     let biometricEnrollment = null;
     try {
-      biometricEnrollment = await db.biometricEnrollments.findFirst({
+      biometricEnrollment = await db.biometricenrollments.findFirst({
         where: { 
           user_id: userId,
           is_active: true 
@@ -69,7 +69,6 @@ export async function GET(request: Request) {
       });
     } catch (biometricError) {
       // If biometric table doesn't exist yet, just continue
-      console.log('Biometric table not available yet');
     }
 
     // Get recent attendance summary
@@ -109,7 +108,7 @@ export async function GET(request: Request) {
           email: user.email,
           is_active: user.is_active
         },
-        employee: user.Employee || null, // FIXED: Use 'Employee' not 'employees[0]'
+        employee: user.employees || null, 
         biometric: {
           enrolled: !!biometricEnrollment,
           enrolled_at: biometricEnrollment?.enrolled_at,

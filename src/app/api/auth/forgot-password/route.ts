@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     const token = randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 3600000); // 1 hour
 
-    await db.passwordReset.create({
+    await db.passwordreset.create({
       data: {
         employee_id: user.id,
         token,

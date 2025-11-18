@@ -80,10 +80,10 @@ export async function GET(request: NextRequest) {
 
     // Fetch logs with user/employee details
     const [logs, totalCount] = await Promise.all([
-      db.loginLogs.findMany({
+      db.loginlogs.findMany({
         where: whereClause,
         include: {
-          user: {
+          users: {
             select: {
               id: true,
               name: true,
@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
               department: true
             }
           },
-          employee: {
+          employees: {
             select: {
               id: true,
               name: true,
@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
         skip,
         take: limit
       }),
-      db.loginLogs.count({
+      db.loginlogs.count({
         where: whereClause
       })
     ]);
@@ -121,10 +121,10 @@ export async function GET(request: NextRequest) {
       failure_reason: log.failure_reason,
       login_method: log.login_method,
       attempted_at: log.attempted_at.toISOString(),
-      user_name: log.user?.name || log.employee?.name || 'Unknown',
-      user_id_number: log.user?.id_number || 'N/A',
-      user_role: log.user?.role || 'N/A',
-      user_department: log.user?.department || 'N/A'
+      user_name: log.users?.name || log.employees?.name || 'Unknown',
+      user_id_number: log.users?.id_number || 'N/A',
+      user_role: log.users?.role || 'N/A',
+      user_department: log.users?.department || 'N/A'
     }));
 
     // Get summary statistics
@@ -181,32 +181,32 @@ async function getLoginStats(whereClause: any) {
       recentAttempts
     ] = await Promise.all([
       // Total attempts
-      db.loginLogs.count({ where: whereClause }),
+      db.loginlogs.count({ where: whereClause }),
       
       // Successful logins
-      db.loginLogs.count({ 
+      db.loginlogs.count({ 
         where: { ...whereClause, status: 'success' } 
       }),
       
       // Failed attempts
-      db.loginLogs.count({ 
+      db.loginlogs.count({ 
         where: { ...whereClause, status: 'failed' } 
       }),
       
       // Blocked attempts
-      db.loginLogs.count({ 
+      db.loginlogs.count({ 
         where: { ...whereClause, status: 'blocked' } 
       }),
       
       // Unique users (distinct emails)
-      db.loginLogs.findMany({
+      db.loginlogs.findMany({
         where: whereClause,
         distinct: ['email'],
         select: { email: true }
       }),
       
       // Recent attempts (last 24 hours)
-      db.loginLogs.count({
+      db.loginlogs.count({
         where: {
           ...whereClause,
           attempted_at: {

@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       where: { email },
       select: {
         id: true,
-        user: {
+        users: {
           select: {
             id: true,
             id_number: true,
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       },
     });
 
-    if (!employee || !employee.user) {
+    if (!employee || !employee.users) {
       return NextResponse.json(
         { error: "User not found" },
         { status: 404 }
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     }
 
     // Check if user is active
-    if (!employee.user.is_active) {
+    if (!employee.users.is_active) {
       return NextResponse.json(
         { error: "Your account has been deactivated. Please contact administrator." },
         { status: 403 }
@@ -45,9 +45,9 @@ export async function POST(request: Request) {
 
     // Return the ID number needed for biometric verification
     return NextResponse.json({
-      idNumber: employee.user.id_number,
+      idNumber: employee.users.id_number,
       employeeId: employee.id,
-      userId: employee.user.id
+      userId: employee.users.id
     });
    
   } catch (error) {

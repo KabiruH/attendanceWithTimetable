@@ -98,7 +98,7 @@ export async function PUT(request: NextRequest) {
             return await tx.employees.findUnique({
                 where: { id: userId },
                 include: {
-                    user: true
+                    users: true
                 }
             });
         });
@@ -121,10 +121,10 @@ export async function PUT(request: NextRequest) {
                 date_of_birth: updatedProfile.date_of_birth.toISOString().split('T')[0],
                 id_card_path: updatedProfile.id_card_path,
                 passport_photo: updatedProfile.passport_photo,
-                id_number: updatedProfile.user.id_number,
-                phone_number: updatedProfile.user.phone_number,
-                gender: updatedProfile.user.gender,
-                created_at: updatedProfile.user.created_at.toISOString()
+                id_number: updatedProfile.users.id_number,
+                phone_number: updatedProfile.users.phone_number,
+                gender: updatedProfile.users.gender,
+                created_at: updatedProfile.users.created_at.toISOString()
             }
         });
 

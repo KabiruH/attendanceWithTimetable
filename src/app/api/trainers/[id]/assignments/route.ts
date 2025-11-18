@@ -231,7 +231,6 @@ const classSubjects = await tx.classsubjects.findMany({
   }
 });
 
-console.log(`Found ${classSubjects.length} subjects across ${numericClassIds.length} classes`);
 
 // Fetch ALL existing assignments in ONE query
 const existingAssignments = await tx.trainersubjectassignments.findMany({

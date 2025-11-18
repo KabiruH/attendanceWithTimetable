@@ -33,7 +33,6 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
       try {
         // Check if this is a development environment
         if (isDevEnvironment) {
-          // console.log('Development environment detected, bypassing strict location checks');
           // We'll still try to get location, but won't log out on failure
         }
 

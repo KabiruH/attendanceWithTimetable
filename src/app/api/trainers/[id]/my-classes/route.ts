@@ -71,16 +71,16 @@ export async function GET(
     }
 
     // Fetch trainer's active class assignments with class details using user.id directly
-    const assignments = await db.trainerClassAssignments.findMany({
+    const assignments = await db.trainerclassassignments.findMany({
       where: {
         trainer_id: trainerUserId, // Using user.id directly
         is_active: true,
-        class: {
+        classes: {
           is_active: true // Only show assignments to active classes
         }
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -100,7 +100,7 @@ export async function GET(
     const assignmentsWithAttendance = await Promise.all(
       assignments.map(async (assignment) => {
         // Get the most recent attendance for this class (using user.id directly)
-        const lastAttendance = await db.classAttendance.findFirst({
+        const lastAttendance = await db.classattendance.findFirst({
           where: {
             trainer_id: trainerUserId, // Using user.id directly
             class_id: assignment.class_id
@@ -117,7 +117,7 @@ export async function GET(
         });
 
         // Get total number of sessions for this class (using user.id directly)
-        const totalSessions = await db.classAttendance.count({
+        const totalSessions = await db.classattendance.count({
           where: {
             trainer_id: trainerUserId, // Using user.id directly
             class_id: assignment.class_id,
@@ -129,7 +129,7 @@ export async function GET(
           id: assignment.id,
           class_id: assignment.class_id,
           assigned_at: assignment.assigned_at,
-          class: assignment.class,
+          class: assignment.classes,
           lastAttendance: lastAttendance ? {
             date: lastAttendance.date.toISOString().split('T')[0], // Format as YYYY-MM-DD
             check_in_time: lastAttendance.check_in_time.toISOString(),

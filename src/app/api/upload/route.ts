@@ -63,11 +63,9 @@ export async function POST(request: Request) {
       
       if (isProduction) {
         // Upload to Cloudinary in production
-        console.log('Uploading ID card to Cloudinary...');
         idCardPath = await uploadToCloudinary(idCardBuffer, idCardFileName, 'id_cards');
       } else {
         // Upload to local filesystem in development
-        console.log('Uploading ID card locally...');
         idCardPath = await uploadToLocal(idCardBuffer, idCardFileName, uploadDir);
       }
       
@@ -85,19 +83,14 @@ export async function POST(request: Request) {
       
       if (isProduction) {
         // Upload to Cloudinary in production
-        console.log('Uploading passport photo to Cloudinary...');
         passportPath = await uploadToCloudinary(passportBuffer, passportFileName, 'passport_photos');
       } else {
         // Upload to local filesystem in development
-        console.log('Uploading passport photo locally...');
         passportPath = await uploadToLocal(passportBuffer, passportFileName, uploadDir);
       }
       
       uploadedFiles.push({ field: 'passport_photo_path', path: passportPath });
     }
-
-    console.log(`Upload successful using ${isProduction ? 'Cloudinary' : 'local filesystem'}`);
-
     return NextResponse.json({
       id_card_path: uploadedFiles.find(f => f.field === 'id_card_path')?.path || '',
       passport_photo_path: uploadedFiles.find(f => f.field === 'passport_photo_path')?.path || '',
