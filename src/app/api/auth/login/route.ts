@@ -260,13 +260,13 @@ async function createAuthResponse(employee: any) {
   
   // Create JWT token with BOTH Employee ID and User ID
   const token = await new SignJWT({
-    id: employee.user.id,            // ✅ Add this line
-    employee_id: employee.user.id, 
+    id: employee.users.id,            // ✅ Add this line
+    employee_id: employee.users.id, 
     email: employee.email,
-    role: employee.user.role,
+    role: employee.users.role,
     name: employee.name,
-    userId: employee.user.id,
-    id_number: employee.user.id_number
+    userId: employee.users.id,
+    id_number: employee.users.id_number
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime('24h')
@@ -275,11 +275,11 @@ async function createAuthResponse(employee: any) {
   // Set HTTP-only cookie
   const response = NextResponse.json({
     user: {
-      employee_id: employee.user.id, 
+      employee_id: employee.users.id, 
       email: employee.email,
       name: employee.name,
-      role: employee.user.role,
-      userId: employee.user.id
+      role: employee.users.role,
+      userId: employee.users.id
     },
     message: "Logged in successfully",
   }, {
