@@ -23,7 +23,6 @@ async function verifyAuth() {
     const role = payload.role as string;
     const name = payload.name as string;
 
-    // Verify user is still active
     const user = await db.users.findUnique({
       where: { id: userId },
       select: { id: true, name: true, role: true, department: true, is_active: true }
@@ -39,7 +38,7 @@ async function verifyAuth() {
   }
 }
 
-// GET /api/trainers/[id]/my-classes - Fetch trainer's assigned classes with attendance info
+// GET /api/trainers/[id]/my-classes
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -62,7 +61,6 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
     }
 
-    // Check authorization - users can only view their own classes unless they're admin
     if (user.role !== 'admin' && user.id !== trainerUserId) {
       return NextResponse.json(
         { error: 'Unauthorized. You can only view your own classes.' },
@@ -70,13 +68,30 @@ export async function GET(
       );
     }
 
-    // Fetch trainer's active class assignments with class details using user.id directly
+    const { searchParams } = new URL(request.url);
+    const termIdParam = searchParams.get('term_id');
+
+    if (!termIdParam || termIdParam === 'undefined' || termIdParam === 'null') {
+      return NextResponse.json({ 
+        error: 'term_id is required and must be a valid number' 
+      }, { status: 400 });
+    }
+
+    const termId = parseInt(termIdParam);
+    
+    if (isNaN(termId)) {
+      return NextResponse.json({ 
+        error: 'term_id must be a valid number' 
+      }, { status: 400 });
+    }
+
+    // Fetch trainer's active class assignments
     const assignments = await db.trainerclassassignments.findMany({
       where: {
-        trainer_id: trainerUserId, // Using user.id directly
+        trainer_id: trainerUserId,
         is_active: true,
         classes: {
-          is_active: true // Only show assignments to active classes
+          is_active: true
         }
       },
       include: {
@@ -96,13 +111,86 @@ export async function GET(
       }
     });
 
-    // For each assignment, get the latest attendance and total sessions
-    const assignmentsWithAttendance = await Promise.all(
+    console.log('📚 Found class assignments:', assignments.map(a => ({
+      class_id: a.class_id,
+      class_name: a.classes.name
+    })));
+
+    // For each assignment, get subjects
+    const assignmentsWithDetails = await Promise.all(
       assignments.map(async (assignment) => {
-        // Get the most recent attendance for this class (using user.id directly)
+        console.log(`\n🔍 Processing class: ${assignment.classes.name} (ID: ${assignment.class_id})`);
+
+        // ✅ Step 1: Get ALL ClassSubjects for this class
+        const allClassSubjects = await db.classsubjects.findMany({
+          where: {
+            class_id: assignment.class_id,
+            is_active: true
+          },
+          include: {
+            subjects: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                credit_hours: true
+              }
+            }
+          }
+        });
+
+        console.log(`  📋 Found ${allClassSubjects.length} subjects for this class`);
+
+        // ✅ Step 2: Get trainer's subject assignments for this term
+        // We need to check which class_subject_ids belong to this class
+        const classSubjectIds = allClassSubjects.map(cs => cs.id);
+
+        console.log(`  🔑 ClassSubject IDs for this class:`, classSubjectIds);
+
+        const trainerSubjectAssignments = await db.trainersubjectassignments.findMany({
+          where: {
+            trainer_id: trainerUserId,
+            term_id: termId,
+            is_active: true,
+            class_subject_id: {
+              in: classSubjectIds // ✅ Only get assignments for THIS class
+            }
+          },
+          select: {
+            subject_id: true,
+            class_subject_id: true
+          }
+        });
+
+        console.log(`  ✅ Trainer assigned to ${trainerSubjectAssignments.length} subjects in this class`);
+        console.log(`  📝 Assigned subject IDs:`, trainerSubjectAssignments.map(tsa => tsa.subject_id));
+
+        // ✅ Step 3: Create a set of assigned subject IDs
+        const assignedSubjectIds = new Set(
+          trainerSubjectAssignments.map(tsa => tsa.subject_id)
+        );
+
+        // ✅ Step 4: Map all subjects with their assignment status
+        const subjects = allClassSubjects.map(cs => {
+          const isAssigned = assignedSubjectIds.has(cs.subjects.id);
+          console.log(`    • ${cs.subjects.name} (ID: ${cs.subjects.id}): ${isAssigned ? '✓ Assigned' : '✗ Not assigned'}`);
+          
+          return {
+            id: cs.subjects.id,
+            name: cs.subjects.name,
+            code: cs.subjects.code,
+            credit_hours: cs.subjects.credit_hours,
+            class_subject_id: cs.id,
+            is_assigned: isAssigned
+          };
+        });
+
+        console.log(`  📊 Final subjects array: ${subjects.length} total, ${subjects.filter(s => s.is_assigned).length} assigned`);
+
+        // Get the most recent attendance for this class
         const lastAttendance = await db.classattendance.findFirst({
           where: {
-            trainer_id: trainerUserId, // Using user.id directly
+            trainer_id: trainerUserId,
             class_id: assignment.class_id
           },
           orderBy: {
@@ -116,10 +204,10 @@ export async function GET(
           }
         });
 
-        // Get total number of sessions for this class (using user.id directly)
+        // Get total number of sessions for this class
         const totalSessions = await db.classattendance.count({
           where: {
-            trainer_id: trainerUserId, // Using user.id directly
+            trainer_id: trainerUserId,
             class_id: assignment.class_id,
             status: 'Present'
           }
@@ -130,8 +218,9 @@ export async function GET(
           class_id: assignment.class_id,
           assigned_at: assignment.assigned_at,
           class: assignment.classes,
+          subjects,
           lastAttendance: lastAttendance ? {
-            date: lastAttendance.date.toISOString().split('T')[0], // Format as YYYY-MM-DD
+            date: lastAttendance.date.toISOString().split('T')[0],
             check_in_time: lastAttendance.check_in_time.toISOString(),
             check_out_time: lastAttendance.check_out_time?.toISOString() || null,
             status: lastAttendance.status
@@ -141,12 +230,16 @@ export async function GET(
       })
     );
 
-    return NextResponse.json(assignmentsWithAttendance);
+    console.log('\n✅ Returning assignments with subjects');
+    return NextResponse.json(assignmentsWithDetails);
 
   } catch (error) {
-    console.error('Error fetching trainer classes:', error);
+    console.error('❌ Error fetching trainer classes:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch assigned classes' },
+      { 
+        error: 'Failed to fetch assigned classes', 
+        details: error instanceof Error ? error.message : String(error) 
+      },
       { status: 500 }
     );
   }

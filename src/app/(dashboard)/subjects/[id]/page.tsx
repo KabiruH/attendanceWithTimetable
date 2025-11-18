@@ -178,7 +178,7 @@ export default function ManageClassSubjectsPage() {
 
   const handleRemoveSubject = async (classSubjectId: number) => {
     try {
-      const response = await fetch(`/api/admin/class-subjects/${classSubjectId}`, {         
+      const response = await fetch(`/api/class-subjects/${classSubjectId}`, {         
         method: "DELETE" 
       });
 

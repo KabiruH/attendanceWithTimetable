@@ -4,7 +4,7 @@ import { db } from '@/lib/db/db';
 import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
 import jwt from 'jsonwebtoken';
 
-// Unified authentication function (same as class-checkin route)
+// Unified authentication function
 async function getAuthenticatedUser(req: NextRequest): Promise<{ 
   id: number; 
   name: string; 

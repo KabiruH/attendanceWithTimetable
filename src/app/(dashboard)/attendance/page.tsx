@@ -9,14 +9,24 @@ interface AttendanceSession {
   check_out?: string | null;
 }
 
+// ✅ UPDATED: Match the API response structure
 interface Employee {
-  id: string;
-  name: string;
+  id?: number;
+  employee_id: number;
+  employee_name?: string;
+  name?: string;
+  users?: {
+    name: string;
+    id_number?: string;
+    department?: string;
+  };
   date: string;
-  timeIn: string | null;
-  timeOut: string | null;
-  status: "present" | "late" | "absent";
-  sessions?: AttendanceSession[]; // ADD THIS LINE
+  check_in_time: string | null;
+  check_out_time: string | null;
+  timeIn?: string | null;  // Keep for backward compatibility
+  timeOut?: string | null; // Keep for backward compatibility
+  status: "present" | "late" | "absent" | "Present" | "Late" | "Absent";
+  sessions?: AttendanceSession[];
 }
 
 interface AttendanceResponse {
@@ -60,17 +70,30 @@ function Attendance() {
 
       const response: AttendanceResponse = await attendanceResponse.json();
 
+      console.log('API Response:', response); // 🔍 Debug log
+
       if (user.role === "admin") {
-        // FIXED: Include sessions data in admin mapping
-        const adminEmployees = response.attendanceData.map((record: any) => ({
-          id: record.Employees?.id.toString() || record.employee_id.toString(),
-          name: record.Employees?.name || "Unknown",
-          date: record.date,
-          timeIn: record.check_in_time,
-          timeOut: record.check_out_time,
-          status: record.status.toLowerCase() as 'present' | 'absent' | 'late',
-          sessions: record.sessions || [] // ADD THIS LINE - Include sessions data
-        }));
+        // ✅ FIXED: Use correct field names from API
+        const adminEmployees = response.attendanceData.map((record: any) => {
+          console.log('Processing record:', record); // 🔍 Debug each record
+          
+          return {
+            id: record.id,
+            employee_id: record.employee_id,
+            employee_name: record.employee_name || record.users?.name || 'Unknown',
+            name: record.employee_name || record.users?.name || 'Unknown',
+            users: record.users,
+            date: record.date,
+            check_in_time: record.check_in_time,
+            check_out_time: record.check_out_time,
+            timeIn: record.check_in_time, // For backward compatibility
+            timeOut: record.check_out_time, // For backward compatibility
+            status: record.status.toLowerCase() as 'present' | 'absent' | 'late',
+            sessions: record.sessions || []
+          };
+        });
+        
+        console.log('Mapped admin employees:', adminEmployees); // 🔍 Debug mapped data
         setEmployees(adminEmployees);
 
         if (response.autoProcessed && (response.autoProcessed.autoCheckouts > 0 || response.autoProcessed.absentRecords > 0)) {
@@ -80,16 +103,21 @@ function Attendance() {
           });
         }
       } else if (user.role === "employee") {
-        // FIXED: Include sessions data in employee mapping
+        // ✅ FIXED: Use correct field names for employee
         const employeeRecords = response.attendanceData.map((record: any) => ({
-          id: record.employee_id.toString(),
+          id: record.id,
+          employee_id: record.employee_id,
+          employee_name: user.name,
           name: user.name,
           date: record.date,
-          timeIn: record.check_in_time,
-          timeOut: record.check_out_time,
+          check_in_time: record.check_in_time,
+          check_out_time: record.check_out_time,
+          timeIn: record.check_in_time, // For backward compatibility
+          timeOut: record.check_out_time, // For backward compatibility
           status: record.status.toLowerCase() as 'present' | 'absent' | 'late',
-          sessions: record.sessions || [] // ADD THIS LINE - Include sessions data
+          sessions: record.sessions || []
         }));
+        
         setEmployees(employeeRecords);
         setIsCheckedIn(response.isCheckedIn || false);
       }

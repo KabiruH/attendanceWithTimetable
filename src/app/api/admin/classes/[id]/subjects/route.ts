@@ -90,7 +90,17 @@ export async function GET(
       },
     });
 
-    return NextResponse.json(assignedSubjects);
+    // ✅ Transform the data to match component expectations
+    const formattedSubjects = assignedSubjects.map(item => ({
+      id: item.id,
+      subject: item.subjects,  // ✅ Rename "subjects" to "subject"
+      term_id: item.term_id,
+      is_active: item.is_active,
+      assigned_at: item.assigned_at.toISOString(),
+      term: item.terms
+    }));
+
+    return NextResponse.json(formattedSubjects);
   } catch (error) {
     console.error('Error fetching assigned subjects:', error);
     return NextResponse.json(
@@ -175,7 +185,17 @@ export async function POST(
       },
     });
 
-    return NextResponse.json(assignment);
+    // ✅ Transform response to match expected format
+    const formattedAssignment = {
+      id: assignment.id,
+      subject: assignment.subjects,
+      term_id: assignment.term_id,
+      is_active: assignment.is_active,
+      assigned_at: assignment.assigned_at.toISOString(),
+      term: assignment.terms
+    };
+
+    return NextResponse.json(formattedAssignment);
   } catch (error) {
     console.error('Error assigning subject:', error);
     return NextResponse.json(

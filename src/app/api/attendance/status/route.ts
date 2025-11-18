@@ -7,7 +7,7 @@ import { ensureCheckouts } from '@/lib/utils/cronUtils';
 
 export async function GET(request: NextRequest) {
   try {
- // First ensure all checkouts are processed
+    // First ensure all checkouts are processed
     await ensureCheckouts();
    
     const cookieStore = await cookies();
@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
         // Admin's personal monthly attendance
         db.attendance.findMany({
           where: {
-        
+            employee_id: userId, // ✅ Admin's own records
             date: {
               gte: new Date(new Date().setMonth(new Date().getMonth() - 1))
             }
@@ -42,7 +42,9 @@ export async function GET(request: NextRequest) {
           include: {
             users: {
               select: {
-                name: true
+                name: true,
+                id_number: true,
+                department: true
               }
             }
           },
@@ -53,17 +55,17 @@ export async function GET(request: NextRequest) {
         // Admin's today's attendance status
         db.attendance.findFirst({
           where: {
-            employee_id: userId,
+            employee_id: userId, // ✅ Admin's own today record
             date: {
               gte: new Date(today),
               lt: new Date(new Date(today).setDate(new Date(today).getDate() + 1))
             }
           }
         }),
-        // All employees' attendance data
+        // ✅ FIX: All employees' attendance data (NO employee_id filter!)
         db.attendance.findMany({
           where: {
-             employee_id: userId,
+            // ❌ REMOVED: employee_id: userId,
             date: {
               gte: new Date(new Date().setDate(new Date().getDate() - 7))
             }
@@ -71,7 +73,10 @@ export async function GET(request: NextRequest) {
           include: {
             users: {
               select: {
-                name: true
+                name: true,
+                id_number: true,
+                department: true,
+                role: true
               }
             }
           },
@@ -100,6 +105,8 @@ export async function GET(request: NextRequest) {
       const absentDays = personalAttendance.filter(record => record.status?.toLowerCase() === 'absent').length;
       const attendanceRate = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
+      console.log(`Admin viewing attendance: ${allAttendance.length} total records from all employees`); // ✅ Debug log
+
       return NextResponse.json({
         role: 'admin',
         isCheckedIn,
@@ -114,6 +121,8 @@ export async function GET(request: NextRequest) {
         attendanceData: allAttendance.map(record => ({
           ...record,
           employee_name: record.users.name,
+          employee_id_number: record.users.id_number,
+          employee_department: record.users.department,
           date: record.date.toISOString(),
           check_in_time: record.check_in_time?.toISOString() || null,
           check_out_time: record.check_out_time?.toISOString() || null
@@ -121,7 +130,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Employee queries
+    // Employee queries (unchanged)
     const [todayRecord, monthlyRecords] = await Promise.all([
       // Today's attendance
       db.attendance.findFirst({

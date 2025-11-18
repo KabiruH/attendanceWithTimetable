@@ -111,7 +111,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { class_ids, term_id } = body; // ✅ NOW REQUIRES term_id
+    const { class_ids, term_id } = body;
 
     if (!Array.isArray(class_ids)) {
       return NextResponse.json({ error: 'class_ids must be an array' }, { status: 400 });
@@ -165,136 +165,210 @@ export async function POST(
       }
     }
 
-    // ✅ NEW: Use transaction to update BOTH tables
+    // ✅ OPTIMIZED: Use transaction with increased timeout and batched operations
     const result = await db.$transaction(async (tx) => {
-      // 1. Deactivate current class assignments
-      await tx.trainerclassassignments.updateMany({
-        where: { trainer_id: trainerUserId, is_active: true },
-        data: { is_active: false }
-      });
-
-      // 2. Deactivate current subject assignments for this term
-      await tx.trainersubjectassignments.updateMany({
-        where: {
-          trainer_id: trainerUserId,
-          term_id: term_id,
-          is_active: true
-        },
-        data: { is_active: false }
-      });
+      // 1. Deactivate ALL existing assignments in parallel
+      await Promise.all([
+        tx.trainerclassassignments.updateMany({
+          where: { trainer_id: trainerUserId, is_active: true },
+          data: { is_active: false }
+        }),
+        tx.trainersubjectassignments.updateMany({
+          where: {
+            trainer_id: trainerUserId,
+            term_id: term_id,
+            is_active: true
+          },
+          data: { is_active: false }
+        })
+      ]);
 
       let classAssignmentsCreated = 0;
       let subjectAssignmentsCreated = 0;
+      let classSubjectsCreated = 0;
 
       if (numericClassIds.length > 0) {
-        // 3. Handle TrainerClassAssignments (existing logic)
-        const existingClassAssignments = await tx.trainerclassassignments.findMany({
-          where: { trainer_id: trainerUserId, class_id: { in: numericClassIds } }
+        // ✅ NEW: Step 2a - Ensure ClassSubjects exist for all classes
+        // Get all active subjects
+        const allSubjects = await tx.subjects.findMany({
+          where: { is_active: true },
+          select: { id: true, name: true }
         });
 
-        const existingClassIds = existingClassAssignments.map(a => a.class_id);
-        const newClassIds = numericClassIds.filter(id => !existingClassIds.includes(id));
+        console.log(`📚 Found ${allSubjects.length} active subjects in system`);
 
-        // Reactivate existing class assignments
-        if (existingClassAssignments.length > 0) {
-          for (const a of existingClassAssignments) {
-            await tx.trainerclassassignments.update({
-              where: { id: a.id },
-              data: { is_active: true, assigned_by: user.name, assigned_at: new Date() }
+        // For each class, ensure all subjects are in ClassSubjects
+        for (const classId of numericClassIds) {
+          // Get existing class subjects for this class and term
+          const existingClassSubjects = await tx.classsubjects.findMany({
+            where: {
+              class_id: classId,
+              term_id: term_id
+            },
+            select: { subject_id: true, id: true }
+          });
+
+          const existingSubjectIds = new Set(existingClassSubjects.map(cs => cs.subject_id));
+          
+          console.log(`  📋 Class ${classId} already has ${existingClassSubjects.length} subjects for term ${term_id}`);
+
+          // Find subjects that need to be added
+          const subjectsToAdd = allSubjects.filter(s => !existingSubjectIds.has(s.id));
+
+          if (subjectsToAdd.length > 0) {
+            console.log(`  ➕ Adding ${subjectsToAdd.length} missing subjects to class ${classId}`);
+            
+            await tx.classsubjects.createMany({
+              data: subjectsToAdd.map(subject => ({
+                class_id: classId,
+                subject_id: subject.id,
+                term_id: term_id,
+                assigned_by: user.name,
+                is_active: true
+              })),
+              skipDuplicates: true
             });
-            classAssignmentsCreated++;
+            
+            classSubjectsCreated += subjectsToAdd.length;
           }
         }
 
-        // Create new class assignments
-        if (newClassIds.length > 0) {
-          const createResult = await tx.trainerclassassignments.createMany({
-            data: newClassIds.map(classId => ({
+        console.log(`✅ Created ${classSubjectsCreated} new class-subject associations`);
+
+        // 2b. Fetch all needed data in parallel (NOW classSubjects should exist)
+        const [existingClassAssignments, classSubjects, existingSubjectAssignments] = await Promise.all([
+          tx.trainerclassassignments.findMany({
+            where: { trainer_id: trainerUserId, class_id: { in: numericClassIds } },
+            select: { id: true, class_id: true }
+          }),
+          tx.classsubjects.findMany({
+            where: { 
+              class_id: { in: numericClassIds },
+              term_id: term_id,
+              is_active: true
+            },
+            select: { id: true, subject_id: true, class_id: true }
+          }),
+          tx.trainersubjectassignments.findMany({
+            where: {
+              trainer_id: trainerUserId,
+              term_id: term_id
+            },
+            select: { id: true, class_subject_id: true }
+          })
+        ]);
+
+        console.log(`📊 Found ${classSubjects.length} class subjects to assign to trainer`);
+
+        // 3. Process class assignments
+        const existingClassMap = new Map(existingClassAssignments.map(a => [a.class_id, a.id]));
+        const classIdsToReactivate: number[] = [];
+        const classesToCreate: any[] = [];
+
+        numericClassIds.forEach(classId => {
+          const existingId = existingClassMap.get(classId);
+          if (existingId) {
+            classIdsToReactivate.push(existingId);
+          } else {
+            classesToCreate.push({
               trainer_id: trainerUserId,
               class_id: classId,
               assigned_by: user.name,
               is_active: true
-            }))
-          });
-          classAssignmentsCreated += createResult.count;
+            });
+          }
+        });
+
+        // 4. Process subject assignments
+        const existingSubjectMap = new Map(
+          existingSubjectAssignments.map(a => [a.class_subject_id, a.id])
+        );
+        const subjectIdsToReactivate: number[] = [];
+        const subjectsToCreate: any[] = [];
+
+        classSubjects.forEach(cs => {
+          const existingId = existingSubjectMap.get(cs.id);
+          if (existingId) {
+            subjectIdsToReactivate.push(existingId);
+          } else {
+            subjectsToCreate.push({
+              trainer_id: trainerUserId,
+              subject_id: cs.subject_id,
+              class_subject_id: cs.id,
+              term_id: term_id,
+              is_active: true
+            });
+          }
+        });
+
+        console.log(`  🔄 Reactivating ${subjectIdsToReactivate.length} existing subject assignments`);
+        console.log(`  ➕ Creating ${subjectsToCreate.length} new subject assignments`);
+
+        // 5. Execute all updates/creates in parallel batches
+        const operations: Promise<any>[] = [];
+
+        // Reactivate class assignments
+        if (classIdsToReactivate.length > 0) {
+          operations.push(
+            tx.trainerclassassignments.updateMany({
+              where: { id: { in: classIdsToReactivate } },
+              data: { is_active: true, assigned_by: user.name, assigned_at: new Date() }
+            })
+          );
+          classAssignmentsCreated += classIdsToReactivate.length;
         }
 
-        // ✅ 4. NEW: Get all subjects for these classes and create TrainerSubjectAssignments
-// 4. NEW: Get all subjects for these classes
-const classSubjects = await tx.classsubjects.findMany({
-  where: {
-    class_id: { in: numericClassIds }
-  },
-  select: {
-    id: true,
-    subject_id: true
-  }
-});
+        // Create new class assignments
+        if (classesToCreate.length > 0) {
+          operations.push(
+            tx.trainerclassassignments.createMany({
+              data: classesToCreate
+            })
+          );
+          classAssignmentsCreated += classesToCreate.length;
+        }
 
+        // Reactivate subject assignments
+        if (subjectIdsToReactivate.length > 0) {
+          operations.push(
+            tx.trainersubjectassignments.updateMany({
+              where: { id: { in: subjectIdsToReactivate } },
+              data: { is_active: true }
+            })
+          );
+          subjectAssignmentsCreated += subjectIdsToReactivate.length;
+        }
 
-// Fetch ALL existing assignments in ONE query
-const existingAssignments = await tx.trainersubjectassignments.findMany({
-  where: {
-    trainer_id: trainerUserId,
-    term_id: term_id,
-    class_subject_id: { in: classSubjects.map(cs => cs.id) }
-  },
-  select: { id: true, class_subject_id: true }
-});
+        // Create new subject assignments
+        if (subjectsToCreate.length > 0) {
+          operations.push(
+            tx.trainersubjectassignments.createMany({
+              data: subjectsToCreate
+            })
+          );
+          subjectAssignmentsCreated += subjectsToCreate.length;
+        }
 
-const existingMap = new Map(
-  existingAssignments.map(a => [a.class_subject_id, a.id])
-);
-
-let toReactivate: number[] = [];
-let toCreate: any[] = [];
-
-for (const cs of classSubjects) {
-  if (existingMap.has(cs.id)) {
-    // Reactivate this assignment
-    toReactivate.push(existingMap.get(cs.id)!);
-  } else {
-    // Create new assignment
-    toCreate.push({
-      trainer_id: trainerUserId,
-      subject_id: cs.subject_id,
-      class_subject_id: cs.id,
-      term_id: term_id,
-      is_active: true
-    });
-  }
-}
-
-// Reactivate ALL existing subject assignments
-if (toReactivate.length > 0) {
-  await tx.trainersubjectassignments.updateMany({
-    where: { id: { in: toReactivate } },
-    data: { is_active: true }
-  });
-}
-
-// Create NEW subject assignments
-if (toCreate.length > 0) {
-  await tx.trainersubjectassignments.createMany({
-    data: toCreate
-  });
-}
-
-subjectAssignmentsCreated = toReactivate.length + toCreate.length;
-       
+        // Execute all operations in parallel
+        await Promise.all(operations);
       }
 
       return {
         classAssignmentsCreated,
         subjectAssignmentsCreated,
+        classSubjectsCreated,
         assigned_classes: numericClassIds.length
       };
+    }, {
+      timeout: 30000,
+      maxWait: 35000
     });
 
     return NextResponse.json({
       message: `Successfully updated assignments. ${result.assigned_classes} classes assigned with ${result.subjectAssignmentsCreated} subjects.`,
       class_assignments: result.classAssignmentsCreated,
       subject_assignments: result.subjectAssignmentsCreated,
+      class_subjects_created: result.classSubjectsCreated,
       total_classes: result.assigned_classes
     });
   } catch (error) {

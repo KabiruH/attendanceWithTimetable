@@ -16,14 +16,24 @@ interface AttendanceSession {
   check_out?: string | null;
 }
 
+// ✅ UPDATED: Interface to match API response
 interface Employee {
-  id: string;
-  name: string;
+  id?: number;                      // Keep for backward compatibility
+  employee_id: number;              // NEW: Actual field from API
+  employee_name?: string;           // NEW: From API
+  name?: string;                    // Keep for backward compatibility
+  users?: {                         // NEW: Nested user data
+    name: string;
+    id_number?: string;
+    department?: string;
+  };
   date: string;
-  timeIn: string | null;
-  timeOut: string | null;
-  status: 'present' | 'absent' | 'late';
-  sessions?: AttendanceSession[]; // Add sessions support
+  check_in_time: string | null;     // NEW: Changed from timeIn
+  check_out_time: string | null;    // NEW: Changed from timeOut
+  timeIn?: string | null;           // Keep for backward compatibility
+  timeOut?: string | null;          // Keep for backward compatibility
+  status: 'present' | 'absent' | 'late' | 'Present' | 'Absent' | 'Late'; // Allow both cases
+  sessions?: AttendanceSession[];   // Sessions support
 }
 
 interface EmployeeTableProps {
@@ -35,11 +45,21 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     return <div>No records to display</div>;
   }
 
-  // Helper function to get 6PM cutoff time for a given date (changed from 5PM to 6PM)
+  // Helper function to get 6PM cutoff time for a given date
   const getSixPMCutoff = (date: Date): Date => {
     const cutoff = new Date(date);
     cutoff.setHours(18, 0, 0, 0); // Set to 6:00 PM
     return cutoff;
+  };
+
+  // ✅ UPDATED: Helper to get check-in time from either format
+  const getCheckInTime = (employee: Employee): string | null => {
+    return employee.check_in_time || employee.timeIn || null;
+  };
+
+  // ✅ UPDATED: Helper to get check-out time from either format
+  const getCheckOutTime = (employee: Employee): string | null => {
+    return employee.check_out_time || employee.timeOut || null;
   };
 
   // Helper function to safely parse sessions from data
@@ -63,10 +83,11 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     }
     
     // Fallback: Convert old format to sessions format
-    if (employee.timeIn) {
+    const timeIn = getCheckInTime(employee);
+    if (timeIn) {
       return [{
-        check_in: employee.timeIn,
-        check_out: employee.timeOut
+        check_in: timeIn,
+        check_out: getCheckOutTime(employee)
       }];
     }
     
@@ -101,15 +122,18 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     const today = new Date().toDateString();
     const isToday = recordDate === today;
     
-    if (!employee.timeIn || employee.timeOut || !isToday) return false;
+    const timeIn = getCheckInTime(employee);
+    const timeOut = getCheckOutTime(employee);
     
-    const checkInTime = new Date(employee.timeIn);
+    if (!timeIn || timeOut || !isToday) return false;
+    
+    const checkInTime = new Date(timeIn);
     const sixPM = getSixPMCutoff(checkInTime);
     
     return currentTime < sixPM;
   };
 
-  // UPDATED: Function to calculate hours worked with 6PM auto-stop
+  // Function to calculate hours worked with 6PM auto-stop
   const calculateHoursWorked = (employee: Employee): string => {
     const currentTime = new Date();
     const sessions = parseSessionsFromData(employee);
@@ -156,22 +180,25 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     }
     
     // Fallback to old format for backward compatibility
-    if (!employee.timeIn) return '-';
+    const timeIn = getCheckInTime(employee);
+    if (!timeIn) return '-';
     
     // Check if it's today's date
     const recordDate = new Date(employee.date).toDateString();
     const today = new Date().toDateString();
     const isToday = recordDate === today;
     
-    const checkIn = new Date(employee.timeIn);
+    const checkIn = new Date(timeIn);
     const sixPM = getSixPMCutoff(checkIn);
     
     let effectiveCheckOut: Date;
     let isOngoing = false;
     
-    if (employee.timeOut) {
+    const timeOut = getCheckOutTime(employee);
+    
+    if (timeOut) {
       // Use the actual check-out time, but cap it at 6PM
-      const actualCheckOut = new Date(employee.timeOut);
+      const actualCheckOut = new Date(timeOut);
       effectiveCheckOut = actualCheckOut > sixPM ? sixPM : actualCheckOut;
     } else if (isToday) {
       // If not checked out yet and it's today
@@ -199,7 +226,7 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     return isOngoing ? `${hours}h ${minutes}m *` : `${hours}h ${minutes}m`;
   };
 
-  // UPDATED: Function to get hours worked styling using sessions
+  // Function to get hours worked styling using sessions
   const getHoursStyle = (employee: Employee): string => {
     // Check if has active session using sessions-aware logic
     if (hasActiveSession(employee)) {
@@ -208,8 +235,9 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
     return 'text-gray-700'; // Completed or no work
   };
 
-  const getStatusColor = (status: Employee['status']) => {
-    switch (status) {
+  const getStatusColor = (status: string) => {
+    const statusLower = status.toLowerCase();
+    switch (statusLower) {
       case 'present':
         return 'bg-green-500 text-white hover:bg-green-600';
       case 'absent':
@@ -261,15 +289,23 @@ const EmployeeTable: React.FC<EmployeeTableProps> = ({ employees }) => {
         </TableHeader>
         <TableBody>
           {employees.map((employee) => (
-            <TableRow key={`${employee.id}-${employee.date}`}>
-              <TableCell className="font-medium">{employee.id}</TableCell>
-              <TableCell>{employee.name}</TableCell>
+            <TableRow key={`${employee.employee_id || employee.id}-${employee.date}`}>
+              <TableCell className="font-medium">
+                {employee.employee_id || employee.id}
+              </TableCell>
+              <TableCell>
+                {employee.employee_name || employee.users?.name || employee.name}
+              </TableCell>
               <TableCell>{formatDate(employee.date)}</TableCell>
-              <TableCell className="text-center">{formatTime(employee.timeIn)}</TableCell>
-              <TableCell className="text-center">{formatTime(employee.timeOut)}</TableCell>
+              <TableCell className="text-center">
+                {formatTime(getCheckInTime(employee))}
+              </TableCell>
+              <TableCell className="text-center">
+                {formatTime(getCheckOutTime(employee))}
+              </TableCell>
               <TableCell className="text-center">
                 <Badge className={`${getStatusColor(employee.status)} px-3 py-1`}>
-                  {employee.status.charAt(0).toUpperCase() + employee.status.slice(1)}
+                  {employee.status.charAt(0).toUpperCase() + employee.status.slice(1).toLowerCase()}
                 </Badge>
               </TableCell>
               <TableCell className="text-center font-mono">

@@ -1,4 +1,4 @@
-// app/api/attendance/report/pdf/route.ts
+// app/api/report/pdf/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 import { db } from '@/lib/db/db';
@@ -21,7 +21,7 @@ interface AttendanceRecord {
   check_out_time: Date | null;
   status: string;
   sessions: any;
-  Employees?: {
+  users?: {
     id: number;
     name: string;
   };
@@ -63,6 +63,11 @@ async function authenticateUser(request: NextRequest): Promise<JwtPayload | null
     console.error('JWT verification failed:', error);
     return null;
   }
+}
+
+// Helper to get employee name
+function getEmployeeName(record: AttendanceRecord): string {
+  return record.users?.name || 'Unknown';
 }
 
 // Calculate hours worked with 6PM cutoff
@@ -125,14 +130,13 @@ function calculateHours(record: AttendanceRecord): number {
   return diffInMinutes / 60;
 }
 
-//format time helper
+// Format time helper
 function adjustToNairobiTime(date: Date | string | null): Date | null {
   if (!date) return null;
   const d = new Date(date);
   d.setHours(d.getHours() + 3);
   return d;
 }
-
 
 // Calculate comprehensive analytics
 function calculateAnalytics(data: AttendanceRecord[]): AnalyticsData {
@@ -141,35 +145,35 @@ function calculateAnalytics(data: AttendanceRecord[]): AnalyticsData {
   // Status distribution - treat "not checked in" as "absent"
   const statusCounts: Record<string, number> = {};
   data.forEach(record => {
-    let status = record.status.toLowerCase();
+    let status = record.status.toLowerCase().trim();
     
     // Treat "not checked in" as "absent" for reporting
-    if (status === 'not checked in') {
+    if (status.includes('not check') || status === 'not checked in') {
       status = 'absent';
     }
     
     statusCounts[status] = (statusCounts[status] || 0) + 1;
   });
 
-// Check-in time distribution (group by hour)
-const checkInTimes: Record<string, number> = {};
-data.forEach(record => {
-  if (record.check_in_time || (record.sessions && record.sessions[0]?.check_in)) {
-    const checkInTime = record.sessions?.[0]?.check_in || record.check_in_time;
-    const date = new Date(checkInTime);
-    let hour = date.getHours();
-    
-    // Adjust for 3-hour time difference (server is 3 hours behind)
-    hour = (hour + 3) % 24; // Add 3 hours and wrap around if > 23
-    
-    const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
-    checkInTimes[timeSlot] = (checkInTimes[timeSlot] || 0) + 1;
-  }
-});
+  // Check-in time distribution (group by hour)
+  const checkInTimes: Record<string, number> = {};
+  data.forEach(record => {
+    if (record.check_in_time || (record.sessions && record.sessions[0]?.check_in)) {
+      const checkInTime = record.sessions?.[0]?.check_in || record.check_in_time;
+      const date = new Date(checkInTime);
+      let hour = date.getHours();
+      
+      // Adjust for 3-hour time difference (server is 3 hours behind)
+      hour = (hour + 3) % 24;
+      
+      const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
+      checkInTimes[timeSlot] = (checkInTimes[timeSlot] || 0) + 1;
+    }
+  });
 
-  // Late arrivals (assuming 8:00 AM is the standard time)
+  // Late arrivals
   const lateCount = data.filter(record => {
-    const status = record.status.toLowerCase();
+    const status = record.status.toLowerCase().trim();
     return status === 'late';
   }).length;
 
@@ -181,37 +185,38 @@ data.forEach(record => {
     ? workHours.reduce((sum, h) => sum + h, 0) / workHours.length 
     : 0;
 
-// Employee-specific stats
-const employeeStats: Record<string, any> = {};
-data.forEach(record => {
-  const empName = record.Employees?.name || 'Unknown';
-  if (!employeeStats[empName]) {
-    employeeStats[empName] = {
-      totalDays: 0,
-      present: 0,
-      late: 0,
-      absent: 0,
-      totalHours: 0,
-    };
-  }
-  employeeStats[empName].totalDays++;
-  
-  let status = record.status.toLowerCase().trim(); // Add trim() to remove extra spaces
-  
-  // More flexible matching for "not checked in" status
-  if (status.includes('not check') || status === 'not checked in') {
-    employeeStats[empName].absent++;
-  } else if (status === 'present') {
-    employeeStats[empName].present++;
-  } else if (status === 'late') {
-    employeeStats[empName].late++;
-  } else {
-    // Catch any other status as absent (fallback)
-    employeeStats[empName].absent++;
-  }
-  
-  employeeStats[empName].totalHours += calculateHours(record);
-});
+  // Employee-specific stats
+  const employeeStats: Record<string, any> = {};
+  data.forEach(record => {
+    const empName = getEmployeeName(record);
+    
+    if (!employeeStats[empName]) {
+      employeeStats[empName] = {
+        totalDays: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        totalHours: 0,
+      };
+    }
+    
+    employeeStats[empName].totalDays++;
+    
+    let status = record.status.toLowerCase().trim();
+    
+    // Flexible matching for status
+    if (status.includes('not check') || status === 'not checked in' || status === 'absent') {
+      employeeStats[empName].absent++;
+    } else if (status === 'present') {
+      employeeStats[empName].present++;
+    } else if (status === 'late') {
+      employeeStats[empName].late++;
+    } else {
+      employeeStats[empName].absent++;
+    }
+    
+    employeeStats[empName].totalHours += calculateHours(record);
+  });
 
   // Calculate percentages
   const statusPercentages: Record<string, string> = {};
@@ -230,7 +235,7 @@ data.forEach(record => {
     checkInTimes,
     peakCheckInTime,
     lateCount,
-    latePercentage: ((lateCount / totalRecords) * 100).toFixed(1),
+    latePercentage: totalRecords > 0 ? ((lateCount / totalRecords) * 100).toFixed(1) : '0.0',
     avgWorkHours: avgWorkHours.toFixed(2),
     employeeStats,
   };
@@ -287,7 +292,7 @@ function generatePDF(
 
   // Title
   doc.setFontSize(20);
-  doc.setTextColor(30, 64, 175); // Blue color
+  doc.setTextColor(30, 64, 175);
   doc.text('Attendance Report', 105, yPosition, { align: 'center' });
   yPosition += 10;
 
@@ -394,7 +399,7 @@ function generatePDF(
   const empData = Object.entries(analytics.employeeStats).map(([name, stats]) => {
     const avgHours = stats.totalDays > 0 ? stats.totalHours / stats.totalDays : 0;
     return [
-      name.substring(0, 25), // Truncate long names
+      name.substring(0, 25),
       stats.totalDays.toString(),
       stats.present.toString(),
       stats.late.toString(),
@@ -430,7 +435,7 @@ function generatePDF(
   yPosition += 8;
 
   const detailData = data.map(record => {
-    const empName = record.Employees?.name || 'Unknown';
+    const empName = getEmployeeName(record);
     const date = formatDate(record.date);
     const checkIn = formatTime(record.check_in_time);
     const checkOut = formatTime(record.check_out_time);
@@ -559,24 +564,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Adjust all times by +3 hours to Nairobi
+    attendanceData = attendanceData.map(r => ({
+      ...r,
+      date: adjustToNairobiTime(r.date)!,
+      check_in_time: adjustToNairobiTime(r.check_in_time),
+      check_out_time: adjustToNairobiTime(r.check_out_time),
+      sessions: Array.isArray(r.sessions)
+        ? r.sessions.map((s: any) => ({
+            ...s,
+            check_in: adjustToNairobiTime(s.check_in),
+            check_out: adjustToNairobiTime(s.check_out),
+          }))
+        : r.sessions,
+    }));
+
     // Calculate analytics
     const analytics = calculateAnalytics(attendanceData);
-
-
-// Adjust all times by +3 hours to Nairobi
-attendanceData = attendanceData.map(r => ({
-  ...r,
-  date: adjustToNairobiTime(r.date)!,
-  check_in_time: adjustToNairobiTime(r.check_in_time),
-  check_out_time: adjustToNairobiTime(r.check_out_time),
-  sessions: Array.isArray(r.sessions)
-    ? r.sessions.map((s: any) => ({
-        ...s,
-        check_in: adjustToNairobiTime(s.check_in),
-        check_out: adjustToNairobiTime(s.check_out),
-      }))
-    : r.sessions,
-}));
 
     // Generate PDF
     const pdfBuffer = generatePDF(
@@ -589,20 +593,19 @@ attendanceData = attendanceData.map(r => ({
     // Return PDF
     const filename = `attendance_report_${new Date().toISOString().split('T')[0]}.pdf`;
     
-  // Convert Node.js Buffer to ArrayBuffer
-const arrayBuffer = pdfBuffer.buffer.slice(
-  pdfBuffer.byteOffset,
-  pdfBuffer.byteOffset + pdfBuffer.byteLength
-) as ArrayBuffer;
+    // Convert Node.js Buffer to ArrayBuffer
+    const arrayBuffer = pdfBuffer.buffer.slice(
+      pdfBuffer.byteOffset,
+      pdfBuffer.byteOffset + pdfBuffer.byteLength
+    ) as ArrayBuffer;
 
-return new NextResponse(arrayBuffer, {
-  headers: {
-    'Content-Type': 'application/pdf',
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Content-Length': pdfBuffer.length.toString(),
-  },
-});
-
+    return new NextResponse(arrayBuffer, {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': pdfBuffer.length.toString(),
+      },
+    });
 
   } catch (error) {
     console.error('PDF generation error:', error);

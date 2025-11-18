@@ -38,6 +38,100 @@ async function verifyAuth() {
   }
 }
 
+// ✅ NEW: GET /api/class-subjects/[id] - Get all subjects for a class
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    const params = await context.params;
+    const classId = parseInt(params.id);
+
+    if (isNaN(classId)) {
+      return NextResponse.json(
+        { error: 'Invalid class ID' },
+        { status: 400 }
+      );
+    }
+
+    // Get query parameters
+    const { searchParams } = new URL(request.url);
+    const termId = searchParams.get('term_id');
+
+    // Build where clause
+    const whereClause: any = {
+      class_id: classId
+    };
+
+    // Add term filter if provided
+    if (termId && termId !== 'undefined' && termId !== 'null') {
+      whereClause.term_id = parseInt(termId);
+    }
+
+    // ✅ Fetch class subjects with the subjects relation included
+    const classSubjects = await db.classsubjects.findMany({
+      where: whereClause,
+      include: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            description: true
+          }
+        },
+        terms: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      },
+      orderBy: [
+        { is_active: 'desc' },
+        { subjects: { name: 'asc' } }
+      ]
+    });
+
+    // Transform to match the expected format
+    const formattedSubjects = classSubjects.map(cs => ({
+      id: cs.id,
+      subject: cs.subjects,
+      term_id: cs.term_id,
+      is_active: cs.is_active,
+      assigned_at: cs.assigned_at.toISOString(),
+      term: cs.terms
+    }));
+
+    return NextResponse.json({
+      success: true,
+      data: formattedSubjects,
+      count: formattedSubjects.length
+    });
+
+  } catch (error) {
+    console.error('Error fetching class subjects:', error);
+    return NextResponse.json(
+      { 
+        error: 'Failed to fetch class subjects',
+        details: error instanceof Error ? error.message : String(error)
+      },
+      { status: 500 }
+    );
+  }
+}
+
 // DELETE /api/class-subjects/[id] - Remove subject from class
 export async function DELETE(
   request: NextRequest,
@@ -100,6 +194,7 @@ export async function DELETE(
     return NextResponse.json({ 
       message: 'Subject removed successfully from class' 
     });
+
   } catch (error) {
     console.error('Error removing subject:', error);
     return NextResponse.json(

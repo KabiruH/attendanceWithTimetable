@@ -495,7 +495,7 @@ export async function GET(request: NextRequest) {
         user = payload as unknown as JwtPayload;
         authMethod = 'jwt';
       } catch (error) {
-
+        console.error('JWT verification failed:', error);
       }
     }
 
@@ -513,10 +513,9 @@ export async function GET(request: NextRequest) {
             name: mobileAuth.payload.name || ''
           };
           authMethod = 'mobile_jwt';
-     
         }
       } catch (error) {
-
+        console.error('Mobile JWT verification failed:', error);
       }
     }
 
@@ -536,11 +535,22 @@ export async function GET(request: NextRequest) {
     if (user.role === 'admin') {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      
+      // ✅ FIX: Fetch ALL attendance records for admin, not filtered by employee_id
       const attendanceData = await db.attendance.findMany({
-        where: { date: { gte: sevenDaysAgo } },
+        where: { 
+          date: { gte: sevenDaysAgo } 
+          // ❌ DON'T filter by employee_id here for admin
+        },
         include: {
           users: {
-            select: { id: true, name: true },
+            select: { 
+              id: true, 
+              name: true,
+              id_number: true,
+              department: true,
+              role: true
+            },
           },
         },
         orderBy: [
@@ -548,6 +558,8 @@ export async function GET(request: NextRequest) {
           { users: { name: 'asc' } },
         ],
       });
+
+      console.log(`Admin fetched ${attendanceData.length} attendance records`);
 
       return NextResponse.json({
         success: true,
@@ -560,10 +572,12 @@ export async function GET(request: NextRequest) {
     // Employee role - get their attendance data
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    // ✅ For employees, filter by their employee_id (which is users.id)
     const monthlyData = await db.attendance.findMany({
       where: {
-    employee_id: user.employee_id,      
-   date: { gte: thirtyDaysAgo },
+        employee_id: user.employee_id, // This should match users.id
+        date: { gte: thirtyDaysAgo },
       },
       orderBy: { date: 'desc' },
     });
@@ -583,7 +597,7 @@ export async function GET(request: NextRequest) {
       role: 'employee',
       isCheckedIn,
       attendanceData: monthlyData,
-      authMethod, // Include auth method for debugging
+      authMethod,
     });
   } catch (error) {
     console.error('Status check error:', error);

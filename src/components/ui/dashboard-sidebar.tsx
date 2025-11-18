@@ -174,14 +174,14 @@ export function DashboardSidebar() {
       href: '/departments'
     },
      {
-      label: 'Classes',
-      icon: <GraduationCap size={18} />,
-      href: '/classes'
-    },
-    {
       label: 'Subjects',
       icon: <BookOpen size={18} />,
       href: '/subjects'
+    },
+     {
+      label: 'Classes',
+      icon: <GraduationCap size={18} />,
+      href: '/classes'
     },
     {
       label: 'Terms',

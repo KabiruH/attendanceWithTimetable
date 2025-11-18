@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Clock, Building, Calendar, CheckCircle, XCircle, Trash2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Clock, Building, Calendar, CheckCircle, XCircle, Trash2, BookOpen, ChevronDown, ChevronUp } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,6 +15,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+
+interface Subject {
+  id: number;
+  name: string;
+  code: string;
+  credit_hours?: number | null;
+  is_assigned: boolean;
+  class_subject_id: number;
+}
 
 interface ClassAssignment {
   id: number;
@@ -27,6 +42,7 @@ interface ClassAssignment {
     department: string;
     duration_hours: number;
   };
+  subjects: Subject[];
   lastAttendance?: {
     date: string;
     check_in_time: string;
@@ -37,26 +53,70 @@ interface ClassAssignment {
 
 interface MyClassesProps {
   userId: number;
+  termId?: number; // ✅ Make optional since we'll fetch it if not provided
   showRemoveOption?: boolean;
   onClassRemoved?: () => void;
 }
 
-export default function MyClasses({ userId, showRemoveOption = true, onClassRemoved }: MyClassesProps) {
+export default function MyClasses({ userId, termId: propTermId, showRemoveOption = true, onClassRemoved }: MyClassesProps) {
   const [assignments, setAssignments] = useState<ClassAssignment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [removingClassId, setRemovingClassId] = useState<number | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [expandedClasses, setExpandedClasses] = useState<Set<number>>(new Set());
+  const [updatingSubjects, setUpdatingSubjects] = useState<Set<number>>(new Set());
+  const [termId, setTermId] = useState<number | null>(propTermId || null); // ✅ Local state for termId
 
+  // ✅ Fetch active term if not provided
   useEffect(() => {
-    fetchMyClasses();
-  }, [userId]);
+    const fetchActiveTerm = async () => {
+      if (propTermId) {
+        setTermId(propTermId);
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/terms?is_active=true');
+        if (!response.ok) throw new Error('Failed to fetch active term');
+        
+        const data = await response.json();
+        const activeTerm = data.data?.[0];
+        
+        if (activeTerm) {
+          setTermId(activeTerm.id);
+        } else {
+          setError('No active term found. Please contact administrator.');
+        }
+      } catch (error) {
+        console.error('Error fetching active term:', error);
+        setError('Failed to load active term');
+      }
+    };
+
+    fetchActiveTerm();
+  }, [propTermId]);
+
+  // ✅ Only fetch classes when we have both userId and termId
+  useEffect(() => {
+    if (userId && termId) {
+      fetchMyClasses();
+    }
+  }, [userId, termId]);
 
   const fetchMyClasses = async () => {
+    if (!termId) return; // ✅ Guard against undefined termId
+
     try {
       setIsLoading(true);
-      const response = await fetch(`/api/trainers/${userId}/my-classes`);
-      if (!response.ok) throw new Error('Failed to fetch assigned classes');
+      setError(''); // Clear previous errors
+      const response = await fetch(`/api/trainers/${userId}/my-classes?term_id=${termId}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch assigned classes');
+      }
+      
       const data = await response.json();
       setAssignments(data);
     } catch (error) {
@@ -84,8 +144,6 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
       }
 
       await fetchMyClasses();
-      
-      // Notify parent component that a class was removed
       onClassRemoved?.();
       
     } catch (error) {
@@ -93,6 +151,63 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
     } finally {
       setIsRemoving(false);
       setRemovingClassId(null);
+    }
+  };
+
+  const toggleClassExpansion = (classId: number) => {
+    const newExpanded = new Set(expandedClasses);
+    if (newExpanded.has(classId)) {
+      newExpanded.delete(classId);
+    } else {
+      newExpanded.add(classId);
+    }
+    setExpandedClasses(newExpanded);
+  };
+
+  const handleSubjectToggle = async (classId: number, subjectId: number, classSubjectId: number, currentState: boolean) => {
+    if (!termId) return; // ✅ Guard against undefined termId
+
+    setUpdatingSubjects(prev => new Set(prev).add(classId));
+
+    try {
+      const response = await fetch(`/api/trainers/${userId}/subject-assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          term_id: termId,
+          class_subject_id: classSubjectId,
+          subject_id: subjectId,
+          is_active: !currentState
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update subject assignment');
+      }
+
+      // Update local state
+      setAssignments(prev => prev.map(assignment => {
+        if (assignment.class_id === classId) {
+          return {
+            ...assignment,
+            subjects: assignment.subjects.map(subject => 
+              subject.id === subjectId 
+                ? { ...subject, is_assigned: !currentState }
+                : subject
+            )
+          };
+        }
+        return assignment;
+      }));
+
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to update subject');
+    } finally {
+      setUpdatingSubjects(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(classId);
+        return newSet;
+      });
     }
   };
 
@@ -112,7 +227,8 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
     });
   };
 
-  if (isLoading) {
+  // ✅ Show loading while fetching term or classes
+  if (isLoading || !termId) {
     return (
       <div className="flex justify-center items-center py-10">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -126,7 +242,7 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
         <div>
           <h2 className="text-xl font-semibold">My Classes</h2>
           <p className="text-muted-foreground">
-            Classes you're currently assigned to teach
+            Classes and subjects you're currently assigned to teach
           </p>
         </div>
         <Badge variant="outline" className="text-sm">
@@ -154,81 +270,162 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {assignments.map((assignment) => (
-            <Card key={assignment.id} className="relative">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge variant="outline" className="text-xs">
-                        {assignment.class.code}
-                      </Badge>
-                      {assignment.lastAttendance && (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      )}
-                    </div>
-                    <CardTitle className="text-base">{assignment.class.name}</CardTitle>
-                  </div>
-                  {showRemoveOption && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRemoveClass(assignment.class_id)}
-                      className="text-red-500 hover:text-red-700 h-8 w-8 p-0"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-                {assignment.class.description && (
-                  <CardDescription className="text-sm">
-                    {assignment.class.description}
-                  </CardDescription>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Building className="h-4 w-4" />
-                    {assignment.class.department}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Clock className="h-4 w-4" />
-                    {assignment.class.duration_hours}h
-                  </div>
-                </div>
+        <div className="grid gap-4">
+          {assignments.map((assignment) => {
+            const isExpanded = expandedClasses.has(assignment.class_id);
+            const assignedSubjectsCount = assignment.subjects.filter(s => s.is_assigned).length;
+            const totalSubjectsCount = assignment.subjects.length;
 
-                <div className="pt-2 border-t border-gray-100">
-                  <div className="text-xs text-muted-foreground mb-2">
-                    Assigned: {formatDate(assignment.assigned_at)}
+            return (
+              <Card key={assignment.id} className="relative">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant="outline" className="text-xs">
+                          {assignment.class.code}
+                        </Badge>
+                        {assignment.lastAttendance && (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        )}
+                        <Badge variant="secondary" className="text-xs">
+                          {assignedSubjectsCount}/{totalSubjectsCount} subjects
+                        </Badge>
+                      </div>
+                      <CardTitle className="text-base">{assignment.class.name}</CardTitle>
+                    </div>
+                    {showRemoveOption && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveClass(assignment.class_id)}
+                        className="text-red-500 hover:text-red-700 h-8 w-8 p-0"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
-                  
-                  {assignment.lastAttendance ? (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-1 text-sm text-green-600">
-                        <CheckCircle className="h-3 w-3" />
-                        Last attended
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatDate(assignment.lastAttendance.date)} at {formatTime(assignment.lastAttendance.check_in_time)}
-                      </div>
-                      {assignment.totalSessions && (
-                        <div className="text-xs text-muted-foreground">
-                          Total sessions: {assignment.totalSessions}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 text-sm text-amber-600">
-                      <XCircle className="h-3 w-3" />
-                      No attendance yet
-                    </div>
+                  {assignment.class.description && (
+                    <CardDescription className="text-sm">
+                      {assignment.class.description}
+                    </CardDescription>
                   )}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardHeader>
+                
+                <CardContent className="space-y-3">
+                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Building className="h-4 w-4" />
+                      {assignment.class.department}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Clock className="h-4 w-4" />
+                      {assignment.class.duration_hours}h
+                    </div>
+                  </div>
+
+                  {/* Subjects Section */}
+                  {assignment.subjects.length > 0 && (
+                    <Collapsible 
+                      open={isExpanded}
+                      onOpenChange={() => toggleClassExpansion(assignment.class_id)}
+                    >
+                      <CollapsibleTrigger asChild>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="w-full justify-between"
+                        >
+                          <div className="flex items-center gap-2">
+                            <BookOpen className="h-4 w-4" />
+                            <span>Subjects ({assignedSubjectsCount}/{totalSubjectsCount})</span>
+                          </div>
+                          {isExpanded ? (
+                            <ChevronUp className="h-4 w-4" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </CollapsibleTrigger>
+                      
+                      <CollapsibleContent className="mt-3 space-y-2 p-3 bg-gray-50 rounded-md">
+                        {updatingSubjects.has(assignment.class_id) && (
+                          <div className="text-xs text-blue-600 mb-2">Updating subjects...</div>
+                        )}
+                        {assignment.subjects.map((subject) => (
+                          <div 
+                            key={subject.id}
+                            className="flex items-start space-x-3 p-2 hover:bg-white rounded transition-colors"
+                          >
+                            <Checkbox
+                              id={`subject-${assignment.class_id}-${subject.id}`}
+                              checked={subject.is_assigned}
+                              onCheckedChange={() => 
+                                handleSubjectToggle(
+                                  assignment.class_id, 
+                                  subject.id,
+                                  subject.class_subject_id,
+                                  subject.is_assigned
+                                )
+                              }
+                              disabled={updatingSubjects.has(assignment.class_id)}
+                            />
+                            <label
+                              htmlFor={`subject-${assignment.class_id}-${subject.id}`}
+                              className="flex-1 cursor-pointer"
+                            >
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="font-medium text-sm">{subject.name}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {subject.code}
+                                    {subject.credit_hours && ` • ${subject.credit_hours}h`}
+                                  </div>
+                                </div>
+                                {!subject.is_assigned && (
+                                  <Badge variant="outline" className="text-xs">
+                                    Not teaching
+                                  </Badge>
+                                )}
+                              </div>
+                            </label>
+                          </div>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+
+                  <div className="pt-2 border-t border-gray-100">
+                    <div className="text-xs text-muted-foreground mb-2">
+                      Assigned: {formatDate(assignment.assigned_at)}
+                    </div>
+                    
+                    {assignment.lastAttendance ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1 text-sm text-green-600">
+                          <CheckCircle className="h-3 w-3" />
+                          Last attended
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatDate(assignment.lastAttendance.date)} at {formatTime(assignment.lastAttendance.check_in_time)}
+                        </div>
+                        {assignment.totalSessions && (
+                          <div className="text-xs text-muted-foreground">
+                            Total sessions: {assignment.totalSessions}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-sm text-amber-600">
+                        <XCircle className="h-3 w-3" />
+                        No attendance yet
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -241,7 +438,7 @@ export default function MyClasses({ userId, showRemoveOption = true, onClassRemo
           <AlertDialogHeader>
             <AlertDialogTitle>Remove Class Assignment</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to remove yourself from this class? You will no longer be able to check attendance for this class unless you reassign yourself.
+              Are you sure you want to remove yourself from this class? This will also remove all associated subject assignments. You will no longer be able to check attendance for this class unless you reassign yourself.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
