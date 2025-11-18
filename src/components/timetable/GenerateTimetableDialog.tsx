@@ -18,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Zap, Upload, Loader2, AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { Zap, Upload, Loader2, AlertTriangle, CheckCircle2, Info, BookOpen } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -43,12 +43,16 @@ interface GenerateTimetableDialogProps {
   terms: Term[];
 }
 
-interface ClassWithoutTrainer {
+interface SubjectWithoutTrainer {
   id: number;
-  code: string;
-  name: string;
+  subject_id: number;
+  subject_code: string;
+  subject_name: string;
+  class_id: number;
+  class_code: string;
+  class_name: string;
   department: string;
-  duration_hours: number;
+  credit_hours?: number | null;
 }
 
 interface PreFlightCheckResult {
@@ -60,12 +64,26 @@ interface PreFlightCheckResult {
   };
   classes: {
     total: number;
+    list: Array<{
+      id: number;
+      name: string;
+      code: string;
+      department: string;
+    }>;
+  };
+  subjects: {
+    total: number;
     with_trainer: number;
     without_trainer: number;
-    details_without_trainer: ClassWithoutTrainer[];
+    details_without_trainer: SubjectWithoutTrainer[];
   };
   trainers: {
     total: number;
+    list: Array<{
+      id: number;
+      name: string;
+      subjects_count: number;
+    }>;
   };
   rooms: {
     active: number;
@@ -109,7 +127,7 @@ export default function GenerateTimetableDialog({
   const [isGenerating, setIsGenerating] = useState(false);
 
   // Collapsible states for error details
-  const [showClassesWithoutTrainer, setShowClassesWithoutTrainer] = useState(false);
+  const [showSubjectsWithoutTrainer, setShowSubjectsWithoutTrainer] = useState(false);
 
   const handleTermChange = (termId: string) => {
     setSelectedTerm(termId);
@@ -117,7 +135,7 @@ export default function GenerateTimetableDialog({
     setShowPreFlight(false);
     setError('');
     setSuccess('');
-    setShowClassesWithoutTrainer(false);
+    setShowSubjectsWithoutTrainer(false);
   };
 
   const runPreFlightChecks = async () => {
@@ -182,7 +200,7 @@ export default function GenerateTimetableDialog({
       }
 
       setSuccess(
-        `Successfully generated timetable! Created ${data.stats.slots_created} slots for ${data.stats.classes_scheduled} classes.`
+        `Successfully generated timetable! Created ${data.stats.slots_created} slots for ${data.stats.subjects_scheduled} subjects.`
       );
       
       setTimeout(() => {
@@ -211,7 +229,7 @@ export default function GenerateTimetableDialog({
     setSuccess('');
     setPreFlightResults(null);
     setShowPreFlight(false);
-    setShowClassesWithoutTrainer(false);
+    setShowSubjectsWithoutTrainer(false);
   };
 
   const canGenerate = preFlightResults?.passed && !isGenerating;
@@ -222,7 +240,7 @@ export default function GenerateTimetableDialog({
         <DialogHeader>
           <DialogTitle>Generate Timetable</DialogTitle>
           <DialogDescription>
-            Automatically create timetable slots or add them manually.
+            Automatically create subject schedules or add them manually.
           </DialogDescription>
         </DialogHeader>
 
@@ -288,12 +306,12 @@ export default function GenerateTimetableDialog({
                     className="w-full"
                   />
                   <p className="text-xs text-gray-500">
-                    How many times each class meets per week (1-5)
+                    How many times each subject meets per week (1-5)
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="minClassesPerDay">Minimum Classes per Trainer/Day</Label>
+                  <Label htmlFor="minClassesPerDay">Minimum Subjects per Trainer/Day</Label>
                   <Input
                     id="minClassesPerDay"
                     type="number"
@@ -304,7 +322,7 @@ export default function GenerateTimetableDialog({
                     className="w-full"
                   />
                   <p className="text-xs text-gray-500">
-                    Minimum number of classes a trainer should teach per day (Mon-Fri)
+                    Minimum number of subjects a trainer should teach per day (Mon-Fri)
                   </p>
                 </div>
               </div>
@@ -325,7 +343,7 @@ export default function GenerateTimetableDialog({
                   ) : (
                     <>
                       <CheckCircle2 className="mr-2 h-4 w-4" />
-                      Run Tests
+                      Run Pre-Flight Tests
                     </>
                   )}
                 </Button>
@@ -337,9 +355,9 @@ export default function GenerateTimetableDialog({
                   <div className="flex items-center justify-between">
                     <h3 className="font-semibold text-sm">Pre-Flight Check Results</h3>
                     {preFlightResults.passed ? (
-                      <Badge className="bg-green-500">Ready to Generate</Badge>
+                      <Badge className="bg-green-500">✓ Ready to Generate</Badge>
                     ) : (
-                      <Badge variant="destructive">Cannot Generate</Badge>
+                      <Badge variant="destructive">✗ Cannot Generate</Badge>
                     )}
                   </div>
 
@@ -349,11 +367,18 @@ export default function GenerateTimetableDialog({
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <p className="text-gray-500">Classes</p>
+                      <p className="font-semibold">{preFlightResults.classes.total} in term</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-500 flex items-center gap-1">
+                        <BookOpen className="h-3 w-3" />
+                        Subjects
+                      </p>
                       <p className="font-semibold">
-                        {preFlightResults.classes.total} total
-                        {preFlightResults.classes.without_trainer > 0 && (
+                        {preFlightResults.subjects.total} total
+                        {preFlightResults.subjects.without_trainer > 0 && (
                           <span className="text-red-600 ml-1">
-                            ({preFlightResults.classes.without_trainer} no trainer)
+                            ({preFlightResults.subjects.without_trainer} no trainer)
                           </span>
                         )}
                       </p>
@@ -366,7 +391,7 @@ export default function GenerateTimetableDialog({
                       <p className="text-gray-500">Rooms</p>
                       <p className="font-semibold">{preFlightResults.rooms.active} available</p>
                     </div>
-                    <div>
+                    <div className="col-span-2">
                       <p className="text-gray-500">Lesson Periods</p>
                       <p className="font-semibold">{preFlightResults.lesson_periods.active}</p>
                     </div>
@@ -406,12 +431,12 @@ export default function GenerateTimetableDialog({
                           ))}
                         </ul>
 
-                        {/* Expandable Classes Without Trainer */}
-                        {preFlightResults.classes.without_trainer > 0 && 
-                         preFlightResults.classes.details_without_trainer.length > 0 && (
+                        {/* Expandable Subjects Without Trainer */}
+                        {preFlightResults.subjects.without_trainer > 0 && 
+                         preFlightResults.subjects.details_without_trainer.length > 0 && (
                           <Collapsible
-                            open={showClassesWithoutTrainer}
-                            onOpenChange={setShowClassesWithoutTrainer}
+                            open={showSubjectsWithoutTrainer}
+                            onOpenChange={setShowSubjectsWithoutTrainer}
                             className="mt-3"
                           >
                             <CollapsibleTrigger asChild>
@@ -420,8 +445,11 @@ export default function GenerateTimetableDialog({
                                 size="sm"
                                 className="w-full justify-between text-xs"
                               >
-                                <span>View Classes Without Trainer</span>
-                                {showClassesWithoutTrainer ? (
+                                <span className="flex items-center gap-1">
+                                  <BookOpen className="h-3 w-3" />
+                                  View Subjects Without Trainer
+                                </span>
+                                {showSubjectsWithoutTrainer ? (
                                   <ChevronUp className="h-3 w-3" />
                                 ) : (
                                   <ChevronDown className="h-3 w-3" />
@@ -433,19 +461,29 @@ export default function GenerateTimetableDialog({
                                 <table className="w-full text-xs">
                                   <thead className="bg-gray-50 sticky top-0">
                                     <tr>
-                                      <th className="px-2 py-1 text-left font-semibold">Code</th>
-                                      <th className="px-2 py-1 text-left font-semibold">Name</th>
-                                      <th className="px-2 py-1 text-left font-semibold">Department</th>
+                                      <th className="px-2 py-1 text-left font-semibold">Subject</th>
+                                      <th className="px-2 py-1 text-left font-semibold">Class</th>
+                                      <th className="px-2 py-1 text-left font-semibold">Dept</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y">
-                                    {preFlightResults.classes.details_without_trainer.map((cls) => (
-                                      <tr key={cls.id} className="hover:bg-gray-50">
-                                        <td className="px-2 py-1 font-mono">{cls.code}</td>
-                                        <td className="px-2 py-1">{cls.name}</td>
+                                    {preFlightResults.subjects.details_without_trainer.map((subj) => (
+                                      <tr key={subj.id} className="hover:bg-gray-50">
+                                        <td className="px-2 py-1">
+                                          <div className="flex flex-col">
+                                            <span className="font-mono font-semibold">{subj.subject_code}</span>
+                                            <span className="text-gray-600">{subj.subject_name}</span>
+                                          </div>
+                                        </td>
+                                        <td className="px-2 py-1">
+                                          <div className="flex flex-col">
+                                            <span className="font-mono">{subj.class_code}</span>
+                                            <span className="text-gray-600">{subj.class_name}</span>
+                                          </div>
+                                        </td>
                                         <td className="px-2 py-1">
                                           <Badge variant="outline" className="text-xs">
-                                            {cls.department}
+                                            {subj.department}
                                           </Badge>
                                         </td>
                                       </tr>
@@ -454,7 +492,7 @@ export default function GenerateTimetableDialog({
                                 </table>
                               </div>
                               <p className="text-xs text-gray-600 italic">
-                                💡 Assign trainers to these classes before generating the timetable.
+                                💡 Assign trainers to these subjects before generating the timetable.
                               </p>
                             </CollapsibleContent>
                           </Collapsible>

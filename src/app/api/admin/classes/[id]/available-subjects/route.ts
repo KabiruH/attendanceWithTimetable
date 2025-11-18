@@ -77,7 +77,7 @@ export async function GET(
     const availableSubjects = await db.subjects.findMany({
       where: {
         is_active: true,
-        classSubjects: {
+        classsubjects: {
           none: {
             class_id: classId,
           },

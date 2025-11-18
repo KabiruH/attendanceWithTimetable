@@ -157,6 +157,7 @@ export function DashboardSidebar() {
       href: '/profile',
       type: 'link'
     },
+   
     {
       label: 'Logout',
       icon: <LogOut size={20} />,
@@ -201,7 +202,7 @@ export function DashboardSidebar() {
       label: 'Timetable',
       icon: <CalendarDays size={18} />,
       href: '/timetable'
-    },
+    }, 
     {
       label: 'Employees',
       icon: <Users size={18} />,
@@ -211,7 +212,8 @@ export function DashboardSidebar() {
       label: 'Login Logs',
       icon: <Shield size={18} />,
       href: '/login-logs'
-    }
+    },
+ 
   ];
 
   if (!currentUser) {

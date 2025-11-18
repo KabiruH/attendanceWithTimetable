@@ -23,7 +23,6 @@ async function verifyAuth() {
     const role = payload.role as string;
     const name = payload.name as string;
 
-    // Verify user is still active
     const user = await db.users.findUnique({
       where: { id: userId },
       select: { id: true, name: true, role: true, department: true, is_active: true }
@@ -39,7 +38,7 @@ async function verifyAuth() {
   }
 }
 
-// GET /api/trainers/[id]/assignments - Fetch trainer's current class assignments
+// GET /api/trainers/[id]/assignments
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -62,7 +61,6 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
     }
 
-    // Check authorization
     if (user.role !== 'admin' && user.id !== trainerUserId) {
       return NextResponse.json(
         { error: 'Unauthorized. You can only view your own assignments.' },
@@ -70,8 +68,7 @@ export async function GET(
       );
     }
 
-    // Fetch active assignments using user.id directly (no need for employee_id mapping)
-    const assignments = await db.trainerClassAssignments.findMany({
+    const assignments = await db.trainerclassassignments.findMany({
       where: { trainer_id: trainerUserId, is_active: true },
       select: { id: true, class_id: true, assigned_at: true }
     });
@@ -83,7 +80,7 @@ export async function GET(
   }
 }
 
-// POST /api/trainers/[id]/assignments - Save/update trainer's class assignments
+// POST /api/trainers/[id]/assignments
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -106,7 +103,6 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
     }
 
-    // Check authorization
     if (user.role !== 'admin' && user.id !== trainerUserId) {
       return NextResponse.json(
         { error: 'Unauthorized. You can only update your own assignments.' },
@@ -115,20 +111,22 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { class_ids } = body;
+    const { class_ids, term_id } = body; // ✅ NOW REQUIRES term_id
 
     if (!Array.isArray(class_ids)) {
       return NextResponse.json({ error: 'class_ids must be an array' }, { status: 400 });
     }
 
-    // Ensure all class_ids are numbers
+    if (!term_id) {
+      return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
+    }
+
     const numericClassIds = class_ids.map(id => {
       const numId = Number(id);
       if (isNaN(numId)) throw new Error(`Invalid class ID: ${id}`);
       return numId;
     });
 
-    // Verify trainer exists as a user
     const trainerUser = await db.users.findUnique({ where: { id: trainerUserId } });
     if (!trainerUser || !trainerUser.is_active) {
       return NextResponse.json({ error: 'Trainer not found or inactive' }, { status: 404 });
@@ -139,6 +137,15 @@ export async function POST(
         { error: 'Only employees can be assigned to classes' },
         { status: 400 }
       );
+    }
+
+    // Verify term exists
+    const term = await db.terms.findUnique({
+      where: { id: term_id }
+    });
+
+    if (!term) {
+      return NextResponse.json({ error: 'Term not found' }, { status: 404 });
     }
 
     // Verify all class IDs exist and are active
@@ -158,58 +165,138 @@ export async function POST(
       }
     }
 
-    // Use transaction - now using user.id directly (no employee_id mapping needed)
+    // ✅ NEW: Use transaction to update BOTH tables
     const result = await db.$transaction(async (tx) => {
-      // Deactivate current assignments
-      const deactivatedResult = await tx.trainerClassAssignments.updateMany({
+      // 1. Deactivate current class assignments
+      await tx.trainerclassassignments.updateMany({
         where: { trainer_id: trainerUserId, is_active: true },
         data: { is_active: false }
       });
 
-      let createdCount = 0;
+      // 2. Deactivate current subject assignments for this term
+      await tx.trainersubjectassignments.updateMany({
+        where: {
+          trainer_id: trainerUserId,
+          term_id: term_id,
+          is_active: true
+        },
+        data: { is_active: false }
+      });
 
-      // Reactivate or create new
+      let classAssignmentsCreated = 0;
+      let subjectAssignmentsCreated = 0;
+
       if (numericClassIds.length > 0) {
-        const existingAssignments = await tx.trainerClassAssignments.findMany({
+        // 3. Handle TrainerClassAssignments (existing logic)
+        const existingClassAssignments = await tx.trainerclassassignments.findMany({
           where: { trainer_id: trainerUserId, class_id: { in: numericClassIds } }
         });
 
-        const existingClassIds = existingAssignments.map(a => a.class_id);
+        const existingClassIds = existingClassAssignments.map(a => a.class_id);
         const newClassIds = numericClassIds.filter(id => !existingClassIds.includes(id));
 
-        // Reactivate existing
-        if (existingAssignments.length > 0) {
-          await Promise.all(
-            existingAssignments.map(a =>
-              tx.trainerClassAssignments.update({
-                where: { id: a.id },
-                data: { is_active: true, assigned_by: user.name, assigned_at: new Date() }
-              })
-            )
-          );
-          createdCount += existingAssignments.length;
+        // Reactivate existing class assignments
+        if (existingClassAssignments.length > 0) {
+          for (const a of existingClassAssignments) {
+            await tx.trainerclassassignments.update({
+              where: { id: a.id },
+              data: { is_active: true, assigned_by: user.name, assigned_at: new Date() }
+            });
+            classAssignmentsCreated++;
+          }
         }
 
-        // Create new
+        // Create new class assignments
         if (newClassIds.length > 0) {
-          const createResult = await tx.trainerClassAssignments.createMany({
+          const createResult = await tx.trainerclassassignments.createMany({
             data: newClassIds.map(classId => ({
-              trainer_id: trainerUserId, // Using user.id directly
+              trainer_id: trainerUserId,
               class_id: classId,
               assigned_by: user.name,
               is_active: true
             }))
           });
-          createdCount += createResult.count;
+          classAssignmentsCreated += createResult.count;
         }
+
+        // ✅ 4. NEW: Get all subjects for these classes and create TrainerSubjectAssignments
+// 4. NEW: Get all subjects for these classes
+const classSubjects = await tx.classsubjects.findMany({
+  where: {
+    class_id: { in: numericClassIds }
+  },
+  select: {
+    id: true,
+    subject_id: true
+  }
+});
+
+console.log(`Found ${classSubjects.length} subjects across ${numericClassIds.length} classes`);
+
+// Fetch ALL existing assignments in ONE query
+const existingAssignments = await tx.trainersubjectassignments.findMany({
+  where: {
+    trainer_id: trainerUserId,
+    term_id: term_id,
+    class_subject_id: { in: classSubjects.map(cs => cs.id) }
+  },
+  select: { id: true, class_subject_id: true }
+});
+
+const existingMap = new Map(
+  existingAssignments.map(a => [a.class_subject_id, a.id])
+);
+
+let toReactivate: number[] = [];
+let toCreate: any[] = [];
+
+for (const cs of classSubjects) {
+  if (existingMap.has(cs.id)) {
+    // Reactivate this assignment
+    toReactivate.push(existingMap.get(cs.id)!);
+  } else {
+    // Create new assignment
+    toCreate.push({
+      trainer_id: trainerUserId,
+      subject_id: cs.subject_id,
+      class_subject_id: cs.id,
+      term_id: term_id,
+      is_active: true
+    });
+  }
+}
+
+// Reactivate ALL existing subject assignments
+if (toReactivate.length > 0) {
+  await tx.trainersubjectassignments.updateMany({
+    where: { id: { in: toReactivate } },
+    data: { is_active: true }
+  });
+}
+
+// Create NEW subject assignments
+if (toCreate.length > 0) {
+  await tx.trainersubjectassignments.createMany({
+    data: toCreate
+  });
+}
+
+subjectAssignmentsCreated = toReactivate.length + toCreate.length;
+       
       }
 
-      return { deactivated: deactivatedResult.count, created: createdCount, assigned_classes: numericClassIds.length };
+      return {
+        classAssignmentsCreated,
+        subjectAssignmentsCreated,
+        assigned_classes: numericClassIds.length
+      };
     });
 
     return NextResponse.json({
-      message: `Successfully updated assignments. ${result.assigned_classes} classes assigned.`,
-      ...result
+      message: `Successfully updated assignments. ${result.assigned_classes} classes assigned with ${result.subjectAssignmentsCreated} subjects.`,
+      class_assignments: result.classAssignmentsCreated,
+      subject_assignments: result.subjectAssignmentsCreated,
+      total_classes: result.assigned_classes
     });
   } catch (error) {
     console.error('Error updating trainer assignments:', error);

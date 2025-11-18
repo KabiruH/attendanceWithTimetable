@@ -20,7 +20,7 @@ async function verifyAuth() {
         );
 
         const userId = Number(payload.id);
-        
+
         // ✅ Add validation for userId
         if (!userId || isNaN(userId)) {
             console.error('Invalid user ID in token:', payload.id);
@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
                             .map((e: string) => e.trim())
                             .filter((e: string) => e.length > 0);
                     }
-                    
+
                     // Only set equipment if we have items
                     if (equipment && equipment.length === 0) {
                         equipment = null;
@@ -147,7 +147,7 @@ export async function POST(request: NextRequest) {
 
                 // Validate room_type if provided
                 const validRoomTypes = [
-                    'classroom', 'lab', 'computer_lab', 'workshop', 
+                    'classroom', 'lab', 'computer_lab', 'workshop',
                     'lecture_hall', 'studio', 'auditorium'
                 ];
                 let roomType = null;
@@ -163,6 +163,8 @@ export async function POST(request: NextRequest) {
                 }
 
                 // Create room
+                const now = new Date();
+
                 await db.rooms.create({
                     data: {
                         name: roomName,
@@ -170,9 +172,11 @@ export async function POST(request: NextRequest) {
                         room_type: roomType,
                         equipment: equipment,
                         department: roomData.department ? roomData.department.toString().trim() : null,
-                        is_active: roomData.is_active !== false
+                        is_active: roomData.is_active !== false,
+                        updated_at: now
                     }
                 });
+
 
                 results.imported++;
             } catch (error) {

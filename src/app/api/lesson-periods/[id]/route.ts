@@ -10,10 +10,11 @@ const prisma = new PrismaClient();
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const periodId = parseInt(params.id);
+    const resolvedParams = await params;
+    const periodId = parseInt(resolvedParams.id);
 
     if (isNaN(periodId)) {
       return NextResponse.json(
@@ -22,12 +23,12 @@ export async function GET(
       );
     }
 
-    const lessonPeriod = await prisma.lessonPeriods.findUnique({
+    const lessonPeriod = await prisma.lessonperiods.findUnique({
       where: { id: periodId },
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }
@@ -70,10 +71,11 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const periodId = parseInt(params.id);
+      const resolvedParams = await params;
+    const periodId = parseInt(resolvedParams.id);
 
     if (isNaN(periodId)) {
       return NextResponse.json(
@@ -83,7 +85,7 @@ export async function PUT(
     }
 
     // Check if lesson period exists
-    const existingPeriod = await prisma.lessonPeriods.findUnique({
+    const existingPeriod = await prisma.lessonperiods.findUnique({
       where: { id: periodId }
     });
 
@@ -132,7 +134,7 @@ export async function PUT(
       const durationMinutes = Math.floor(durationMs / (1000 * 60));
 
       // Check for overlapping periods (excluding current period)
-      const overlappingPeriod = await prisma.lessonPeriods.findFirst({
+      const overlappingPeriod = await prisma.lessonperiods.findFirst({
         where: {
           id: { not: periodId },
           is_active: true,
@@ -163,13 +165,13 @@ export async function PUT(
     }
 
     // Update the lesson period
-    const updatedPeriod = await prisma.lessonPeriods.update({
+    const updatedPeriod = await prisma.lessonperiods.update({
       where: { id: periodId },
       data: updateData,
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }
@@ -206,10 +208,11 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const periodId = parseInt(params.id);
+    const resolvedParams = await params
+    const periodId = parseInt(resolvedParams.id);
 
     if (isNaN(periodId)) {
       return NextResponse.json(
@@ -219,13 +222,13 @@ export async function DELETE(
     }
 
     // Check if period has associated timetable slots
-    const slotsCount = await prisma.timetableSlots.count({
+    const slotsCount = await prisma.timetableslots.count({
       where: { lesson_period_id: periodId }
     });
 
     if (slotsCount > 0) {
       // Soft delete - just deactivate
-      const updatedPeriod = await prisma.lessonPeriods.update({
+      const updatedPeriod = await prisma.lessonperiods.update({
         where: { id: periodId },
         data: { is_active: false }
       });
@@ -237,7 +240,7 @@ export async function DELETE(
       });
     } else {
       // Hard delete if no associated data
-      await prisma.lessonPeriods.delete({
+      await prisma.lessonperiods.delete({
         where: { id: periodId }
       });
 

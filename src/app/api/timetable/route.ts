@@ -9,7 +9,7 @@ async function verifyAuth() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
       return { error: 'No token found', status: 401 };
     }
@@ -49,7 +49,6 @@ async function verifyAuth() {
  * - day_of_week: Filter by specific day (0-6)
  * - class_id: Filter by specific class
  * - subject_id: Filter by specific subject
- * - class_subject_id: Filter by specific class-subject combination
  */
 export async function GET(request: NextRequest) {
   try {
@@ -86,38 +85,24 @@ export async function GET(request: NextRequest) {
       whereConditions.day_of_week = parseInt(dayOfWeek);
     }
 
-    // Class-Subject filter
-    const classSubjectId = searchParams.get('class_subject_id');
-    if (classSubjectId) {
-      whereConditions.class_subject_id = parseInt(classSubjectId);
+    // Class filter
+    const classId = searchParams.get('class_id');
+    if (classId) {
+      whereConditions.class_id = parseInt(classId);
     }
 
-    // Department filter (filter by class department through classSubject)
-    const department = searchParams.get('department');
-    
-    // Class filter (through classSubject)
-    const classId = searchParams.get('class_id');
-    
-    // Subject filter (through classSubject)
+    // Subject filter
     const subjectId = searchParams.get('subject_id');
+    if (subjectId) {
+      whereConditions.subject_id = parseInt(subjectId);
+    }
 
-    // Build nested where conditions for department/class/subject filters
-    if (department || classId || subjectId) {
-      whereConditions.classSubject = {};
-      
-      if (classId) {
-        whereConditions.classSubject.class_id = parseInt(classId);
-      }
-      
-      if (subjectId) {
-        whereConditions.classSubject.subject_id = parseInt(subjectId);
-      }
-      
-      if (department) {
-        whereConditions.classSubject.class = {
-          department: department
-        };
-      }
+    // Department filter (filter by class department)
+    const department = searchParams.get('department');
+    if (department) {
+      whereConditions.class = {
+        department: department
+      };
     }
 
     // If not admin, only show their own slots
@@ -126,34 +111,30 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch timetable slots
-    const timetableSlots = await db.timetableSlots.findMany({
+    const timetableSlots = await db.timetableslots.findMany({
       where: whereConditions,
       include: {
-        classSubject: {
-          include: {
-            class: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-                description: true,
-                department: true,
-                duration_hours: true
-              }
-            },
-            subject: {
-              select: {
-                id: true,
-                name: true,
-                code: true,
-                department: true,
-                credit_hours: true,
-                description: true
-              }
-            }
+        classes: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            description: true,
+            department: true,
+            duration_hours: true
           }
         },
-        room: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            description: true
+          }
+        },
+        rooms: {
           select: {
             id: true,
             name: true,
@@ -161,7 +142,7 @@ export async function GET(request: NextRequest) {
             room_type: true
           }
         },
-        lessonPeriod: {
+        lessonperiods: {
           select: {
             id: true,
             name: true,
@@ -170,7 +151,7 @@ export async function GET(request: NextRequest) {
             duration: true
           }
         },
-        trainer: {
+        users: {
           select: {
             id: true,
             name: true,
@@ -178,7 +159,7 @@ export async function GET(request: NextRequest) {
             department: true
           }
         },
-        term: {
+        terms: {
           select: {
             id: true,
             name: true,
@@ -190,7 +171,7 @@ export async function GET(request: NextRequest) {
       },
       orderBy: [
         { day_of_week: 'asc' },
-        { lessonPeriod: { start_time: 'asc' } }
+        { lessonperiods: { start_time: 'asc' } }
       ]
     });
 
@@ -203,9 +184,9 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     console.error('Error fetching timetable:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to fetch timetable',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );
@@ -240,7 +221,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       term_id,
-      class_subject_id,
+      class_id,
+      subject_id,
       employee_id,
       room_id,
       lesson_period_id,
@@ -249,9 +231,9 @@ export async function POST(request: NextRequest) {
     } = body;
 
     // Validation
-    if (!term_id || !class_subject_id || !employee_id || !room_id || !lesson_period_id || day_of_week === undefined) {
+    if (!term_id || !class_id || !subject_id || !employee_id || !room_id || !lesson_period_id || day_of_week === undefined) {
       return NextResponse.json(
-        { error: 'Missing required fields: term_id, class_subject_id, employee_id, room_id, lesson_period_id, day_of_week' },
+        { error: 'Missing required fields: term_id, class_id, subject_id, employee_id, room_id, lesson_period_id, day_of_week' },
         { status: 400 }
       );
     }
@@ -265,25 +247,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify all referenced records exist
-    const [term, classSubject, trainer, room, lessonPeriod] = await Promise.all([
+    const [term, classRecord, subject, trainer, room, lessonPeriod] = await Promise.all([
       db.terms.findUnique({ where: { id: term_id } }),
-      db.classSubjects.findUnique({ 
-        where: { id: class_subject_id },
-        include: {
-          class: true,
-          subject: true
-        }
-      }),
+      db.classes.findUnique({ where: { id: class_id } }),
+      db.subjects.findUnique({ where: { id: subject_id } }),
       db.users.findUnique({ where: { id: employee_id } }),
       db.rooms.findUnique({ where: { id: room_id } }),
-      db.lessonPeriods.findUnique({ where: { id: lesson_period_id } })
+      db.lessonperiods.findUnique({ where: { id: lesson_period_id } })
     ]);
 
     if (!term) {
       return NextResponse.json({ error: 'Term not found' }, { status: 404 });
     }
-    if (!classSubject) {
-      return NextResponse.json({ error: 'Class-Subject assignment not found' }, { status: 404 });
+    if (!classRecord) {
+      return NextResponse.json({ error: 'Class not found' }, { status: 404 });
+    }
+    if (!subject) {
+      return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
     }
     if (!trainer) {
       return NextResponse.json({ error: 'Trainer not found' }, { status: 404 });
@@ -295,25 +275,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Lesson period not found' }, { status: 404 });
     }
 
-    // ✅ NEW: Check if the class is assigned to this term
-    const termClass = await db.termClasses.findUnique({
+    // ✅ Check if the class is assigned to this term
+    const termClass = await db.termclasses.findUnique({
       where: {
         term_id_class_id: {
           term_id: term_id,
-          class_id: classSubject.class_id
+          class_id: class_id
         }
       }
     });
 
     if (!termClass) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Class not assigned to term',
-        details: `${classSubject.class.name} (${classSubject.class.code}) must be assigned to ${term.name} before scheduling subjects`
+        details: `${classRecord.name} (${classRecord.code}) must be assigned to ${term.name} before scheduling subjects`
+      }, { status: 400 });
+    }
+
+    // ✅ Check if the subject is assigned to this class
+    const classSubject = await db.classsubjects.findUnique({
+      where: {
+        class_id_subject_id: {
+          class_id: class_id,
+          subject_id: subject_id
+        }
+      }
+    });
+
+    if (!classSubject) {
+      return NextResponse.json({
+        error: 'Subject not assigned to class',
+        details: `${subject.name} (${subject.code}) must be assigned to ${classRecord.name} before scheduling`
       }, { status: 400 });
     }
 
     // Check for conflicts (same room, same time, same day OR same trainer, same time, same day)
-    const existingSlot = await db.timetableSlots.findFirst({
+    const existingSlot = await db.timetableslots.findFirst({
       where: {
         term_id,
         day_of_week,
@@ -324,25 +321,21 @@ export async function POST(request: NextRequest) {
         ]
       },
       include: {
-        classSubject: {
-          include: {
-            class: { select: { name: true, code: true } },
-            subject: { select: { name: true, code: true } }
-          }
-        },
-        room: { select: { name: true } },
-        trainer: { select: { name: true } }
+        classes: { select: { name: true, code: true } },
+        subjects: { select: { name: true, code: true } },
+        rooms: { select: { name: true } },
+        users: { select: { name: true } }
       }
     });
 
     if (existingSlot) {
       let conflictMessage = '';
       if (existingSlot.room_id === room_id) {
-        conflictMessage = `Room ${existingSlot.room.name} is already booked for ${existingSlot.classSubject.subject.name} (${existingSlot.classSubject.class.name}) at this time`;
+        conflictMessage = `Room ${existingSlot.rooms.name} is already booked for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
       } else if (existingSlot.employee_id === employee_id) {
-        conflictMessage = `Trainer ${existingSlot.trainer.name} is already scheduled for ${existingSlot.classSubject.subject.name} (${existingSlot.classSubject.class.name}) at this time`;
+        conflictMessage = `Trainer ${existingSlot.users.name} is already scheduled for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
       }
-      
+
       return NextResponse.json(
         { error: 'Scheduling conflict', details: conflictMessage },
         { status: 409 }
@@ -350,27 +343,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Create timetable slot
-    const timetableSlot = await db.timetableSlots.create({
+    const timetableSlot = await db.timetableslots.create({
       data: {
+        id: crypto.randomUUID(),
         term_id,
-        class_subject_id,
+        class_id,
+        subject_id,
         employee_id,
         room_id,
         lesson_period_id,
         day_of_week,
-        status
+        status,
+        created_at: new Date(),
+        updated_at: new Date()
       },
       include: {
-        classSubject: {
-          include: {
-            class: true,
-            subject: true
-          }
-        },
-        room: true,
-        lessonPeriod: true,
-        trainer: true,
-        term: true
+        classes: true,
+        subjects: true,
+        rooms: true,
+        lessonperiods: true,
+        users: true,
+        terms: true
       }
     });
 
@@ -383,9 +376,9 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('Error creating timetable slot:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to create timetable slot',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );

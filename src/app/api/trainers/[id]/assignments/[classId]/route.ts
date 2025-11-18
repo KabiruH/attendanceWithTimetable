@@ -75,14 +75,14 @@ export async function DELETE(
     }
 
     // Find the specific assignment
-    const assignment = await db.trainerClassAssignments.findFirst({
+    const assignment = await db.trainerclassassignments.findFirst({
       where: {
         trainer_id: trainerId,
         class_id: classId,
         is_active: true
       },
       include: {
-        class: {
+        classes: {
           select: {
             name: true,
             code: true
@@ -99,7 +99,7 @@ export async function DELETE(
     }
 
     // Check if there are any attendance records for this class
-    const attendanceCount = await db.classAttendance.count({
+    const attendanceCount = await db.classattendance.count({
       where: {
         trainer_id: trainerId,
         class_id: classId
@@ -107,7 +107,7 @@ export async function DELETE(
     });
 
     // Soft delete the assignment (set is_active to false)
-    await db.trainerClassAssignments.update({
+    await db.trainerclassassignments.update({
       where: {
         id: assignment.id
       },
@@ -122,11 +122,11 @@ export async function DELETE(
     // 3. Notifications to administrators
 
     return NextResponse.json({
-      message: `Successfully removed assignment from class "${assignment.class.name}"`,
+      message: `Successfully removed assignment from class "${assignment.classes.name}"`,
       removed_class: {
         id: classId,
-        name: assignment.class.name,
-        code: assignment.class.code
+        name: assignment.classes.name,
+        code: assignment.classes.code
       },
       attendance_records_preserved: attendanceCount,
       note: attendanceCount > 0 ? 'Previous attendance records have been preserved for reporting purposes.' : null

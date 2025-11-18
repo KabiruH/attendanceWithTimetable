@@ -2,7 +2,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Calendar, Filter, X } from "lucide-react";
+import { PlusCircle, Calendar, Filter, X, BookOpen } from "lucide-react";
 import TimetableGrid from '@/components/timetable/TimetableGrid';
 import WeekNavigator from '@/components/timetable/WeekNavigator';
 import GenerateTimetableDialog from '@/components/timetable/GenerateTimetableDialog';
@@ -53,12 +53,14 @@ interface Term {
 interface TimetableSlot {
   id: string;
   class_id: number;
+  subject_id: number;
   employee_id: number;
   room_id: number;
   lesson_period_id: number;
   day_of_week: number;
   status: string;
   class: any;
+  subject: any;
   room: any;
   lessonPeriod: any;
   trainer: any;
@@ -93,9 +95,13 @@ export default function TimetablePage() {
   // Filter states
   const [filterTrainer, setFilterTrainer] = useState<number | null>(null);
   const [filterDepartment, setFilterDepartment] = useState<string | null>(null);
+  const [filterClass, setFilterClass] = useState<number | null>(null);
+  const [filterSubject, setFilterSubject] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'mine'>('all'); // For admin toggle
   const [availableTrainers, setAvailableTrainers] = useState<Array<{id: number, name: string}>>([]);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
+  const [availableClasses, setAvailableClasses] = useState<Array<{id: number, name: string, code: string}>>([]);
+  const [availableSubjects, setAvailableSubjects] = useState<Array<{id: number, name: string, code: string}>>([]);
 
   useEffect(() => {
     fetchUserData();
@@ -106,7 +112,7 @@ export default function TimetablePage() {
     if (selectedTerm) {
       fetchTimetableData();
     }
-  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, viewMode]);
+  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, filterClass, filterSubject, viewMode]);
 
   // Fetch current user
   const fetchUserData = async () => {
@@ -164,6 +170,8 @@ export default function TimetablePage() {
       } else if (viewMode === 'all') {
         if (filterTrainer) params.append('trainer_id', filterTrainer.toString());
         if (filterDepartment) params.append('department', filterDepartment);
+        if (filterClass) params.append('class_id', filterClass.toString());
+        if (filterSubject) params.append('subject_id', filterSubject.toString());
       }
       
       const response = await fetch(`/api/timetable?${params.toString()}`);
@@ -172,17 +180,31 @@ export default function TimetablePage() {
       const data = await response.json();
       setTimetableSlots(data.data);
 
-      // Extract unique trainers and departments for filters
+      // Extract unique trainers, departments, classes, and subjects for filters
       if (viewMode === 'all' && user?.role === 'admin') {
         const trainers = new Map<number, string>();
         const departments = new Set<string>();
+        const classes = new Map<number, {name: string, code: string}>();
+        const subjects = new Map<number, {name: string, code: string}>();
 
         data.data.forEach((slot: TimetableSlot) => {
           if (slot.trainer) {
             trainers.set(slot.trainer.id, slot.trainer.name);
           }
-          if (slot.class?.department) {
-            departments.add(slot.class.department);
+          if (slot.subject?.department) {
+            departments.add(slot.subject.department);
+          }
+          if (slot.class) {
+            classes.set(slot.class.id, {
+              name: slot.class.name,
+              code: slot.class.code
+            });
+          }
+          if (slot.subject) {
+            subjects.set(slot.subject.id, {
+              name: slot.subject.name,
+              code: slot.subject.code
+            });
           }
         });
 
@@ -190,6 +212,12 @@ export default function TimetablePage() {
           Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
         );
         setAvailableDepartments(Array.from(departments));
+        setAvailableClasses(
+          Array.from(classes.entries()).map(([id, data]) => ({ id, ...data }))
+        );
+        setAvailableSubjects(
+          Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data }))
+        );
       }
     } catch (error) {
       console.error('Error fetching timetable:', error);
@@ -199,35 +227,35 @@ export default function TimetablePage() {
     }
   };
 
-// Handle slot drag and drop
-const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId: number) => {
-  try {
-    const response = await fetch(`/api/timetable/${slotId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        day_of_week: newDayOfWeek,
-        lesson_period_id: newPeriodId
-      })
-    });
+  // Handle slot drag and drop
+  const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId: number) => {
+    try {
+      const response = await fetch(`/api/timetable/${slotId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          day_of_week: newDayOfWeek,
+          lesson_period_id: newPeriodId
+        })
+      });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.details || error.error || 'Failed to move slot');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || error.error || 'Failed to move slot');
+      }
+
+      await fetchTimetableData();
+      
+      // Show success message
+      setError(''); // Clear any previous errors
+    } catch (error) {
+      console.error('Error moving slot:', error);
+      setError(error instanceof Error ? error.message : 'Failed to move slot');
+      
+      // Refresh to show original state
+      await fetchTimetableData();
     }
-
-    await fetchTimetableData();
-    
-    // Show success message
-    setError(''); // Clear any previous errors
-  } catch (error) {
-    console.error('Error moving slot:', error);
-    setError(error instanceof Error ? error.message : 'Failed to move slot');
-    
-    // Refresh to show original state
-    await fetchTimetableData();
-  }
-};
+  };
 
   // Handle slot click for details
   const handleSlotClick = (slot: TimetableSlot) => {
@@ -274,10 +302,12 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
   const clearFilters = () => {
     setFilterTrainer(null);
     setFilterDepartment(null);
+    setFilterClass(null);
+    setFilterSubject(null);
   };
 
   // Count active filters
-  const activeFiltersCount = [filterTrainer, filterDepartment].filter(Boolean).length;
+  const activeFiltersCount = [filterTrainer, filterDepartment, filterClass, filterSubject].filter(Boolean).length;
 
   const isAdmin = user?.role === 'admin';
 
@@ -293,9 +323,12 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
     <div className="container mx-auto py-6 space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold">Timetable Management</h1>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <BookOpen className="h-6 w-6 text-blue-600" />
+            Timetable Management
+          </h1>
           <p className="text-sm text-gray-600">
-            {isAdmin ? 'Manage all timetable slots' : 'View and reschedule your classes'}
+            {isAdmin ? 'Manage all subject schedules' : 'View and reschedule your subjects'}
           </p>
         </div>
         
@@ -350,7 +383,7 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
                   setViewMode(value);
                   if (value === 'mine') {
                     setFilterTrainer(user?.id || null);
-                    setFilterDepartment(null);
+                    clearFilters();
                   } else {
                     setFilterTrainer(null);
                   }
@@ -360,8 +393,8 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Classes</SelectItem>
-                  <SelectItem value="mine">My Classes Only</SelectItem>
+                  <SelectItem value="all">All Subjects</SelectItem>
+                  <SelectItem value="mine">My Subjects Only</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -396,7 +429,7 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
                             className="h-7 text-xs"
                           >
                             <X className="mr-1 h-3 w-3" />
-                            Clear
+                            Clear All
                           </Button>
                         )}
                       </div>
@@ -419,6 +452,53 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
                             {availableTrainers.map((trainer) => (
                               <SelectItem key={trainer.id} value={trainer.id.toString()}>
                                 {trainer.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs">Filter by Class</Label>
+                        <Select
+                          value={filterClass?.toString() || 'all'}
+                          onValueChange={(value) => 
+                            setFilterClass(value === 'all' ? null : parseInt(value))
+                          }
+                        >
+                          <SelectTrigger className="text-sm">
+                            <SelectValue placeholder="All classes" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Classes</SelectItem>
+                            {availableClasses.map((cls) => (
+                              <SelectItem key={cls.id} value={cls.id.toString()}>
+                                {cls.code} - {cls.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs flex items-center gap-1">
+                          <BookOpen className="h-3 w-3" />
+                          Filter by Subject
+                        </Label>
+                        <Select
+                          value={filterSubject?.toString() || 'all'}
+                          onValueChange={(value) => 
+                            setFilterSubject(value === 'all' ? null : parseInt(value))
+                          }
+                        >
+                          <SelectTrigger className="text-sm">
+                            <SelectValue placeholder="All subjects" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Subjects</SelectItem>
+                            {availableSubjects.map((subj) => (
+                              <SelectItem key={subj.id} value={subj.id.toString()}>
+                                {subj.code} - {subj.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -457,7 +537,7 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
 
       {/* Active Filters Display */}
       {isAdmin && viewMode === 'all' && activeFiltersCount > 0 && (
-        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
           <span className="text-sm text-blue-900 font-medium">Active Filters:</span>
           {filterTrainer && (
             <Badge variant="secondary" className="gap-1">
@@ -465,6 +545,25 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
               <X 
                 className="h-3 w-3 cursor-pointer hover:text-red-600" 
                 onClick={() => setFilterTrainer(null)}
+              />
+            </Badge>
+          )}
+          {filterClass && (
+            <Badge variant="secondary" className="gap-1">
+              Class: {availableClasses.find(c => c.id === filterClass)?.code}
+              <X 
+                className="h-3 w-3 cursor-pointer hover:text-red-600" 
+                onClick={() => setFilterClass(null)}
+              />
+            </Badge>
+          )}
+          {filterSubject && (
+            <Badge variant="secondary" className="gap-1">
+              <BookOpen className="h-3 w-3" />
+              Subject: {availableSubjects.find(s => s.id === filterSubject)?.code}
+              <X 
+                className="h-3 w-3 cursor-pointer hover:text-red-600" 
+                onClick={() => setFilterSubject(null)}
               />
             </Badge>
           )}
@@ -526,7 +625,7 @@ const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId:
             <AlertDialogTitle>Delete Timetable Slot</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete this timetable slot for{' '}
-              <strong>{deletingSlot?.class?.name}</strong>?
+              <strong>{deletingSlot?.subject?.name}</strong> ({deletingSlot?.class?.name})?
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>

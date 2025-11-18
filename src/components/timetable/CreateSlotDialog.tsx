@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { BookOpen } from "lucide-react";
 
 interface CreateSlotDialogProps {
   open: boolean;
@@ -29,6 +30,22 @@ interface Class {
   id: number;
   name: string;
   code: string;
+  department: string;
+}
+
+interface Subject {
+  id: number;
+  name: string;
+  code: string;
+  department: string;
+  credit_hours: number | null;
+}
+
+interface ClassSubject {
+  id: number;
+  class_id: number;
+  subject_id: number;
+  subject: Subject;
 }
 
 interface Trainer {
@@ -60,6 +77,7 @@ export default function CreateSlotDialog({
   // Form data
   const [formData, setFormData] = useState({
     class_id: '',
+    subject_id: '',
     employee_id: '',
     room_id: '',
     lesson_period_id: '',
@@ -68,9 +86,11 @@ export default function CreateSlotDialog({
 
   // Options
   const [classes, setClasses] = useState<Class[]>([]);
+  const [availableSubjects, setAvailableSubjects] = useState<Subject[]>([]);
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [lessonPeriods, setLessonPeriods] = useState<LessonPeriod[]>([]);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
 
   const daysOfWeek = [
     { value: '0', label: 'Sunday' },
@@ -85,33 +105,68 @@ export default function CreateSlotDialog({
   useEffect(() => {
     if (open) {
       fetchOptions();
+      resetForm();
     }
   }, [open]);
 
+  // Fetch subjects when class is selected
+  useEffect(() => {
+    if (formData.class_id) {
+      fetchSubjectsForClass(parseInt(formData.class_id));
+    } else {
+      setAvailableSubjects([]);
+      setFormData(prev => ({ ...prev, subject_id: '' }));
+    }
+  }, [formData.class_id]);
+
   const fetchOptions = async () => {
     try {
-      // Fetch classes
-      const classesRes = await fetch('/api/classes');
+      // Fetch classes assigned to the selected term
+      const classesRes = await fetch(`/api/terms/${selectedTerm}/classes`);
       const classesData = await classesRes.json();
-      setClasses(classesData.data || classesData);
+      setClasses(classesData.data || classesData || []);
 
       // Fetch trainers (employees)
-      const trainersRes = await fetch('/api/users?role=employee');
+      const trainersRes = await fetch('/api/users?role=employee&is_active=true');
       const trainersData = await trainersRes.json();
-      setTrainers(trainersData);
+      setTrainers(trainersData || []);
 
       // Fetch rooms
-      const roomsRes = await fetch('/api/rooms');
+      const roomsRes = await fetch('/api/rooms?is_active=true');
       const roomsData = await roomsRes.json();
-      setRooms(roomsData.data);
+      setRooms(roomsData.data || roomsData || []);
 
       // Fetch lesson periods
-      const periodsRes = await fetch('/api/lesson-periods');
+      const periodsRes = await fetch('/api/lesson-periods?is_active=true');
       const periodsData = await periodsRes.json();
-      setLessonPeriods(periodsData.data);
+      setLessonPeriods(periodsData.data || periodsData || []);
     } catch (error) {
       console.error('Error fetching options:', error);
       setError('Failed to load form options');
+    }
+  };
+
+  const fetchSubjectsForClass = async (classId: number) => {
+    setLoadingSubjects(true);
+    try {
+      // Fetch subjects assigned to this class
+      const response = await fetch(`/api/classes/${classId}/subjects`);
+      const data = await response.json();
+      
+      if (response.ok) {
+        // Extract subjects from ClassSubjects
+        const subjects = data.map((cs: ClassSubject) => cs.subject);
+        setAvailableSubjects(subjects);
+      } else {
+        setAvailableSubjects([]);
+        setError('Failed to load subjects for selected class');
+      }
+    } catch (error) {
+      console.error('Error fetching subjects:', error);
+      setAvailableSubjects([]);
+      setError('Failed to load subjects');
+    } finally {
+      setLoadingSubjects(false);
     }
   };
 
@@ -125,6 +180,12 @@ export default function CreateSlotDialog({
         throw new Error('No term selected');
       }
 
+      // Validate all required fields
+      if (!formData.class_id || !formData.subject_id || !formData.employee_id || 
+          !formData.room_id || !formData.lesson_period_id || formData.day_of_week === '') {
+        throw new Error('Please fill in all required fields');
+      }
+
       const response = await fetch('/api/timetable', {
         method: 'POST',
         headers: {
@@ -133,6 +194,7 @@ export default function CreateSlotDialog({
         body: JSON.stringify({
           term_id: selectedTerm,
           class_id: parseInt(formData.class_id),
+          subject_id: parseInt(formData.subject_id),
           employee_id: parseInt(formData.employee_id),
           room_id: parseInt(formData.room_id),
           lesson_period_id: parseInt(formData.lesson_period_id),
@@ -143,7 +205,7 @@ export default function CreateSlotDialog({
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create slot');
+        throw new Error(data.error || data.details || 'Failed to create slot');
       }
 
       onSuccess();
@@ -159,17 +221,22 @@ export default function CreateSlotDialog({
   const resetForm = () => {
     setFormData({
       class_id: '',
+      subject_id: '',
       employee_id: '',
       room_id: '',
       lesson_period_id: '',
       day_of_week: '',
     });
+    setAvailableSubjects([]);
     setError('');
   };
 
+  const selectedClass = classes.find(c => c.id.toString() === formData.class_id);
+  const selectedSubject = availableSubjects.find(s => s.id.toString() === formData.subject_id);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[550px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add Timetable Slot</DialogTitle>
         </DialogHeader>
@@ -186,19 +253,86 @@ export default function CreateSlotDialog({
             <Label htmlFor="class">Class *</Label>
             <Select
               value={formData.class_id}
-              onValueChange={(value) => setFormData({ ...formData, class_id: value })}
+              onValueChange={(value) => setFormData({ ...formData, class_id: value, subject_id: '' })}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select class" />
+                <SelectValue placeholder="Select class first" />
               </SelectTrigger>
               <SelectContent>
-                {classes.map((cls) => (
-                  <SelectItem key={cls.id} value={cls.id.toString()}>
-                    {cls.code} - {cls.name}
-                  </SelectItem>
-                ))}
+                {classes.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">
+                    No classes assigned to this term
+                  </div>
+                ) : (
+                  classes.map((cls) => (
+                    <SelectItem key={cls.id} value={cls.id.toString()}>
+                      {cls.code} - {cls.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
+            {selectedClass && (
+              <p className="text-xs text-muted-foreground">
+                Department: {selectedClass.department}
+              </p>
+            )}
+          </div>
+
+          {/* Subject Selection */}
+          <div className="space-y-2">
+            <Label htmlFor="subject" className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4" />
+              Subject *
+            </Label>
+            <Select
+              value={formData.subject_id}
+              onValueChange={(value) => setFormData({ ...formData, subject_id: value })}
+              disabled={!formData.class_id || loadingSubjects}
+            >
+              <SelectTrigger>
+                <SelectValue 
+                  placeholder={
+                    !formData.class_id 
+                      ? "Select class first" 
+                      : loadingSubjects 
+                        ? "Loading subjects..." 
+                        : "Select subject"
+                  } 
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {availableSubjects.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">
+                    {formData.class_id 
+                      ? "No subjects assigned to this class" 
+                      : "Select a class first"}
+                  </div>
+                ) : (
+                  availableSubjects.map((subject) => (
+                    <SelectItem key={subject.id} value={subject.id.toString()}>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{subject.code} - {subject.name}</span>
+                        {subject.credit_hours && (
+                          <span className="text-xs text-muted-foreground">
+                            {subject.credit_hours}h
+                          </span>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {selectedSubject && (
+              <div className="p-2 bg-blue-50 rounded text-xs space-y-1">
+                <p><span className="font-medium">Subject:</span> {selectedSubject.name}</p>
+                <p><span className="font-medium">Department:</span> {selectedSubject.department}</p>
+                {selectedSubject.credit_hours && (
+                  <p><span className="font-medium">Credit Hours:</span> {selectedSubject.credit_hours}h</p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Trainer Selection */}
@@ -212,11 +346,17 @@ export default function CreateSlotDialog({
                 <SelectValue placeholder="Select trainer" />
               </SelectTrigger>
               <SelectContent>
-                {trainers.map((trainer) => (
-                  <SelectItem key={trainer.id} value={trainer.id.toString()}>
-                    {trainer.name}
-                  </SelectItem>
-                ))}
+                {trainers.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">
+                    No trainers available
+                  </div>
+                ) : (
+                  trainers.map((trainer) => (
+                    <SelectItem key={trainer.id} value={trainer.id.toString()}>
+                      {trainer.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -252,11 +392,17 @@ export default function CreateSlotDialog({
                 <SelectValue placeholder="Select period" />
               </SelectTrigger>
               <SelectContent>
-                {lessonPeriods.map((period) => (
-                  <SelectItem key={period.id} value={period.id.toString()}>
-                    {period.name} ({period.start_time_formatted} - {period.end_time_formatted})
-                  </SelectItem>
-                ))}
+                {lessonPeriods.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">
+                    No lesson periods configured
+                  </div>
+                ) : (
+                  lessonPeriods.map((period) => (
+                    <SelectItem key={period.id} value={period.id.toString()}>
+                      {period.name} ({period.start_time_formatted} - {period.end_time_formatted})
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -272,17 +418,23 @@ export default function CreateSlotDialog({
                 <SelectValue placeholder="Select room" />
               </SelectTrigger>
               <SelectContent>
-                {rooms.map((room) => (
-                  <SelectItem key={room.id} value={room.id.toString()}>
-                    {room.name}
-                  </SelectItem>
-                ))}
+                {rooms.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">
+                    No rooms available
+                  </div>
+                ) : (
+                  rooms.map((room) => (
+                    <SelectItem key={room.id} value={room.id.toString()}>
+                      {room.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-end gap-2 pt-4">
+          <div className="flex justify-end gap-2 pt-4 border-t">
             <Button
               type="button"
               variant="outline"

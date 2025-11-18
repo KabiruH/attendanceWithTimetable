@@ -72,13 +72,13 @@ export async function GET(
       );
     }
 
-    const assignedSubjects = await db.classSubjects.findMany({
+    const assignedSubjects = await db.classsubjects.findMany({
       where: {
         class_id: classId,
       },
       include: {
-        subject: true,
-        term: {
+        subjects: true,
+        terms: {
           select: {
             id: true,
             name: true,
@@ -145,7 +145,7 @@ export async function POST(
     }
 
     // Check if already assigned
-    const existing = await db.classSubjects.findUnique({
+    const existing = await db.classsubjects.findUnique({
       where: {
         class_id_subject_id: {
           class_id: classId,
@@ -162,7 +162,7 @@ export async function POST(
     }
 
     // Create assignment
-    const assignment = await db.classSubjects.create({
+    const assignment = await db.classsubjects.create({
       data: {
         class_id: classId,
         subject_id: subjectId,
@@ -170,8 +170,8 @@ export async function POST(
         is_active: false, // Not activated yet
       },
       include: {
-        subject: true,
-        term: true,
+        subjects: true,
+        terms: true,
       },
     });
 

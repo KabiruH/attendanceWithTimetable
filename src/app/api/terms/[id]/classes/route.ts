@@ -74,12 +74,12 @@ export async function GET(
     }
 
     // Get classes from TermClasses junction table
-    const termClasses = await db.termClasses.findMany({
+    const termClasses = await db.termclasses.findMany({
       where: {
         term_id: termId
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -94,7 +94,7 @@ export async function GET(
     });
 
     // Extract just the class data
-    const classes = termClasses.map(tc => tc.class);
+    const classes = termClasses.map(tc => tc.classes);
 
     return NextResponse.json({
       success: true,
@@ -252,16 +252,16 @@ export async function POST(
       }
 
       // Check if any of these classes are already assigned to OTHER active terms
-      const conflictingAssignments = await db.termClasses.findMany({
+      const conflictingAssignments = await db.termclasses.findMany({
         where: {
           class_id: { in: class_ids },
           term_id: { not: termId }, // Exclude current term
-          term: {
+          terms: {
             is_active: true // Only check active terms
           }
         },
         include: {
-          term: {
+          terms: {
             select: {
               id: true,
               name: true,
@@ -269,7 +269,7 @@ export async function POST(
               end_date: true
             }
           },
-          class: {
+          classes: {
             select: {
               id: true,
               name: true,
@@ -282,18 +282,18 @@ export async function POST(
       if (conflictingAssignments.length > 0) {
         // Group conflicts by term for better error message
         const conflictsByTerm = conflictingAssignments.reduce((acc, assignment) => {
-          const termName = assignment.term.name;
+          const termName = assignment.terms.name;
           if (!acc[termName]) {
             acc[termName] = {
-              term_id: assignment.term.id,
+              term_id: assignment.terms.id,
               term_name: termName,
               classes: []
             };
           }
           acc[termName].classes.push({
-            id: assignment.class.id,
-            code: assignment.class.code,
-            name: assignment.class.name
+            id: assignment.classes.id,
+            code: assignment.classes.code,
+            name: assignment.classes.name
           });
           return acc;
         }, {} as Record<string, any>);
@@ -310,13 +310,13 @@ export async function POST(
     }
 
     // Delete existing assignments for this term
-    await db.termClasses.deleteMany({
+    await db.termclasses.deleteMany({
       where: { term_id: termId }
     });
 
     // Create new assignments
     if (class_ids.length > 0) {
-      await db.termClasses.createMany({
+      await db.termclasses.createMany({
         data: class_ids.map((class_id: number) => ({
           term_id: termId,
           class_id: class_id,
@@ -440,7 +440,7 @@ export async function DELETE(
     }
 
     // Delete the assignments
-    const result = await db.termClasses.deleteMany({
+    const result = await db.termclasses.deleteMany({
       where: whereClause
     });
 

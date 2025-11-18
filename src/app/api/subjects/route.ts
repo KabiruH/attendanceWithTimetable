@@ -9,7 +9,7 @@ async function verifyAuth() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
       return { error: 'No token found', status: 401 };
     }
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-
+    const now = new Date()
     const subject = await db.subjects.create({
       data: {
         name,
@@ -118,6 +118,7 @@ export async function POST(request: NextRequest) {
         description: description || null,
         is_active: true,
         created_by: user.email || user.name,
+        updated_at: now
       },
     });
 

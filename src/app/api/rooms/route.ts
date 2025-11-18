@@ -37,16 +37,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the room
-    const room = await prisma.rooms.create({
-      data: {
-        name: name.trim(),
-        capacity: capacity || null,
-        room_type: room_type || null,
-        equipment: equipment || null,
-        department: department || null,
-        is_active: true
-      }
-    });
+  const now = new Date();
+const room = await prisma.rooms.create({
+  data: {
+    name: name.trim(),
+    capacity: capacity || null,
+    room_type: room_type || null,
+    equipment: equipment || null,
+    department: department || null,
+    is_active: true,
+    updated_at: now
+  }
+});
+
 
     return NextResponse.json(
       {
@@ -112,7 +115,7 @@ export async function GET(request: NextRequest) {
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }

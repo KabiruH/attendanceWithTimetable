@@ -77,7 +77,7 @@ export async function GET(
         updated_at: true,
         _count: {
           select: {
-            classSubjects: true, // Count assigned subjects
+            classsubjects: true, // Count assigned subjects
           },
         },
       }
@@ -94,7 +94,7 @@ export async function GET(
     const formattedClass = {
       ...classData,
       _count: {
-        subjects: classData._count.classSubjects,
+        subjects: classData._count.classsubjects,
       },
     };
 

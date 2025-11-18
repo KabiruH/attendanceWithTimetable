@@ -58,14 +58,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the term
+    const now = Date()
     const term = await prisma.terms.create({
       data: {
         name,
         start_date: startDate,
         end_date: endDate,
-        working_days: working_days || [1, 2, 3, 4, 5], // Default Mon-Fri
+        working_days: working_days || [1, 2, 3, 4, 5], 
         holidays: holidays || [],
-        is_active: true
+        is_active: true,
+        updated_at: now
       }
     });
 
@@ -121,7 +123,7 @@ export async function GET(request: NextRequest) {
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }

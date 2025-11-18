@@ -39,7 +39,7 @@ async function verifyAuth() {
   }
 }
 
-// GET /api/timetable/trainer/[id]/today - Get trainer's today's scheduled classes
+// GET /api/timetable/trainer/[id]/today - Get trainer's today's scheduled subjects
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -90,7 +90,7 @@ export async function GET(
         data: {
           date: today.toISOString(),
           day_of_week: dayOfWeek,
-          classes: [],
+          subjects: [],
           work_check_in_status: null
         }
       });
@@ -112,7 +112,7 @@ export async function GET(
     });
 
     // Get today's timetable slots
-    const todaySlots = await db.timetableSlots.findMany({
+    const todaySlots = await db.timetableslots.findMany({
       where: {
         employee_id: trainerId,
         term_id: activeTerm.id,
@@ -120,7 +120,7 @@ export async function GET(
         status: { not: 'cancelled' }
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -130,7 +130,17 @@ export async function GET(
             duration_hours: true
           }
         },
-        room: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            description: true
+          }
+        },
+        rooms: {
           select: {
             id: true,
             name: true,
@@ -138,7 +148,7 @@ export async function GET(
             room_type: true
           }
         },
-        lessonPeriod: {
+        lessonperiods: {
           select: {
             id: true,
             name: true,
@@ -149,14 +159,14 @@ export async function GET(
         }
       },
       orderBy: {
-        lessonPeriod: { start_time: 'asc' }
+        lessonperiods: { start_time: 'asc' }
       }
     });
 
     // For each slot, check if there's attendance recorded
     const slotsWithAttendance = await Promise.all(
       todaySlots.map(async (slot) => {
-        const classAttendance = await db.classAttendance.findFirst({
+        const classAttendance = await db.classattendance.findFirst({
           where: {
             trainer_id: trainerId,
             class_id: slot.class_id,
@@ -171,7 +181,7 @@ export async function GET(
         });
 
         // Calculate if notification should be sent (15 minutes before)
-        const periodStartTime = new Date(slot.lessonPeriod.start_time);
+        const periodStartTime = new Date(slot.lessonperiods.start_time);
         const notificationTime = new Date(today);
         notificationTime.setHours(periodStartTime.getHours());
         notificationTime.setMinutes(periodStartTime.getMinutes() - 15);
@@ -191,12 +201,13 @@ export async function GET(
 
         return {
           timetable_slot_id: slot.id,
-          class: slot.class,
-          room: slot.room,
+          subject: slot.subjects,
+          class: slot.classes,
+          room: slot.rooms,
           period: {
-            ...slot.lessonPeriod,
-            start_time_formatted: slot.lessonPeriod.start_time.toTimeString().slice(0, 5),
-            end_time_formatted: slot.lessonPeriod.end_time.toTimeString().slice(0, 5)
+            ...slot.lessonperiods,
+            start_time_formatted: slot.lessonperiods.start_time.toTimeString().slice(0, 5),
+            end_time_formatted: slot.lessonperiods.end_time.toTimeString().slice(0, 5)
           },
           attendance: classAttendance ? {
             checked_in: !!classAttendance.check_in_time,
@@ -242,8 +253,8 @@ export async function GET(
           check_out_time: null,
           status: 'not_checked_in'
         },
-        classes: slotsWithAttendance,
-        total_classes: slotsWithAttendance.length,
+        subjects: slotsWithAttendance,
+        total_subjects: slotsWithAttendance.length,
         checked_in_count: slotsWithAttendance.filter(s => s.attendance.checked_in).length,
         pending_count: slotsWithAttendance.filter(s => !s.attendance.checked_in).length
       }

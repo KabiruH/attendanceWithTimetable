@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     const durationMinutes = Math.floor(durationMs / (1000 * 60));
 
     // Check for overlapping periods
-    const overlappingPeriod = await prisma.lessonPeriods.findFirst({
+    const overlappingPeriod = await prisma.lessonperiods.findFirst({
       where: {
         is_active: true,
         OR: [
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the lesson period
-    const lessonPeriod = await prisma.lessonPeriods.create({
+    const lessonPeriod = await prisma.lessonperiods.create({
       data: {
         name: name.trim(),
         start_time: startTime,
@@ -122,7 +122,7 @@ export async function GET(request: NextRequest) {
       whereClause.is_active = true;
     }
 
-    const lessonPeriods = await prisma.lessonPeriods.findMany({
+    const lessonPeriods = await prisma.lessonperiods.findMany({
       where: whereClause,
       orderBy: [
         { start_time: 'asc' }
@@ -130,7 +130,7 @@ export async function GET(request: NextRequest) {
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }

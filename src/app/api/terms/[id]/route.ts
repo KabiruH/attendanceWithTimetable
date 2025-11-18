@@ -10,10 +10,11 @@ const prisma = new PrismaClient();
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const termId = parseInt(params.id);
+    const resolvedParams = await params
+    const termId = parseInt(resolvedParams.id);
 
     if (isNaN(termId)) {
       return NextResponse.json(
@@ -27,7 +28,7 @@ export async function GET(
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }
@@ -63,10 +64,11 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const termId = parseInt(params.id);
+    const resolvedParams = await params
+    const termId = parseInt(resolvedParams.id);
 
     if (isNaN(termId)) {
       return NextResponse.json(
@@ -147,7 +149,7 @@ export async function PUT(
       include: {
         _count: {
           select: {
-            timetableSlots: true
+            timetableslots: true
           }
         }
       }
@@ -177,10 +179,11 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const termId = parseInt(params.id);
+    const resolvedParams = await params
+    const termId = parseInt(resolvedParams.id);
 
     if (isNaN(termId)) {
       return NextResponse.json(
@@ -190,7 +193,7 @@ export async function DELETE(
     }
 
     // Check if term has associated timetable slots
-    const slotsCount = await prisma.timetableSlots.count({
+    const slotsCount = await prisma.timetableslots.count({
       where: { term_id: termId }
     });
 

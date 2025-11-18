@@ -8,9 +8,9 @@ import { db } from '@/lib/db/db';
  */
 export async function GET(request: NextRequest) {
   try {
-    const assignments = await db.termClasses.findMany({
+    const assignments = await db.termclasses.findMany({
       include: {
-        term: {
+        terms: {
           select: {
             id: true,
             name: true,
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
             end_date: true
           }
         },
-        class: {
+        classes: {
           select: {
             id: true,
             code: true,

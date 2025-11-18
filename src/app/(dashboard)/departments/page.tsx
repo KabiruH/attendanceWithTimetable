@@ -235,7 +235,7 @@ export default function DepartmentsPage() {
             </div>
           </CardContent>
         </Card>
-        <Card>
+        {/* <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Total Subjects
@@ -246,7 +246,7 @@ export default function DepartmentsPage() {
               {departments.reduce((sum, d) => sum + (d._count?.subjects || 0), 0)}
             </div>
           </CardContent>
-        </Card>
+        </Card> */}
       </div>
 
       {/* Create/Edit Department Form */}

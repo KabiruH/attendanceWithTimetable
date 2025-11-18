@@ -10,7 +10,7 @@ async function verifyAuth() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
       return { error: 'No token found', status: 401 };
     }
@@ -133,6 +133,8 @@ export async function POST(request: NextRequest) {
           updated++;
         } else {
           // Create new subject
+
+          const now = new Date();
           await db.subjects.create({
             data: {
               name: subjectData.name,
@@ -142,19 +144,21 @@ export async function POST(request: NextRequest) {
               description: subjectData.description,
               is_active: true,
               created_by: user.email || user.name,
+              updated_at: now
             },
           });
           imported++;
         }
+
       } catch (error: any) {
         console.error(`Error processing row ${rowNumber}:`, error);
         errors.push(`Row ${rowNumber}: ${error.message || 'Failed to process'}`);
       }
     }
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
-      imported, 
+      imported,
       updated,
       total: imported + updated,
       errors: errors.length > 0 ? errors : undefined,

@@ -107,20 +107,20 @@ export async function GET(
           week_start: startOfWeek.toISOString(),
           week_end: endOfWeek.toISOString(),
           schedule: {},
-          total_classes: 0
+          total_subjects: 0
         }
       });
     }
 
     // Get all timetable slots for the trainer in active term
-    const timetableSlots = await db.timetableSlots.findMany({
+    const timetableSlots = await db.timetableslots.findMany({
       where: {
         employee_id: trainerId,
         term_id: activeTerm.id,
         status: { not: 'cancelled' }
       },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -130,7 +130,17 @@ export async function GET(
             duration_hours: true
           }
         },
-        room: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            description: true
+          }
+        },
+        rooms: {
           select: {
             id: true,
             name: true,
@@ -138,7 +148,7 @@ export async function GET(
             room_type: true
           }
         },
-        lessonPeriod: {
+        lessonperiods: {
           select: {
             id: true,
             name: true,
@@ -150,12 +160,12 @@ export async function GET(
       },
       orderBy: [
         { day_of_week: 'asc' },
-        { lessonPeriod: { start_time: 'asc' } }
+        { lessonperiods: { start_time: 'asc' } }
       ]
     });
 
     // Get all class attendance for this week
-    const weekAttendance = await db.classAttendance.findMany({
+    const weekAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: trainerId,
         date: {
@@ -193,25 +203,26 @@ export async function GET(
       weekSchedule[day] = {
         date: dayDate.toISOString().split('T')[0],
         day_of_week: index,
-        classes: []
+        subjects: []
       };
     });
 
-    // Fill in the classes
+    // Fill in the subjects
     timetableSlots.forEach(slot => {
       const dayName = daysOfWeek[slot.day_of_week];
       const dayDate = weekSchedule[dayName].date;
       const attendanceKey = `${slot.class_id}_${dayDate}`;
       const attendance = attendanceMap.get(attendanceKey);
 
-      weekSchedule[dayName].classes.push({
+      weekSchedule[dayName].subjects.push({
         timetable_slot_id: slot.id,
-        class: slot.class,
-        room: slot.room,
+        subject: slot.subjects,
+        class: slot.classes,
+        room: slot.rooms,
         period: {
-          ...slot.lessonPeriod,
-          start_time_formatted: slot.lessonPeriod.start_time.toTimeString().slice(0, 5),
-          end_time_formatted: slot.lessonPeriod.end_time.toTimeString().slice(0, 5)
+          ...slot.lessonperiods,
+          start_time_formatted: slot.lessonperiods.start_time.toTimeString().slice(0, 5),
+          end_time_formatted: slot.lessonperiods.end_time.toTimeString().slice(0, 5)
         },
         attendance: attendance ? {
           checked_in: !!attendance.check_in_time,
@@ -229,10 +240,10 @@ export async function GET(
     });
 
     // Calculate statistics
-    const totalClasses = timetableSlots.length;
-    const attendedClasses = weekAttendance.filter(a => a.status === 'Present').length;
-    const absentClasses = weekAttendance.filter(a => a.status === 'Absent').length;
-    const pendingClasses = totalClasses - attendedClasses - absentClasses;
+    const totalSubjects = timetableSlots.length;
+    const attendedSubjects = weekAttendance.filter(a => a.status === 'Present').length;
+    const absentSubjects = weekAttendance.filter(a => a.status === 'Absent').length;
+    const pendingSubjects = totalSubjects - attendedSubjects - absentSubjects;
 
     return NextResponse.json({
       success: true,
@@ -248,12 +259,12 @@ export async function GET(
         },
         schedule: weekSchedule,
         statistics: {
-          total_classes: totalClasses,
-          attended: attendedClasses,
-          absent: absentClasses,
-          pending: pendingClasses,
-          attendance_rate: totalClasses > 0 
-            ? ((attendedClasses / totalClasses) * 100).toFixed(2) + '%' 
+          total_subjects: totalSubjects,
+          attended: attendedSubjects,
+          absent: absentSubjects,
+          pending: pendingSubjects,
+          attendance_rate: totalSubjects > 0 
+            ? ((attendedSubjects / totalSubjects) * 100).toFixed(2) + '%' 
             : '0%'
         }
       }

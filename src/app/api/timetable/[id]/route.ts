@@ -61,10 +61,10 @@ export async function GET(
     const params = await context.params;
     const slotId = params.id;
 
-    const timetableSlot = await db.timetableSlots.findUnique({
+    const timetableSlot = await db.timetableslots.findUnique({
       where: { id: slotId },
       include: {
-        class: {
+        classes: {
           select: {
             id: true,
             name: true,
@@ -74,7 +74,17 @@ export async function GET(
             duration_hours: true
           }
         },
-        room: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            description: true
+          }
+        },
+        rooms: {
           select: {
             id: true,
             name: true,
@@ -82,7 +92,7 @@ export async function GET(
             room_type: true
           }
         },
-        lessonPeriod: {
+        lessonperiods: {
           select: {
             id: true,
             name: true,
@@ -91,7 +101,7 @@ export async function GET(
             duration: true
           }
         },
-        trainer: {
+        users: {
           select: {
             id: true,
             name: true,
@@ -99,7 +109,7 @@ export async function GET(
             department: true
           }
         },
-        term: {
+        terms: {
           select: {
             id: true,
             name: true,
@@ -168,7 +178,7 @@ export async function PUT(
     const slotId = params.id;
 
     // Get existing slot
-    const existingSlot = await db.timetableSlots.findUnique({
+    const existingSlot = await db.timetableslots.findUnique({
       where: { id: slotId }
     });
 
@@ -194,6 +204,7 @@ export async function PUT(
     const {
       term_id,
       class_id,
+      subject_id,
       employee_id,
       room_id,
       lesson_period_id,
@@ -206,6 +217,8 @@ export async function PUT(
     
     if (term_id !== undefined) updateData.term_id = term_id;
     if (class_id !== undefined) updateData.class_id = class_id;
+    if (subject_id !== undefined) updateData.subject_id = subject_id;
+    
     if (employee_id !== undefined) {
       // Only admin can change trainer
       if (!isAdmin) {
@@ -216,8 +229,10 @@ export async function PUT(
       }
       updateData.employee_id = employee_id;
     }
+    
     if (room_id !== undefined) updateData.room_id = room_id;
     if (lesson_period_id !== undefined) updateData.lesson_period_id = lesson_period_id;
+    
     if (day_of_week !== undefined) {
       // Validate day_of_week
       if (day_of_week < 0 || day_of_week > 6) {
@@ -228,7 +243,30 @@ export async function PUT(
       }
       updateData.day_of_week = day_of_week;
     }
+    
     if (status !== undefined) updateData.status = status;
+
+    // ✅ Validate class-subject relationship if being changed
+    if (class_id !== undefined || subject_id !== undefined) {
+      const checkClassId = class_id ?? existingSlot.class_id;
+      const checkSubjectId = subject_id ?? existingSlot.subject_id;
+
+      const classSubject = await db.classsubjects.findUnique({
+        where: {
+          class_id_subject_id: {
+            class_id: checkClassId,
+            subject_id: checkSubjectId
+          }
+        }
+      });
+
+      if (!classSubject) {
+        return NextResponse.json({
+          error: 'Invalid class-subject combination',
+          details: 'The subject must be assigned to the class'
+        }, { status: 400 });
+      }
+    }
 
     // Check for conflicts if rescheduling
     if (room_id !== undefined || lesson_period_id !== undefined || day_of_week !== undefined) {
@@ -238,7 +276,7 @@ export async function PUT(
       const checkTrainerId = employee_id ?? existingSlot.employee_id;
       const checkTermId = term_id ?? existingSlot.term_id;
 
-      const conflictingSlot = await db.timetableSlots.findFirst({
+      const conflictingSlot = await db.timetableslots.findFirst({
         where: {
           id: { not: slotId }, // Exclude current slot
           term_id: checkTermId,
@@ -250,18 +288,19 @@ export async function PUT(
           ]
         },
         include: {
-          class: { select: { name: true, code: true } },
-          room: { select: { name: true } },
-          trainer: { select: { name: true } }
+          classes: { select: { name: true, code: true } },
+          subjects: { select: { name: true, code: true } },
+          rooms: { select: { name: true } },
+          users: { select: { name: true } }
         }
       });
 
       if (conflictingSlot) {
         let conflictMessage = '';
         if (conflictingSlot.room_id === checkRoomId) {
-          conflictMessage = `Room ${conflictingSlot.room.name} is already booked for ${conflictingSlot.class.name} at this time`;
+          conflictMessage = `Room ${conflictingSlot.rooms.name} is already booked for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
         } else if (conflictingSlot.employee_id === checkTrainerId) {
-          conflictMessage = `Trainer ${conflictingSlot.trainer.name} is already scheduled for ${conflictingSlot.class.name} at this time`;
+          conflictMessage = `Trainer ${conflictingSlot.users.name} is already scheduled for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
         }
         
         return NextResponse.json(
@@ -272,15 +311,16 @@ export async function PUT(
     }
 
     // Update the slot
-    const updatedSlot = await db.timetableSlots.update({
+    const updatedSlot = await db.timetableslots.update({
       where: { id: slotId },
       data: updateData,
       include: {
-        class: true,
-        room: true,
-        lessonPeriod: true,
-        trainer: true,
-        term: true
+        classes: true,
+        subjects: true,
+        rooms: true,
+        lessonperiods: true,
+        users: true,
+        terms: true
       }
     });
 
@@ -333,10 +373,11 @@ export async function DELETE(
     }
 
     // Check if slot exists
-    const existingSlot = await db.timetableSlots.findUnique({
+    const existingSlot = await db.timetableslots.findUnique({
       where: { id: slotId },
       include: {
-        class: { select: { name: true, code: true } }
+        classes: { select: { name: true, code: true } },
+        subjects: { select: { name: true, code: true } }
       }
     });
 
@@ -348,13 +389,13 @@ export async function DELETE(
     }
 
     // Delete the slot
-    await db.timetableSlots.delete({
+    await db.timetableslots.delete({
       where: { id: slotId }
     });
 
     return NextResponse.json({
       success: true,
-      message: `Timetable slot for ${existingSlot.class.name} deleted successfully`
+      message: `Timetable slot for ${existingSlot.subjects.name} (${existingSlot.classes.name}) deleted successfully`
     });
 
   } catch (error: any) {

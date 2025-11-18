@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Clock, MapPin, User, ChevronDown, ChevronUp, GripVertical } from "lucide-react";
+import { Clock, MapPin, User, ChevronDown, ChevronUp, GripVertical, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -14,6 +14,7 @@ import {
 interface TimetableSlot {
   id: string;
   class_id: number;
+  subject_id: number;
   employee_id: number;
   room_id: number;
   lesson_period_id: number;
@@ -24,6 +25,13 @@ interface TimetableSlot {
     name: string;
     code: string;
     department: string;
+  };
+  subject: {
+    id: number;
+    name: string;
+    code: string;
+    department: string;
+    credit_hours?: number | null;
   };
   room: {
     id: number;
@@ -129,7 +137,7 @@ export default function TimetableGrid({
     return slot.employee_id === userId;
   };
 
-  // Get card styling based on ownership
+  // Get card styling based on ownership and department
   const getCardStyle = (slot: TimetableSlot, isStacked: boolean = false) => {
     const isOwn = isOwnSlot(slot);
     const baseTransition = "transition-all duration-200";
@@ -227,7 +235,7 @@ export default function TimetableGrid({
         }}
       >
         <CardContent className="p-3 space-y-2">
-          {/* Drag Handle */}
+          {/* Drag Handle & Own Badge */}
           {isAdmin && (
             <div className="flex items-center justify-between">
               <GripVertical className="h-4 w-4 text-gray-400" />
@@ -239,14 +247,27 @@ export default function TimetableGrid({
             </div>
           )}
 
-          {/* Class Info */}
+          {/* Subject Info - Primary */}
           <div>
-            <div className="font-semibold text-sm line-clamp-1">
-              {slot.class.name}
+            <div className="flex items-center gap-1 mb-0.5">
+              <BookOpen className="h-3 w-3 text-blue-600 flex-shrink-0" />
+              <div className="font-bold text-sm line-clamp-1">
+                {slot.subject.code}
+              </div>
             </div>
-            <div className="text-xs text-gray-500 font-mono">
+            <div className="text-xs font-medium text-gray-700 line-clamp-2 leading-tight">
+              {slot.subject.name}
+            </div>
+          </div>
+
+          {/* Class Info - Secondary */}
+          <div className="flex items-center gap-1 pt-1 border-t border-gray-200">
+            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
               {slot.class.code}
-            </div>
+            </Badge>
+            <span className="text-[10px] text-gray-600 line-clamp-1">
+              {slot.class.name}
+            </span>
           </div>
 
           {/* Trainer */}
@@ -264,12 +285,21 @@ export default function TimetableGrid({
           {/* Department & Status */}
           <div className="flex items-center justify-between gap-1">
             <Badge variant="outline" className="text-[10px] px-1 py-0 line-clamp-1">
-              {slot.class.department}
+              {slot.subject.department}
             </Badge>
-            <Badge className={`text-[10px] px-1 py-0 flex-shrink-0 ${getStatusColor(slot.status)}`}>
-              {slot.status}
-            </Badge>
+            {slot.status !== 'scheduled' && (
+              <Badge className={`text-[10px] px-1 py-0 flex-shrink-0 ${getStatusColor(slot.status)}`}>
+                {slot.status}
+              </Badge>
+            )}
           </div>
+
+          {/* Credit Hours (optional) */}
+          {slot.subject.credit_hours && (
+            <div className="text-[10px] text-gray-500">
+              {slot.subject.credit_hours}h
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -291,12 +321,16 @@ export default function TimetableGrid({
         {isAdmin && (
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded bg-gradient-to-br from-purple-100 to-indigo-100 border-2 border-purple-500"></div>
-            <span className="text-gray-600">Your Classes</span>
+            <span className="text-gray-600">Your Subjects</span>
           </div>
         )}
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded bg-white border"></div>
-          <span className="text-gray-600">Other Classes</span>
+          <span className="text-gray-600">Other Subjects</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-blue-600" />
+          <span className="text-gray-600">Subject-based Schedule</span>
         </div>
         {isAdmin && (
           <div className="flex items-center gap-2 ml-auto">
@@ -352,7 +386,7 @@ export default function TimetableGrid({
                   return (
                     <div 
                       key={cellKey} 
-                      className={`min-h-[140px] rounded-lg transition-all ${
+                      className={`min-h-[160px] rounded-lg transition-all ${
                         isDraggedOver ? 'bg-blue-100 border-2 border-blue-400 border-dashed' : ''
                       }`}
                       onDragOver={(e) => handleDragOver(e, dayIndex, period.id)}
@@ -403,7 +437,7 @@ export default function TimetableGrid({
                         )
                       ) : (
                         <div 
-                          className={`border-2 border-dashed rounded-lg h-full min-h-[140px] flex items-center justify-center text-gray-400 text-xs transition-all ${
+                          className={`border-2 border-dashed rounded-lg h-full min-h-[160px] flex items-center justify-center text-gray-400 text-xs transition-all ${
                             isDraggedOver ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
                           }`}
                         >
