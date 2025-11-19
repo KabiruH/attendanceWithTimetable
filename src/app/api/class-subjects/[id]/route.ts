@@ -132,6 +132,7 @@ export async function GET(
   }
 }
 
+
 // DELETE /api/class-subjects/[id] - Remove subject from class
 export async function DELETE(
   request: NextRequest,
@@ -178,13 +179,21 @@ export async function DELETE(
       );
     }
 
-    if (classSubject.is_active && classSubject.term_id) {
-      return NextResponse.json(
-        { 
-          error: 'Cannot remove subject that is active in a term. Deactivate it first.' 
-        },
-        { status: 400 }
-      );
+  if (classSubject.is_active && classSubject.term_id) {
+      // First, deactivate any trainer assignments
+      await db.trainersubjectassignments.updateMany({
+        where: { class_subject_id: classSubjectId },
+        data: { is_active: false }
+      });
+
+      // Then update the class subject to inactive
+      await db.classsubjects.update({
+        where: { id: classSubjectId },
+        data: { 
+          is_active: false,
+          term_id: null 
+        }
+      });
     }
 
     await db.classsubjects.delete({

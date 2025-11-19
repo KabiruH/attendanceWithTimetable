@@ -247,28 +247,29 @@ export default function ManageClassSubjectsPage() {
     );
   };
 
-  const handleRemoveSubject = async (classSubjectId: number) => {
-    try {
-      const response = await fetch(`/api/class-subjects/${classSubjectId}`, {         
-        method: "DELETE" 
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to remove subject");
-      }
-
-      const removedSubject = assignedSubjects.find((as) => as.id === classSubjectId);
-      if (removedSubject) {
-        setAssignedSubjects((prev) => prev.filter((as) => as.id !== classSubjectId));
-        setAvailableSubjects((prev) => [...prev, removedSubject.subject]);
-      }
-      toast.success("Subject removed successfully");
-    } catch (error: any) {
-      console.error("Error removing subject:", error);
-      toast.error(error.message || "Failed to remove subject");
+const handleRemoveSubject = async (classSubjectId: number) => {
+  try {
+    const response = await fetch(`/api/class-subjects/${classSubjectId}`, {  // ✅ Fixed
+      method: "DELETE" 
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to remove subject");
     }
-  };
+    
+    const removedSubject = assignedSubjects.find((as) => as.id === classSubjectId);
+    if (removedSubject) {
+      setAssignedSubjects((prev) => prev.filter((as) => as.id !== classSubjectId));
+      setAvailableSubjects((prev) => [...prev, removedSubject.subject]);
+    }
+    
+    toast.success("Subject removed successfully");
+  } catch (error: any) {
+    console.error("Error removing subject:", error);
+    toast.error(error.message || "Failed to remove subject");
+  }
+};
 
   const handleAddSubjectSuccess = (newSubject: Subject) => {
     setAvailableSubjects((prev) => [newSubject, ...prev]);

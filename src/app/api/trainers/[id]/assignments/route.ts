@@ -318,31 +318,6 @@ export async function POST(
           }
         });
 
-        // 4. Process subject assignments
-        const existingSubjectMap = new Map(
-          existingSubjectAssignments.map(a => [a.class_subject_id, a.id])
-        );
-        const subjectIdsToReactivate: number[] = [];
-        const subjectsToCreate: any[] = [];
-
-        classSubjects.forEach(cs => {
-          const existingId = existingSubjectMap.get(cs.id);
-          if (existingId) {
-            subjectIdsToReactivate.push(existingId);
-          } else {
-            subjectsToCreate.push({
-              trainer_id: trainerUserId,
-              subject_id: cs.subject_id,
-              class_subject_id: cs.id,
-              term_id: term_id,
-              is_active: true
-            });
-          }
-        });
-
-        console.log(`  🔄 Reactivating ${subjectIdsToReactivate.length} existing subject assignments`);
-        console.log(`  ➕ Creating ${subjectsToCreate.length} new subject assignments`);
-
         // 5. Execute all updates/creates in parallel batches
         const operations: Promise<any>[] = [];
 
@@ -365,27 +340,6 @@ export async function POST(
             })
           );
           classAssignmentsCreated += classesToCreate.length;
-        }
-
-        // Reactivate subject assignments
-        if (subjectIdsToReactivate.length > 0) {
-          operations.push(
-            tx.trainersubjectassignments.updateMany({
-              where: { id: { in: subjectIdsToReactivate } },
-              data: { is_active: true }
-            })
-          );
-          subjectAssignmentsCreated += subjectIdsToReactivate.length;
-        }
-
-        // Create new subject assignments
-        if (subjectsToCreate.length > 0) {
-          operations.push(
-            tx.trainersubjectassignments.createMany({
-              data: subjectsToCreate
-            })
-          );
-          subjectAssignmentsCreated += subjectsToCreate.length;
         }
 
         // Execute all operations in parallel
