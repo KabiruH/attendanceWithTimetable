@@ -9,45 +9,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Clock, MapPin, User, Calendar, Trash2, BookOpen, GraduationCap } from "lucide-react";
+import { TimetableSlot } from '@/lib/types/timetable';
 
-interface TimetableSlot {
-  id: string;
-  class_id: number;
-  subject_id: number;
-  employee_id: number;
-  room_id: number;
-  lesson_period_id: number;
-  day_of_week: number;
-  status: string;
-  class: {
-    name: string;
-    code: string;
-    description: string;
-    department: string;
-    duration_hours: number;
-  };
-  subject: {
-    name: string;
-    code: string;
-    department: string;
-    credit_hours?: number | null;
-    description?: string | null;
-  };
-  room: {
-    name: string;
-    capacity: number;
-    room_type: string;
-  };
-  lessonPeriod: {
-    name: string;
-    start_time: Date;
-    end_time: Date;
-    duration: number;
-  };
-  trainer: {
-    name: string;
-  };
-}
 
 interface SlotDetailsDialogProps {
   open: boolean;
@@ -99,11 +62,11 @@ export default function SlotDetailsDialog({
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <BookOpen className="h-5 w-5 text-blue-600" />
-                  <h3 className="text-xl font-bold text-gray-900">{slot.subject.name}</h3>
+                  <h3 className="text-xl font-bold text-gray-900">{slot.subjects.name}</h3>
                 </div>
-                <p className="text-sm text-gray-600 font-medium">{slot.subject.code}</p>
-                {slot.subject.description && (
-                  <p className="text-sm text-gray-600 mt-2">{slot.subject.description}</p>
+                <p className="text-sm text-gray-600 font-medium">{slot.subjects.code}</p>
+                {slot.subjects.description && (
+                  <p className="text-sm text-gray-600 mt-2">{slot.subjects.description}</p>
                 )}
               </div>
               <Badge variant={getStatusBadge(slot.status)}>
@@ -115,12 +78,12 @@ export default function SlotDetailsDialog({
             <div className="flex gap-4 text-sm">
               <div className="flex items-center gap-1 text-gray-600">
                 <span className="font-medium">Department:</span>
-                <span>{slot.subject.department}</span>
+                <span>{slot.subjects.department}</span>
               </div>
-              {slot.subject.credit_hours && (
+              {slot.subjects.credit_hours && (
                 <div className="flex items-center gap-1 text-gray-600">
                   <span className="font-medium">Credit Hours:</span>
-                  <span>{slot.subject.credit_hours}h</span>
+                  <span>{slot.subjects.credit_hours}h</span>
                 </div>
               )}
             </div>
@@ -133,13 +96,13 @@ export default function SlotDetailsDialog({
               <p className="text-xs font-medium text-blue-900">Class</p>
             </div>
             <div className="flex items-baseline gap-2">
-              <p className="font-semibold text-blue-900">{slot.class.name}</p>
+              <p className="font-semibold text-blue-900">{slot.classes.name}</p>
               <Badge variant="outline" className="text-xs">
-                {slot.class.code}
+                {slot.classes.code}
               </Badge>
             </div>
-            {slot.class.description && (
-              <p className="text-xs text-blue-800 mt-1">{slot.class.description}</p>
+            {slot.classes.description && (
+              <p className="text-xs text-blue-800 mt-1">{slot.classes.description}</p>
             )}
           </div>
 
@@ -153,11 +116,11 @@ export default function SlotDetailsDialog({
               <div>
                 <p className="text-xs text-gray-500">Schedule</p>
                 <p className="text-sm font-medium">
-                  {daysOfWeek[slot.day_of_week]}, {slot.lessonPeriod.name}
+                  {daysOfWeek[slot.day_of_week]}, {slot.lessonperiods.name}
                 </p>
                 <p className="text-xs text-gray-600">
-                  {formatTime(slot.lessonPeriod.start_time)} - {formatTime(slot.lessonPeriod.end_time)}
-                  {' '}({slot.lessonPeriod.duration} minutes)
+                  {formatTime(slot.lessonperiods.start_time)} - {formatTime(slot.lessonperiods.end_time)}
+                  {' '}({slot.lessonperiods.duration} minutes)
                 </p>
               </div>
             </div>
@@ -169,10 +132,10 @@ export default function SlotDetailsDialog({
               </div>
               <div>
                 <p className="text-xs text-gray-500">Room</p>
-                <p className="text-sm font-medium">{slot.room.name}</p>
+                <p className="text-sm font-medium">{slot.rooms.name}</p>
                 <p className="text-xs text-gray-600">
-                  {slot.room.room_type && `${slot.room.room_type}`}
-                  {slot.room.capacity && ` • Capacity: ${slot.room.capacity}`}
+                  {slot.rooms.room_type && `${slot.rooms.room_type}`}
+                  {slot.rooms.capacity && ` • Capacity: ${slot.rooms.capacity}`}
                 </p>
               </div>
             </div>
@@ -184,7 +147,7 @@ export default function SlotDetailsDialog({
               </div>
               <div>
                 <p className="text-xs text-gray-500">Trainer</p>
-                <p className="text-sm font-medium">{slot.trainer.name}</p>
+                <p className="text-sm font-medium">{slot.users.name}</p>
               </div>
             </div>
           </div>

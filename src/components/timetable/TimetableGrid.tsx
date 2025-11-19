@@ -10,45 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-
-interface TimetableSlot {
-  id: string;
-  class_id: number;
-  subject_id: number;
-  employee_id: number;
-  room_id: number;
-  lesson_period_id: number;
-  day_of_week: number;
-  status: string;
-  class: {
-    id: number;
-    name: string;
-    code: string;
-    department: string;
-  };
-  subject: {
-    id: number;
-    name: string;
-    code: string;
-    department: string;
-    credit_hours?: number | null;
-  };
-  room: {
-    id: number;
-    name: string;
-  };
-  lessonPeriod: {
-    id: number;
-    name: string;
-    start_time: Date;
-    end_time: Date;
-  };
-  trainer: {
-    id: number;
-    name: string;
-    department: string;
-  };
-}
+import { TimetableSlot } from '@/lib/types/timetable';
 
 interface TimetableGridProps {
   slots: TimetableSlot[];
@@ -78,18 +40,22 @@ export default function TimetableGrid({
   const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   
   // Get unique lesson periods from slots
-  const lessonPeriods = Array.from(
-    new Map(
-      slots.map(slot => [
-        slot.lesson_period_id,
-        slot.lessonPeriod
-      ])
-    ).values()
-  ).sort((a, b) => {
-    const timeA = new Date(a.start_time).getTime();
-    const timeB = new Date(b.start_time).getTime();
-    return timeA - timeB;
-  });
+ const lessonPeriods = slots.length > 0 
+  ? Array.from(
+      new Map(
+        slots
+          .filter(slot => slot.lessonperiods) // Filter out slots without lessonPeriod
+          .map(slot => [
+            slot.lesson_period_id,
+            slot.lessonperiods
+          ])
+      ).values()
+    ).sort((a, b) => {
+      const timeA = new Date(a.start_time).getTime();
+      const timeB = new Date(b.start_time).getTime();
+      return timeA - timeB;
+    })
+  : [];
 
   // Group slots by day and period (multiple slots per cell possible)
   const slotsByDayAndPeriod = new Map<string, TimetableSlot[]>();
@@ -252,40 +218,40 @@ export default function TimetableGrid({
             <div className="flex items-center gap-1 mb-0.5">
               <BookOpen className="h-3 w-3 text-blue-600 flex-shrink-0" />
               <div className="font-bold text-sm line-clamp-1">
-                {slot.subject.code}
+                {slot.subjects.code}
               </div>
             </div>
             <div className="text-xs font-medium text-gray-700 line-clamp-2 leading-tight">
-              {slot.subject.name}
+              {slot.subjects.name}
             </div>
           </div>
 
           {/* Class Info - Secondary */}
           <div className="flex items-center gap-1 pt-1 border-t border-gray-200">
             <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-              {slot.class.code}
+              {slot.classes.code}
             </Badge>
             <span className="text-[10px] text-gray-600 line-clamp-1">
-              {slot.class.name}
+              {slot.classes.name}
             </span>
           </div>
 
           {/* Trainer */}
           <div className="flex items-center gap-1 text-xs text-gray-600">
             <User className="h-3 w-3 flex-shrink-0" />
-            <span className="line-clamp-1">{slot.trainer.name}</span>
+            <span className="line-clamp-1">{slot.users.name}</span>
           </div>
 
           {/* Room */}
           <div className="flex items-center gap-1 text-xs text-gray-600">
             <MapPin className="h-3 w-3 flex-shrink-0" />
-            <span>{slot.room.name}</span>
+            <span>{slot.rooms.name}</span>
           </div>
 
           {/* Department & Status */}
           <div className="flex items-center justify-between gap-1">
             <Badge variant="outline" className="text-[10px] px-1 py-0 line-clamp-1">
-              {slot.subject.department}
+              {slot.subjects.department}
             </Badge>
             {slot.status !== 'scheduled' && (
               <Badge className={`text-[10px] px-1 py-0 flex-shrink-0 ${getStatusColor(slot.status)}`}>
@@ -295,9 +261,9 @@ export default function TimetableGrid({
           </div>
 
           {/* Credit Hours (optional) */}
-          {slot.subject.credit_hours && (
+          {slot.subjects.credit_hours && (
             <div className="text-[10px] text-gray-500">
-              {slot.subject.credit_hours}h
+              {slot.subjects.credit_hours}h
             </div>
           )}
         </CardContent>

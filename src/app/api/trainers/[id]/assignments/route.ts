@@ -113,13 +113,26 @@ export async function POST(
     const body = await request.json();
     const { class_ids, term_id } = body;
 
+    // ✅ ADD DEBUG LOGS HERE
+    console.log('🔍 API DEBUG 1 - Received request:', {
+      body_raw: body,
+      class_ids,
+      term_id,
+      term_id_type: typeof term_id,
+      term_id_is_number: typeof term_id === 'number',
+      term_id_parsed: Number(term_id)
+    });
+
     if (!Array.isArray(class_ids)) {
       return NextResponse.json({ error: 'class_ids must be an array' }, { status: 400 });
     }
 
     if (!term_id) {
+      console.log('❌ API DEBUG 2 - term_id is missing or falsy!');
       return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
     }
+
+    console.log('✅ API DEBUG 3 - term_id validated:', term_id);
 
     const numericClassIds = class_ids.map(id => {
       const numId = Number(id);
@@ -147,6 +160,8 @@ export async function POST(
     if (!term) {
       return NextResponse.json({ error: 'Term not found' }, { status: 404 });
     }
+
+    console.log('✅ API DEBUG 4 - Term found:', { id: term.id, name: term.name });
 
     // Verify all class IDs exist and are active
     if (numericClassIds.length > 0) {
@@ -205,12 +220,15 @@ export async function POST(
               class_id: classId,
               term_id: term_id
             },
-            select: { subject_id: true, id: true }
+            select: { subject_id: true, id: true, term_id: true }
           });
 
           const existingSubjectIds = new Set(existingClassSubjects.map(cs => cs.subject_id));
           
           console.log(`  📋 Class ${classId} already has ${existingClassSubjects.length} subjects for term ${term_id}`);
+          if (existingClassSubjects.length > 0) {
+            console.log(`  📋 Sample existing subject:`, existingClassSubjects[0]);
+          }
 
           // Find subjects that need to be added
           const subjectsToAdd = allSubjects.filter(s => !existingSubjectIds.has(s.id));
@@ -218,18 +236,37 @@ export async function POST(
           if (subjectsToAdd.length > 0) {
             console.log(`  ➕ Adding ${subjectsToAdd.length} missing subjects to class ${classId}`);
             
+            // ✅ ADD DEBUG LOG HERE
+            const dataToCreate = subjectsToAdd.map(subject => ({
+              class_id: classId,
+              subject_id: subject.id,
+              term_id: term_id,
+              assigned_by: user.name,
+              is_active: true
+            }));
+            
+            console.log('🔍 DEBUG - About to create classsubjects with data:', {
+              sample: dataToCreate[0],
+              term_id_in_data: dataToCreate[0].term_id,
+              term_id_type: typeof dataToCreate[0].term_id,
+              total_to_create: dataToCreate.length
+            });
+            
             await tx.classsubjects.createMany({
-              data: subjectsToAdd.map(subject => ({
-                class_id: classId,
-                subject_id: subject.id,
-                term_id: term_id,
-                assigned_by: user.name,
-                is_active: true
-              })),
+              data: dataToCreate,
               skipDuplicates: true
             });
             
             classSubjectsCreated += subjectsToAdd.length;
+            
+            // ✅ VERIFY WHAT WAS CREATED
+            const justCreated = await tx.classsubjects.findFirst({
+              where: {
+                class_id: classId,
+                subject_id: subjectsToAdd[0].id
+              }
+            });
+            console.log('🔍 DEBUG - Just created record:', justCreated);
           }
         }
 
@@ -244,10 +281,9 @@ export async function POST(
           tx.classsubjects.findMany({
             where: { 
               class_id: { in: numericClassIds },
-              term_id: term_id,
-              is_active: true
+              term_id: term_id
             },
-            select: { id: true, subject_id: true, class_id: true }
+            select: { id: true, subject_id: true, class_id: true, term_id: true }
           }),
           tx.trainersubjectassignments.findMany({
             where: {
@@ -259,6 +295,9 @@ export async function POST(
         ]);
 
         console.log(`📊 Found ${classSubjects.length} class subjects to assign to trainer`);
+        if (classSubjects.length > 0) {
+          console.log('📊 Sample classSubject:', classSubjects[0]);
+        }
 
         // 3. Process class assignments
         const existingClassMap = new Map(existingClassAssignments.map(a => [a.class_id, a.id]));

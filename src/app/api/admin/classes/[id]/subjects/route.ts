@@ -93,7 +93,7 @@ export async function GET(
     // ✅ Transform the data to match component expectations
     const formattedSubjects = assignedSubjects.map(item => ({
       id: item.id,
-      subject: item.subjects,  // ✅ Rename "subjects" to "subject"
+      subject: item.subjects,
       term_id: item.term_id,
       is_active: item.is_active,
       assigned_at: item.assigned_at.toISOString(),
@@ -145,7 +145,14 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { subjectId } = body;
+    const { subjectId, term_id } = body; // ✅ ADD term_id
+
+    console.log('🔍 Admin adding subject - received:', { 
+      subjectId, 
+      term_id, 
+      classId,
+      term_id_type: typeof term_id 
+    });
 
     if (!subjectId) {
       return NextResponse.json(
@@ -154,28 +161,50 @@ export async function POST(
       );
     }
 
-    // Check if already assigned
-    const existing = await db.classsubjects.findUnique({
-      where: {
-        class_id_subject_id: {
+    // ✅ Check if term_id was provided
+    if (!term_id) {
+      console.warn('⚠️ Warning: No term_id provided when adding subject to class');
+    }
+
+    // ✅ UPDATED: Check for existing with term consideration
+    let existing;
+    if (term_id) {
+      // If term_id provided, check for this specific class-subject-term combination
+      existing = await db.classsubjects.findFirst({
+        where: {
           class_id: classId,
           subject_id: subjectId,
+          term_id: term_id
         },
-      },
-    });
+      });
+    } else {
+      // If no term_id, check using the unique constraint
+      existing = await db.classsubjects.findUnique({
+        where: {
+          class_id_subject_id: {
+            class_id: classId,
+            subject_id: subjectId,
+          },
+        },
+      });
+    }
 
     if (existing) {
       return NextResponse.json(
-        { error: 'Subject already assigned to this class' },
+        { error: term_id 
+          ? 'Subject already assigned to this class for this term' 
+          : 'Subject already assigned to this class' 
+        },
         { status: 400 }
       );
     }
 
-    // Create assignment
+    // ✅ Create assignment WITH term_id
     const assignment = await db.classsubjects.create({
       data: {
         class_id: classId,
         subject_id: subjectId,
+        term_id: term_id || null, // ✅ CRITICAL FIX: Include term_id!
         assigned_by: user.email || user.name,
         is_active: false, // Not activated yet
       },
@@ -185,7 +214,14 @@ export async function POST(
       },
     });
 
-    // ✅ Transform response to match expected format
+    console.log('✅ Created classsubject:', {
+      id: assignment.id,
+      class_id: assignment.class_id,
+      subject_id: assignment.subject_id,
+      term_id: assignment.term_id
+    });
+
+    // Transform response to match expected format
     const formattedAssignment = {
       id: assignment.id,
       subject: assignment.subjects,

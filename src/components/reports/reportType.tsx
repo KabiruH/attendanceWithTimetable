@@ -47,7 +47,7 @@ export interface AttendanceRecord {
 
 // Add types for the processed data
 export interface ChartDataPoint {
-  date: string;
+  date: string | Date;
   present: number;
   late: number;
   absent: number;

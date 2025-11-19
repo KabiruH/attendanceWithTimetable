@@ -112,10 +112,65 @@ export async function GET(request: NextRequest) {
 
     const classIds = termClasses.map(tc => tc.class_id);
 
-    // ✅ NEW: Get subjects assigned to these classes with trainer assignments
-    const classSubjects = await db.classsubjects.findMany({
+    // ✅ CHANGED APPROACH: Query trainer assignments directly
+    const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
-        class_id: { in: classIds }
+        term_id: termId,
+        is_active: true,
+        classsubjects: {
+          class_id: { in: classIds },
+          is_active: true
+        }
+      },
+      include: {
+        classsubjects: {
+          include: {
+            classes: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                department: true,
+                duration_hours: true
+              }
+            },
+            subjects: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                department: true,
+                credit_hours: true
+              }
+            }
+          }
+        },
+        users: {
+          select: {
+            id: true,
+            name: true,
+            department: true
+          }
+        }
+      }
+    });
+
+    console.log('🔍 Pre-flight Debug:', {
+      term_id: termId,
+      classes_in_term: classIds.length,
+      class_ids: classIds,
+      trainer_assignments_found: trainerAssignments.length
+    });
+
+    // ✅ Build subject list with ALL trainers
+    const subjectsWithTrainer: any[] = [];
+    const subjectsWithoutTrainerMap = new Map<number, any>(); // Track unique class-subject combos
+
+    // First, get all unique class-subject combinations
+    const allClassSubjects = await db.classsubjects.findMany({
+      where: {
+        class_id: { in: classIds },
+        is_active: true
       },
       include: {
         classes: {
@@ -123,8 +178,7 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             code: true,
-            department: true,
-            duration_hours: true
+            department: true
           }
         },
         subjects: {
@@ -135,32 +189,13 @@ export async function GET(request: NextRequest) {
             department: true,
             credit_hours: true
           }
-        },
-        trainersubjectassignments: {
-          where: { 
-            term_id: termId,
-            is_active: true 
-          },
-          include: {
-            users: {
-              select: {
-                id: true,
-                name: true,
-                department: true
-              }
-            }
-          }
         }
       }
     });
 
-    // ✅ Separate subjects with and without trainers
-    const subjectsWithTrainer: any[] = [];
-    const subjectsWithoutTrainer: any[] = [];
-
-    classSubjects.forEach(cs => {
-      const hasTrainer = cs.trainersubjectassignments.length > 0;
-      const subjectInfo = {
+    // Mark all as without trainer initially
+    allClassSubjects.forEach(cs => {
+      subjectsWithoutTrainerMap.set(cs.id, {
         id: cs.id,
         subject_id: cs.subjects.id,
         subject_name: cs.subjects.name,
@@ -170,27 +205,51 @@ export async function GET(request: NextRequest) {
         class_code: cs.classes.code,
         department: cs.classes.department,
         credit_hours: cs.subjects.credit_hours,
-        has_trainer: hasTrainer,
-        trainer: hasTrainer ? {
-          id: cs.trainersubjectassignments[0].users.id,
-          name: cs.trainersubjectassignments[0].users.name,
-          department: cs.trainersubjectassignments[0].users.department
-        } : null
-      };
-
-      if (hasTrainer) {
-        subjectsWithTrainer.push(subjectInfo);
-      } else {
-        subjectsWithoutTrainer.push(subjectInfo);
-      }
+        has_trainer: false,
+        trainer: null
+      });
     });
 
-    // ✅ Get unique trainers from subject assignments
-    const trainerIds = new Set<number>();
-    classSubjects.forEach(cs => {
-      cs.trainersubjectassignments.forEach(tsa => {
-        trainerIds.add(tsa.users.id);
+    // Now process trainer assignments
+    trainerAssignments.forEach(ta => {
+      const cs = ta.classsubjects;
+      
+      // Remove from "without trainer" map if it was there
+      subjectsWithoutTrainerMap.delete(cs.id);
+      
+      // Add to "with trainer" list
+      subjectsWithTrainer.push({
+        id: cs.id,
+        subject_id: cs.subjects.id,
+        subject_name: cs.subjects.name,
+        subject_code: cs.subjects.code,
+        class_id: cs.classes.id,
+        class_name: cs.classes.name,
+        class_code: cs.classes.code,
+        department: cs.classes.department,
+        credit_hours: cs.subjects.credit_hours,
+        has_trainer: true,
+        trainer: {
+          id: ta.users.id,
+          name: ta.users.name,
+          department: ta.users.department
+        },
+        trainer_assignment_id: ta.id
       });
+    });
+
+    const subjectsWithoutTrainer = Array.from(subjectsWithoutTrainerMap.values());
+
+    console.log('📊 Subjects breakdown:', {
+      with_trainer: subjectsWithTrainer.length,
+      without_trainer: subjectsWithoutTrainer.length,
+      total_trainer_assignments: trainerAssignments.length
+    });
+
+    // ✅ Get unique trainers
+    const trainerIds = new Set<number>();
+    trainerAssignments.forEach(ta => {
+      trainerIds.add(ta.trainer_id);
     });
 
     const trainers = await db.users.findMany({
@@ -206,12 +265,21 @@ export async function GET(request: NextRequest) {
             term_id: termId,
             is_active: true 
           },
-          select: { 
-            subject_id: true,
-            subjects: {
-              select: {
-                name: true,
-                code: true
+          include: {
+            classsubjects: {
+              include: {
+                subjects: {
+                  select: {
+                    name: true,
+                    code: true
+                  }
+                },
+                classes: {
+                  select: {
+                    name: true,
+                    code: true
+                  }
+                }
               }
             }
           }
@@ -223,11 +291,14 @@ export async function GET(request: NextRequest) {
       id: t.id,
       name: t.name,
       department: t.department,
-      subjects_count: t.trainersubjectassignments.length,
-      subjects: t.trainersubjectassignments.map(ts => ({
-        id: ts.subject_id,
-        name: ts.subjects.name,
-        code: ts.subjects.code
+      assignments_count: t.trainersubjectassignments.length,
+      assignments: t.trainersubjectassignments.map(ts => ({
+        id: ts.id,
+        class_subject_id: ts.class_subject_id,
+        class_name: ts.classsubjects.classes.name,
+        class_code: ts.classsubjects.classes.code,
+        subject_name: ts.classsubjects.subjects.name,
+        subject_code: ts.classsubjects.subjects.code
       }))
     }));
 
@@ -257,7 +328,7 @@ export async function GET(request: NextRequest) {
       errorDetails.no_classes = true;
     }
 
-    if (classSubjects.length === 0) {
+    if (allClassSubjects.length === 0) {
       errors.push('No subjects assigned to classes in this term');
       errorDetails.no_subjects = true;
     }
@@ -277,7 +348,7 @@ export async function GET(request: NextRequest) {
       errorDetails.no_lesson_periods = true;
     }
 
-    if (trainers.length === 0 && classSubjects.length > 0) {
+    if (trainers.length === 0 && allClassSubjects.length > 0) {
       errors.push('No trainers assigned to any subjects for this term');
       errorDetails.no_trainers = true;
     }
@@ -290,8 +361,8 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    if (rooms.length < classSubjects.length) {
-      warnings.push(`Limited rooms (${rooms.length}) compared to subjects (${classSubjects.length}). Some subjects may not be scheduled.`);
+    if (rooms.length < trainerAssignments.length) {
+      warnings.push(`Limited rooms (${rooms.length}) compared to trainer assignments (${trainerAssignments.length}). Some sessions may not be scheduled.`);
     }
 
     if (lessonPeriods.length < 3) {
@@ -324,7 +395,8 @@ export async function GET(request: NextRequest) {
         }))
       },
       subjects: {
-        total: classSubjects.length,
+        total: allClassSubjects.length,
+        total_assignments: subjectsWithTrainer.length,
         with_trainer: subjectsWithTrainer.length,
         without_trainer: subjectsWithoutTrainer.length,
         details_with_trainer: subjectsWithTrainer,

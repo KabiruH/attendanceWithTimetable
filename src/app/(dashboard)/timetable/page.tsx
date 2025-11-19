@@ -34,6 +34,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
+import { TimetableSlot } from '@/lib/types/timetable';
 
 interface User {
   id: number;
@@ -50,21 +51,6 @@ interface Term {
   is_active: boolean;
 }
 
-interface TimetableSlot {
-  id: string;
-  class_id: number;
-  subject_id: number;
-  employee_id: number;
-  room_id: number;
-  lesson_period_id: number;
-  day_of_week: number;
-  status: string;
-  class: any;
-  subject: any;
-  room: any;
-  lessonPeriod: any;
-  trainer: any;
-}
 
 export default function TimetablePage() {
   // User and auth state
@@ -188,22 +174,22 @@ export default function TimetablePage() {
         const subjects = new Map<number, {name: string, code: string}>();
 
         data.data.forEach((slot: TimetableSlot) => {
-          if (slot.trainer) {
-            trainers.set(slot.trainer.id, slot.trainer.name);
+          if (slot.users) {
+            trainers.set(slot.users.id, slot.users.name);
           }
-          if (slot.subject?.department) {
-            departments.add(slot.subject.department);
+          if (slot.subjects?.department) {
+            departments.add(slot.subjects.department);
           }
-          if (slot.class) {
-            classes.set(slot.class.id, {
-              name: slot.class.name,
-              code: slot.class.code
+          if (slot.classes) {
+            classes.set(slot.classes.id, {
+              name: slot.classes.name,
+              code: slot.classes.code
             });
           }
-          if (slot.subject) {
-            subjects.set(slot.subject.id, {
-              name: slot.subject.name,
-              code: slot.subject.code
+          if (slot.subjects) {
+            subjects.set(slot.subjects.id, {
+              name: slot.subjects.name,
+              code: slot.subjects.code
             });
           }
         });
@@ -625,7 +611,7 @@ export default function TimetablePage() {
             <AlertDialogTitle>Delete Timetable Slot</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete this timetable slot for{' '}
-              <strong>{deletingSlot?.subject?.name}</strong> ({deletingSlot?.class?.name})?
+              <strong>{deletingSlot?.subjects?.name}</strong> ({deletingSlot?.classes?.name})?
               This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>

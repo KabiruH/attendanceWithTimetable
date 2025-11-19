@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
 import { db } from '@/lib/db/db';
+import { randomUUID } from 'crypto';
 
 interface GenerationSettings {
   term_id: number;
@@ -132,7 +133,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ✅ NEW: Get all classes assigned to this term
+    // ✅ Get all classes assigned to this term
     const termClasses = await db.termclasses.findMany({
       where: { term_id: term_id },
       include: {
@@ -147,36 +148,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ✅ NEW: Get all subjects assigned to these classes with their trainers
     const classIds = termClasses.map(tc => tc.class_id);
-    
-    const classSubjects = await db.classsubjects.findMany({
+
+    // ✅ NEW: Get all trainer-subject assignments for this term
+    const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
-        class_id: { in: classIds }
+        term_id: term_id,
+        is_active: true,
+        classsubjects: {
+          class_id: { in: classIds },
+          is_active: true
+        }
       },
       include: {
-        classes: true,
-        subjects: true,
-        trainersubjectassignments: {
-          where: { 
-            term_id: term_id,
-            is_active: true 
-          },
+        classsubjects: {
           include: {
-            users: {
-              select: {
-                id: true,
-                name: true
-              }
-            }
+            classes: true,
+            subjects: true
+          }
+        },
+        users: {
+          select: {
+            id: true,
+            name: true
           }
         }
       }
     });
 
-    if (classSubjects.length === 0) {
+    if (trainerAssignments.length === 0) {
       return NextResponse.json(
-        { error: 'No subjects assigned to classes in this term' },
+        { error: 'No trainer assignments found for this term' },
         { status: 400 }
       );
     }
@@ -208,7 +210,7 @@ export async function POST(request: NextRequest) {
 
     // Prepare generation
     const slotsToCreate: any[] = [];
-    const skippedSubjects: any[] = [];
+    const skippedAssignments: any[] = [];
     const usedRooms = new Set<number>();
     const usedTrainers = new Set<number>();
 
@@ -245,26 +247,12 @@ export async function POST(request: NextRequest) {
       return shuffled;
     };
 
-    // ✅ UPDATED ALGORITHM: Process each subject (not class)
-    // Distribute subject sessions evenly across the week
-    for (const classSubject of classSubjects) {
+    // ✅ UPDATED ALGORITHM: Process each trainer assignment
+    for (const trainerAssignment of trainerAssignments) {
+      const classSubject = trainerAssignment.classsubjects;
       const subjectData = classSubject.subjects;
       const classData = classSubject.classes;
-      
-      // Check if subject has a trainer assigned for this term
-      if (classSubject.trainersubjectassignments.length === 0) {
-        skippedSubjects.push({
-          subject_id: subjectData.id,
-          subject_code: subjectData.code,
-          subject_name: subjectData.name,
-          class_name: classData.name,
-          class_code: classData.code,
-          reason: 'No trainer assigned for this term'
-        });
-        continue;
-      }
-
-      const trainer = classSubject.trainersubjectassignments[0].users;
+      const trainer = trainerAssignment.users;
       const trainerId = trainer.id;
 
       // Create a list of all possible slots (day-period combinations)
@@ -280,13 +268,12 @@ export async function POST(request: NextRequest) {
 
       // Try to schedule sessions_per_week sessions, spreading them across different days
       let sessionsScheduled = 0;
-      const scheduledDays = new Set<number>(); // Track which days we've used for this subject
+      const scheduledDays = new Set<number>();
 
       // First pass: Try to schedule on different days
       for (const slot of shuffledSlots) {
         if (sessionsScheduled >= sessions_per_week) break;
 
-        // Skip if we already scheduled on this day (to spread across week)
         if (scheduledDays.has(slot.day) && sessionsScheduled < sessions_per_week && scheduledDays.size < sessions_per_week) {
           continue;
         }
@@ -294,18 +281,16 @@ export async function POST(request: NextRequest) {
         const period = lessonPeriods.find(p => p.id === slot.periodId);
         if (!period) continue;
 
-        // Try to find an available room
         const availableRooms = rooms.filter(room => 
           isSlotAvailable(slot.day, period.id, room.id, trainerId)
         );
 
         if (availableRooms.length === 0) continue;
 
-        // Select a random room
         const randomRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
-        // ✅ Create the slot with BOTH class_id AND subject_id
         slotsToCreate.push({
+          id: randomUUID(),
           term_id: term_id,
           class_id: classData.id,
           subject_id: subjectData.id,
@@ -316,18 +301,15 @@ export async function POST(request: NextRequest) {
           status: 'scheduled'
         });
 
-        // Mark as used
         markSlotUsed(slot.day, period.id, randomRoom.id, trainerId);
         scheduledDays.add(slot.day);
 
-        // Track trainer's daily classes
         const trainerDayKey = `${trainerId}-${slot.day}`;
         trainerDailyClasses.set(
           trainerDayKey, 
           (trainerDailyClasses.get(trainerDayKey) || 0) + 1
         );
 
-        // Track used resources
         usedRooms.add(randomRoom.id);
         usedTrainers.add(trainerId);
 
@@ -342,18 +324,16 @@ export async function POST(request: NextRequest) {
           const period = lessonPeriods.find(p => p.id === slot.periodId);
           if (!period) continue;
 
-          // Try to find an available room
           const availableRooms = rooms.filter(room => 
             isSlotAvailable(slot.day, period.id, room.id, trainerId)
           );
 
           if (availableRooms.length === 0) continue;
 
-          // Select a random room
           const randomRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
-          // ✅ Create the slot with BOTH class_id AND subject_id
           slotsToCreate.push({
+            id: randomUUID(),
             term_id: term_id,
             class_id: classData.id,
             subject_id: subjectData.id,
@@ -364,17 +344,14 @@ export async function POST(request: NextRequest) {
             status: 'scheduled'
           });
 
-          // Mark as used
           markSlotUsed(slot.day, period.id, randomRoom.id, trainerId);
 
-          // Track trainer's daily classes
           const trainerDayKey = `${trainerId}-${slot.day}`;
           trainerDailyClasses.set(
             trainerDayKey, 
             (trainerDailyClasses.get(trainerDayKey) || 0) + 1
           );
 
-          // Track used resources
           usedRooms.add(randomRoom.id);
           usedTrainers.add(trainerId);
 
@@ -384,12 +361,17 @@ export async function POST(request: NextRequest) {
 
       // If still couldn't schedule all sessions
       if (sessionsScheduled < sessions_per_week) {
-        skippedSubjects.push({
+        skippedAssignments.push({
+          assignment_id: trainerAssignment.id,
           subject_id: subjectData.id,
           subject_code: subjectData.code,
           subject_name: subjectData.name,
           class_name: classData.name,
           class_code: classData.code,
+          trainer_name: trainer.name,
+          trainer_id: trainerId,
+          scheduled: sessionsScheduled,
+          requested: sessions_per_week,
           reason: `Could only schedule ${sessionsScheduled} of ${sessions_per_week} sessions (no available slots)`
         });
       }
@@ -408,12 +390,13 @@ export async function POST(request: NextRequest) {
       message: `Successfully generated timetable for ${term.name}`,
       stats: {
         slots_created: slotsToCreate.length,
-        subjects_scheduled: classSubjects.length - skippedSubjects.length,
+        trainer_assignments_processed: trainerAssignments.length,
+        assignments_fully_scheduled: trainerAssignments.length - skippedAssignments.length,
         trainers_assigned: usedTrainers.size,
         rooms_used: usedRooms.size,
-        subjects_skipped: skippedSubjects.length
+        assignments_partially_scheduled: skippedAssignments.length
       },
-      skipped_subjects: skippedSubjects
+      skipped_assignments: skippedAssignments
     };
 
     return NextResponse.json(result, { status: 201 });

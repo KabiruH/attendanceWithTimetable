@@ -156,62 +156,76 @@ export default function ClassSelection({
     setSelectedClassIds(newSelectedIds);
   };
 
-  const handleSaveSelections = async () => {
-    // ✅ Validate term is selected
-    if (!selectedTerm) {
-      setError('Please select a term first');
-      return;
+const handleSaveSelections = async () => 
+  {
+  if (!selectedTerm) {
+    setError('Please select a term first');
+    return;
+  }
+
+  console.log('🔍 DEBUG 1 - Before sending:', {
+    selectedTerm,
+    type: typeof selectedTerm,
+    isNumber: !isNaN(selectedTerm),
+    userId
+  });
+
+  setIsSaving(true);
+  setError('');
+  setSuccessMessage('');
+
+  try {
+    // Combine currently selected with previously saved
+    const combinedClassIds = [...new Set([...savedClassIds, ...selectedClassIds])];
+    
+    const payload = {
+      class_ids: combinedClassIds,
+      term_id: selectedTerm
+    };
+    
+    console.log('🔍 DEBUG 2 - Payload:', JSON.stringify(payload, null, 2));
+          
+    const response = await fetch(`/api/trainers/${userId}/assignments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json();
+    console.log('🔍 DEBUG 3 - API Response:', result);
+
+    if (!response.ok) {
+      console.error('API Error:', result);
+      throw new Error(result.error || 'Failed to save selections');
     }
 
-    setIsSaving(true);
-    setError('');
-    setSuccessMessage('');
+    // Update saved state
+    setSavedClassIds(combinedClassIds);
+    setSelectedClassIds(combinedClassIds);
 
-    try {
-      // Combine currently selected with previously saved
-      const combinedClassIds = [...new Set([...savedClassIds, ...selectedClassIds])];
-            
-      const response = await fetch(`/api/trainers/${userId}/assignments`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          class_ids: combinedClassIds,
-          term_id: selectedTerm  // ✅ NOW SENDING TERM_ID
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        console.error('API Error:', result);
-        throw new Error(result.error || 'Failed to save selections');
-      }
-
-      // Update saved state
-      setSavedClassIds(combinedClassIds);
-      setSelectedClassIds(combinedClassIds);
-
-      // ✅ Show better success message with term info
-      const termName = terms.find(t => t.id === selectedTerm)?.name || 'selected term';
-      setSuccessMessage(
-        `Successfully updated class assignments for ${termName}! ` +
-        `You are now assigned to ${combinedClassIds.length} classes ` +
-        `(${result.data?.subject_assignments || 0} subjects).`
-      );
-      
-      onSelectionSaved?.();
-      
-      setTimeout(() => setSuccessMessage(''), 5000);
-      
-    } catch (error) {
-      console.error('Save selections error:', error);
-      setError(error instanceof Error ? error.message : 'Failed to save selections');
-    } finally {
-      setIsSaving(false);
-    }
-  };
+    // ✅ Show success message with details
+    const termName = terms.find(t => t.id === selectedTerm)?.name || 'selected term';
+    setSuccessMessage(
+      `Successfully updated class assignments for ${termName}! ` +
+      `You are now assigned to ${combinedClassIds.length} ${combinedClassIds.length === 1 ? 'class' : 'classes'} ` +
+      `with ${result.subject_assignments || 0} subjects.`
+    );
+    
+    // Call parent callback if provided
+    onSelectionSaved?.();
+    
+    // Clear success message after 5 seconds
+    setTimeout(() => setSuccessMessage(''), 5000);
+    
+  } catch (error) {
+    console.error('Save selections error:', error);
+    setError(error instanceof Error ? error.message : 'Failed to save selections');
+  } finally {
+    setIsSaving(false);
+  }
+};
 
   if (isLoading && selectedTerm === null) {
     return (

@@ -283,7 +283,7 @@ model timetableslots {
   day_of_week      Int
   status           String        @default("scheduled") @db.VarChar(20)
   created_at       DateTime      @default(now())
-  updated_at       DateTime
+  updated_at       DateTime      @default(now())
   classes          classes       @relation(fields: [class_id], references: [id], map: "TimetableSlots_class_id_fkey")
   users            users         @relation(fields: [employee_id], references: [id], map: "TimetableSlots_employee_id_fkey")
   lessonperiods    lessonperiods @relation(fields: [lesson_period_id], references: [id], map: "TimetableSlots_lesson_period_id_fkey")

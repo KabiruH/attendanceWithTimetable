@@ -33,25 +33,47 @@ const ReportsTable: React.FC<ReportsTableProps> = ({ data }) => {
     return cutoff;
   };
 
-  // Helper function to safely parse sessions from data
-  const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] => {
-    // If sessions data exists, use it
-    if (record.sessions && Array.isArray(record.sessions)) {
-      return record.sessions;
-    }
-    
-    // Fallback: Convert old format to sessions format
-    if (record.check_in_time) {
-      return [{
-        check_in: record.check_in_time instanceof Date ? record.check_in_time.toISOString() : record.check_in_time,
-        check_out: record.check_out_time 
-          ? (record.check_out_time instanceof Date ? record.check_out_time.toISOString() : record.check_out_time)
+// Helper function to safely parse sessions from data
+const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] => {
+  // If sessions exist and are an array, normalize them
+  if (record.sessions && Array.isArray(record.sessions)) {
+    return record.sessions.map((session) => ({
+      check_in: session.check_in instanceof Date 
+        ? session.check_in.toISOString() 
+        : session.check_in,
+
+      check_out: session.check_out
+        ? (session.check_out instanceof Date 
+            ? session.check_out.toISOString() 
+            : session.check_out)
+        : null,
+
+      metadata: session.metadata,
+      checkout_metadata: session.checkout_metadata
+    }));
+  }
+
+  // Fallback: Convert old format to sessions format
+  if (record.check_in_time) {
+    return [
+      {
+        check_in:
+          record.check_in_time instanceof Date
+            ? record.check_in_time.toISOString()
+            : record.check_in_time,
+
+        check_out: record.check_out_time
+          ? record.check_out_time instanceof Date
+            ? record.check_out_time.toISOString()
+            : record.check_out_time
           : null
-      }];
-    }
-    
-    return [];
-  };
+      }
+    ];
+  }
+
+  return [];
+};
+
 
   // Helper function to check if a session should be considered ongoing
   const isSessionOngoing = (session: AttendanceSession, currentTime: Date): boolean => {
