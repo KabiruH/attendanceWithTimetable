@@ -113,7 +113,7 @@ model classsubjects {
   id                        Int                         @id @default(autoincrement())
   class_id                  Int
   subject_id                Int
-  term_id                   Int?
+  term_id                   Int
   assigned_by               String                      @db.VarChar(100)
   assigned_at               DateTime                    @default(now())
   activated_at              DateTime?
@@ -123,8 +123,8 @@ model classsubjects {
   terms                     terms?                      @relation(fields: [term_id], references: [id], map: "ClassSubjects_term_id_fkey")
   trainersubjectassignments trainersubjectassignments[]
 
-  @@unique([class_id, subject_id], map: "ClassSubjects_class_id_subject_id_key")
-  @@index([class_id], map: "ClassSubjects_class_id_idx")
+@@unique([class_id, subject_id, term_id], map: "ClassSubjects_class_id_subject_id_term_id_key")  
+@@index([class_id], map: "ClassSubjects_class_id_idx")
   @@index([subject_id], map: "ClassSubjects_subject_id_idx")
   @@index([term_id, is_active], map: "ClassSubjects_term_id_is_active_idx")
 }
@@ -330,7 +330,7 @@ model trainersubjectassignments {
   terms            terms         @relation(fields: [term_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_term_id_fkey")
   users            users         @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_trainer_id_fkey")
 
-  @@unique([trainer_id, subject_id, term_id, class_subject_id], map: "TrainerSubjectAssignments_trainer_id_subject_id_term_id_clas_key")
+  @@unique([trainer_id, subject_id, term_id], map: "TrainerSubjectAssignments_trainer_subject_term_key")
   @@index([class_subject_id], map: "TrainerSubjectAssignments_class_subject_id_idx")
   @@index([subject_id], map: "TrainerSubjectAssignments_subject_id_fkey")
   @@index([term_id], map: "TrainerSubjectAssignments_term_id_idx")

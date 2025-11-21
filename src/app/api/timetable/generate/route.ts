@@ -12,17 +12,13 @@ interface GenerationSettings {
   regenerate: boolean;
 }
 
-export async function POST(request: NextRequest) {
+async function verifyAuth() {
   try {
-    // Authentication
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
-      return NextResponse.json(
-        { error: 'No token found' },
-        { status: 401 }
-      );
+      return { error: 'No token found', status: 401 };
     }
 
     const { payload } = await jwtVerify(
@@ -31,13 +27,7 @@ export async function POST(request: NextRequest) {
     );
 
     const userId = Number(payload.id);
-
-    if (!userId || isNaN(userId)) {
-      return NextResponse.json(
-        { error: 'Invalid user ID in token' },
-        { status: 401 }
-      );
-    }
+    const role = payload.role as string;
 
     const user = await db.users.findUnique({
       where: { id: userId },
@@ -45,30 +35,35 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user || !user.is_active) {
-      return NextResponse.json(
-        { error: 'User not found or inactive' },
-        { status: 401 }
-      );
+      return { error: 'User not found or inactive', status: 401 };
     }
 
-    // Only admin can generate timetables
-    if (user.role !== 'admin') {
+    return { user: { ...user, id: userId, role } };
+  } catch (error) {
+    return { error: 'Invalid token', status: 401 };
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user || authResult.user.role !== 'admin') {
       return NextResponse.json(
         { error: 'Unauthorized. Admin access required.' },
         { status: 403 }
       );
     }
 
-    // Parse request body
     const body: GenerationSettings = await request.json();
     const { term_id, sessions_per_week, min_classes_per_day, regenerate } = body;
 
     // Validation
     if (!term_id) {
-      return NextResponse.json(
-        { error: 'term_id is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
     }
 
     if (!sessions_per_week || sessions_per_week < 1 || sessions_per_week > 5) {
@@ -91,80 +86,115 @@ export async function POST(request: NextRequest) {
     });
 
     if (!term) {
-      return NextResponse.json(
-        { error: 'Term not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Term not found' }, { status: 404 });
     }
 
-    // Parse working days
-    const workingDaysArray = Array.isArray(term.working_days) 
-      ? term.working_days 
-      : JSON.parse(term.working_days as any);
+    // Parse working days safely
+    let workingDaysArray: number[] = [1, 2, 3, 4, 5]; // Default Mon-Fri
+    try {
+      if (term.working_days) {
+        workingDaysArray = Array.isArray(term.working_days)
+          ? term.working_days
+          : JSON.parse(term.working_days as string);
+      }
+    } catch {
+      console.warn('Failed to parse working_days, using default Mon-Fri');
+    }
 
-    // Check if regeneration is allowed
+    // Check regeneration
     if (regenerate) {
       const now = new Date();
       const termStart = new Date(term.start_date);
-      const daysSinceStart = Math.floor((now.getTime() - termStart.getTime()) / (1000 * 60 * 60 * 24));
-      
+      const daysSinceStart = Math.floor(
+        (now.getTime() - termStart.getTime()) / (1000 * 60 * 60 * 24)
+      );
+
       if (daysSinceStart > 14) {
         return NextResponse.json(
-          { error: 'Cannot regenerate timetable: More than 2 weeks have passed since term start' },
+          { error: 'Cannot regenerate: More than 2 weeks since term start' },
           { status: 403 }
         );
       }
 
-      // Delete existing timetable slots
       await db.timetableslots.deleteMany({
         where: { term_id: term_id }
       });
     } else {
-      // Check if timetable already exists
       const existingSlots = await db.timetableslots.count({
         where: { term_id: term_id }
       });
 
       if (existingSlots > 0) {
         return NextResponse.json(
-          { error: 'Timetable already exists for this term. Use regenerate option if within 2 weeks of term start.' },
+          { error: 'Timetable exists. Use regenerate option if within 2 weeks of term start.' },
           { status: 409 }
         );
       }
     }
 
-    // ✅ Get all classes assigned to this term
+    // Get classes assigned to this term
     const termClasses = await db.termclasses.findMany({
       where: { term_id: term_id },
       include: {
-        classes: true
+        classes: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            is_active: true
+          }
+        }
       }
     });
 
-    if (termClasses.length === 0) {
+    const activeTermClasses = termClasses.filter(tc => tc.classes.is_active);
+    const classIds = activeTermClasses.map(tc => tc.class_id);
+
+    if (classIds.length === 0) {
       return NextResponse.json(
-        { error: 'No classes assigned to this term' },
+        { error: 'No active classes assigned to this term' },
         { status: 400 }
       );
     }
 
-    const classIds = termClasses.map(tc => tc.class_id);
+    console.log('📅 Generating timetable for classes:', classIds);
 
-    // ✅ NEW: Get all trainer-subject assignments for this term
+    // Get all class-subjects for this term
+    const allClassSubjects = await db.classsubjects.findMany({
+      where: {
+        class_id: { in: classIds },
+        term_id: term_id
+      },
+      select: { id: true }
+    });
+
+    const classSubjectIds = allClassSubjects.map(cs => cs.id);
+
+    // ✅ FIXED: Get trainer assignments - only filter by trainersubjectassignments.is_active
     const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
         term_id: term_id,
         is_active: true,
-        classsubjects: {
-          class_id: { in: classIds },
-          is_active: true
-        }
+        class_subject_id: { in: classSubjectIds }
       },
       include: {
         classsubjects: {
           include: {
-            classes: true,
-            subjects: true
+            classes: {
+              select: {
+                id: true,
+                name: true,
+                code: true
+              }
+            },
+            subjects: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                credit_hours: true
+              }
+            }
           }
         },
         users: {
@@ -176,9 +206,11 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    console.log('📅 Found trainer assignments:', trainerAssignments.length);
+
     if (trainerAssignments.length === 0) {
       return NextResponse.json(
-        { error: 'No trainer assignments found for this term' },
+        { error: 'No trainer assignments found. Trainers must select their subjects first.' },
         { status: 400 }
       );
     }
@@ -189,13 +221,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (rooms.length === 0) {
-      return NextResponse.json(
-        { error: 'No active rooms available' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'No active rooms available' }, { status: 400 });
     }
 
-    // Get all active lesson periods, sorted by start time
+    // Get all active lesson periods
     const lessonPeriods = await db.lessonperiods.findMany({
       where: { is_active: true },
       orderBy: { start_time: 'asc' }
@@ -208,36 +237,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare generation
-    const slotsToCreate: any[] = [];
-    const skippedAssignments: any[] = [];
-    const usedRooms = new Set<number>();
-    const usedTrainers = new Set<number>();
+    // ========== SCHEDULING ALGORITHM ==========
 
-    // Track scheduling: Map<"day-period-room", true> and Map<"day-period-trainer", true>
+    const slotsToCreate: Array<{
+      id: string;
+      term_id: number;
+      class_id: number;
+      subject_id: number;
+      employee_id: number;
+      room_id: number;
+      lesson_period_id: number;
+      day_of_week: number;
+      status: string;
+    }> = [];
+
+    const skippedAssignments: Array<{
+      trainer_assignment_id: number;
+      subject_code: string;
+      subject_name: string;
+      class_code: string;
+      trainer_name: string;
+      scheduled: number;
+      requested: number;
+      reason: string;
+    }> = [];
+
+    // Track conflicts:
+    // - Room: Only one session per room per day-period
+    // - Trainer: Only one session per trainer per day-period
+    // - Class: Only one session per class per day-period (NEW!)
     const scheduledSlots = new Map<string, boolean>();
 
-    // Track trainer's classes per day to ensure minimum
-    const trainerDailyClasses = new Map<string, number>(); // key: "trainerId-day"
+    const isSlotAvailable = (
+      day: number,
+      periodId: number,
+      roomId: number,
+      trainerId: number,
+      classId: number
+    ): boolean => {
+      const roomKey = `room-${day}-${periodId}-${roomId}`;
+      const trainerKey = `trainer-${day}-${periodId}-${trainerId}`;
+      const classKey = `class-${day}-${periodId}-${classId}`;
 
-    // Helper function to check if a slot is available
-    const isSlotAvailable = (day: number, periodId: number, roomId: number, trainerId: number): boolean => {
-      const roomKey = `${day}-${periodId}-room-${roomId}`;
-      const trainerKey = `${day}-${periodId}-trainer-${trainerId}`;
-      
-      return !scheduledSlots.has(roomKey) && !scheduledSlots.has(trainerKey);
+      return (
+        !scheduledSlots.has(roomKey) &&
+        !scheduledSlots.has(trainerKey) &&
+        !scheduledSlots.has(classKey)
+      );
     };
 
-    // Helper function to mark slot as used
-    const markSlotUsed = (day: number, periodId: number, roomId: number, trainerId: number) => {
-      const roomKey = `${day}-${periodId}-room-${roomId}`;
-      const trainerKey = `${day}-${periodId}-trainer-${trainerId}`;
-      
-      scheduledSlots.set(roomKey, true);
-      scheduledSlots.set(trainerKey, true);
+    const markSlotUsed = (
+      day: number,
+      periodId: number,
+      roomId: number,
+      trainerId: number,
+      classId: number
+    ) => {
+      scheduledSlots.set(`room-${day}-${periodId}-${roomId}`, true);
+      scheduledSlots.set(`trainer-${day}-${periodId}-${trainerId}`, true);
+      scheduledSlots.set(`class-${day}-${periodId}-${classId}`, true);
     };
 
-    // Helper function to shuffle array (for randomization)
     const shuffleArray = <T,>(array: T[]): T[] => {
       const shuffled = [...array];
       for (let i = shuffled.length - 1; i > 0; i--) {
@@ -247,15 +307,22 @@ export async function POST(request: NextRequest) {
       return shuffled;
     };
 
-    // ✅ UPDATED ALGORITHM: Process each trainer assignment
-    for (const trainerAssignment of trainerAssignments) {
-      const classSubject = trainerAssignment.classsubjects;
-      const subjectData = classSubject.subjects;
-      const classData = classSubject.classes;
-      const trainer = trainerAssignment.users;
-      const trainerId = trainer.id;
+    // Track stats
+    const usedRooms = new Set<number>();
+    const usedTrainers = new Set<number>();
 
-      // Create a list of all possible slots (day-period combinations)
+    // Process each trainer assignment
+    for (const assignment of trainerAssignments) {
+      const classSubject = assignment.classsubjects;
+      const subject = classSubject.subjects;
+      const classData = classSubject.classes;
+      const trainer = assignment.users;
+
+      const trainerId = trainer.id;
+      const classId = classData.id;
+      const subjectId = subject.id;
+
+      // Build all possible day-period combinations
       const possibleSlots: Array<{ day: number; periodId: number }> = [];
       for (const day of workingDaysArray) {
         for (const period of lessonPeriods) {
@@ -263,129 +330,112 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Shuffle to add randomness
       const shuffledSlots = shuffleArray(possibleSlots);
 
-      // Try to schedule sessions_per_week sessions, spreading them across different days
       let sessionsScheduled = 0;
       const scheduledDays = new Set<number>();
 
-      // First pass: Try to schedule on different days
+      // First pass: Try to spread across different days
       for (const slot of shuffledSlots) {
         if (sessionsScheduled >= sessions_per_week) break;
 
-        if (scheduledDays.has(slot.day) && sessionsScheduled < sessions_per_week && scheduledDays.size < sessions_per_week) {
+        // Skip if already scheduled on this day (unless we need more sessions than days)
+        if (scheduledDays.has(slot.day) && scheduledDays.size < Math.min(sessions_per_week, workingDaysArray.length)) {
           continue;
         }
 
-        const period = lessonPeriods.find(p => p.id === slot.periodId);
-        if (!period) continue;
-
-        const availableRooms = rooms.filter(room => 
-          isSlotAvailable(slot.day, period.id, room.id, trainerId)
+        // Find an available room
+        const availableRooms = rooms.filter(room =>
+          isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
         );
 
         if (availableRooms.length === 0) continue;
 
-        const randomRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
+        const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
         slotsToCreate.push({
           id: randomUUID(),
           term_id: term_id,
-          class_id: classData.id,
-          subject_id: subjectData.id,
+          class_id: classId,
+          subject_id: subjectId,
           employee_id: trainerId,
-          room_id: randomRoom.id,
-          lesson_period_id: period.id,
+          room_id: selectedRoom.id,
+          lesson_period_id: slot.periodId,
           day_of_week: slot.day,
           status: 'scheduled'
         });
 
-        markSlotUsed(slot.day, period.id, randomRoom.id, trainerId);
+        markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
         scheduledDays.add(slot.day);
-
-        const trainerDayKey = `${trainerId}-${slot.day}`;
-        trainerDailyClasses.set(
-          trainerDayKey, 
-          (trainerDailyClasses.get(trainerDayKey) || 0) + 1
-        );
-
-        usedRooms.add(randomRoom.id);
+        usedRooms.add(selectedRoom.id);
         usedTrainers.add(trainerId);
 
         sessionsScheduled++;
       }
 
-      // Second pass: If we couldn't schedule all sessions on different days, fill remaining slots
+      // Second pass: Fill remaining if needed (allow same day)
       if (sessionsScheduled < sessions_per_week) {
         for (const slot of shuffledSlots) {
           if (sessionsScheduled >= sessions_per_week) break;
 
-          const period = lessonPeriods.find(p => p.id === slot.periodId);
-          if (!period) continue;
-
-          const availableRooms = rooms.filter(room => 
-            isSlotAvailable(slot.day, period.id, room.id, trainerId)
+          const availableRooms = rooms.filter(room =>
+            isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
           );
 
           if (availableRooms.length === 0) continue;
 
-          const randomRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
+          const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
           slotsToCreate.push({
             id: randomUUID(),
             term_id: term_id,
-            class_id: classData.id,
-            subject_id: subjectData.id,
+            class_id: classId,
+            subject_id: subjectId,
             employee_id: trainerId,
-            room_id: randomRoom.id,
-            lesson_period_id: period.id,
+            room_id: selectedRoom.id,
+            lesson_period_id: slot.periodId,
             day_of_week: slot.day,
             status: 'scheduled'
           });
 
-          markSlotUsed(slot.day, period.id, randomRoom.id, trainerId);
-
-          const trainerDayKey = `${trainerId}-${slot.day}`;
-          trainerDailyClasses.set(
-            trainerDayKey, 
-            (trainerDailyClasses.get(trainerDayKey) || 0) + 1
-          );
-
-          usedRooms.add(randomRoom.id);
+          markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
+          usedRooms.add(selectedRoom.id);
           usedTrainers.add(trainerId);
 
           sessionsScheduled++;
         }
       }
 
-      // If still couldn't schedule all sessions
+      // Track if we couldn't schedule all sessions
       if (sessionsScheduled < sessions_per_week) {
         skippedAssignments.push({
-          assignment_id: trainerAssignment.id,
-          subject_id: subjectData.id,
-          subject_code: subjectData.code,
-          subject_name: subjectData.name,
-          class_name: classData.name,
+          trainer_assignment_id: assignment.id,
+          subject_code: subject.code,
+          subject_name: subject.name,
           class_code: classData.code,
           trainer_name: trainer.name,
-          trainer_id: trainerId,
           scheduled: sessionsScheduled,
           requested: sessions_per_week,
-          reason: `Could only schedule ${sessionsScheduled} of ${sessions_per_week} sessions (no available slots)`
+          reason: `Only ${sessionsScheduled}/${sessions_per_week} sessions scheduled (no available slots)`
         });
       }
     }
 
-    // Create all timetable slots in database
+    // Insert all slots
     if (slotsToCreate.length > 0) {
       await db.timetableslots.createMany({
         data: slotsToCreate
       });
     }
 
-    // Prepare response
-    const result = {
+    console.log('📅 Timetable generation complete:', {
+      slots_created: slotsToCreate.length,
+      trainers: usedTrainers.size,
+      rooms: usedRooms.size,
+      skipped: skippedAssignments.length
+    });
+
+    return NextResponse.json({
       success: true,
       message: `Successfully generated timetable for ${term.name}`,
       stats: {
@@ -394,35 +444,18 @@ export async function POST(request: NextRequest) {
         assignments_fully_scheduled: trainerAssignments.length - skippedAssignments.length,
         trainers_assigned: usedTrainers.size,
         rooms_used: usedRooms.size,
+        subjects_scheduled: new Set(slotsToCreate.map(s => s.subject_id)).size,
         assignments_partially_scheduled: skippedAssignments.length
       },
-      skipped_assignments: skippedAssignments
-    };
+      skipped_assignments: skippedAssignments.length > 0 ? skippedAssignments : undefined
+    }, { status: 201 });
 
-    return NextResponse.json(result, { status: 201 });
-
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error generating timetable:', error);
-    
-    if (error instanceof Error) {
-      if (error.message.includes('jwt expired')) {
-        return NextResponse.json(
-          { error: 'Token expired' },
-          { status: 401 }
-        );
-      }
-      if (error.message.includes('invalid token')) {
-        return NextResponse.json(
-          { error: 'Invalid token' },
-          { status: 401 }
-        );
-      }
-    }
-    
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to generate timetable',
-        details: error.message 
+        details: error instanceof Error ? error.message : String(error)
       },
       { status: 500 }
     );

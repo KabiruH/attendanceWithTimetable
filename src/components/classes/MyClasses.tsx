@@ -27,6 +27,7 @@ interface Subject {
   code: string;
   credit_hours?: number | null;
   is_assigned: boolean;
+  is_assigned_elsewhere?: boolean; // NEW: indicates subject is taken in another class
   class_subject_id: number;
 }
 
@@ -79,10 +80,10 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
       try {
         const response = await fetch('/api/terms?is_active=true');
         if (!response.ok) throw new Error('Failed to fetch active term');
-        
+
         const data = await response.json();
         const activeTerm = data.data?.[0];
-        
+
         if (activeTerm) {
           setTermId(activeTerm.id);
         } else {
@@ -105,26 +106,57 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
   }, [userId, termId]);
 
   const fetchMyClasses = async () => {
-    if (!termId) return; // ✅ Guard against undefined termId
+    if (!termId) return;
 
     try {
       setIsLoading(true);
-      setError(''); // Clear previous errors
+      setError('');
+
+      // 1️⃣ Fetch assigned classes
       const response = await fetch(`/api/trainers/${userId}/my-classes?term_id=${termId}`);
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to fetch assigned classes');
       }
-      
-      const data = await response.json();
-      setAssignments(data);
+
+      const data: ClassAssignment[] = await response.json();
+
+      // 2️⃣ For each class, fetch its subjects WITH trainer assignment status
+      const classesWithSubjects = await Promise.all(
+        data.map(async (assignment) => {
+          try {
+            const subjectsRes = await fetch(
+              `/api/class-subjects/${assignment.class_id}?term_id=${termId}&trainer_id=${userId}`
+            );
+
+            if (!subjectsRes.ok) {
+              console.warn("Failed to fetch subjects for class:", assignment.class_id);
+              return { ...assignment, subjects: [] };
+            }
+
+            const subjectsData = await subjectsRes.json();
+
+            return {
+              ...assignment,
+              subjects: subjectsData.data || [],
+            };
+          } catch (err) {
+            console.error("Error fetching subjects:", err);
+            return { ...assignment, subjects: [] };
+          }
+        })
+      );
+
+      // 3️⃣ Update state
+      setAssignments(classesWithSubjects);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to load classes');
     } finally {
       setIsLoading(false);
     }
   };
+
 
   const handleRemoveClass = (classId: number) => {
     setRemovingClassId(classId);
@@ -145,7 +177,7 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
 
       await fetchMyClasses();
       onClassRemoved?.();
-      
+
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to remove class');
     } finally {
@@ -164,52 +196,111 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
     setExpandedClasses(newExpanded);
   };
 
-  const handleSubjectToggle = async (classId: number, subjectId: number, classSubjectId: number, currentState: boolean) => {
-    if (!termId) return; // ✅ Guard against undefined termId
+const handleSubjectToggle = async (
+  classId: number, 
+  subjectId: number, 
+  classSubjectId: number, 
+  currentState: boolean,
+  isAssignedElsewhere?: boolean
+) => {
+  if (!termId) return;
 
-    setUpdatingSubjects(prev => new Set(prev).add(classId));
+  // If trying to activate and it's assigned elsewhere, show error
+  if (!currentState && isAssignedElsewhere) {
+    setError(`This subject is already assigned to you in another class for this term. You can only teach a subject once per term.`);
+    return;
+  }
 
-    try {
-      const response = await fetch(`/api/trainers/${userId}/subject-assignments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          term_id: termId,
-          class_subject_id: classSubjectId,
-          subject_id: subjectId,
-          is_active: !currentState
-        })
-      });
+  setUpdatingSubjects(prev => new Set(prev).add(classId));
+  setError('');
 
-      if (!response.ok) {
-        throw new Error('Failed to update subject assignment');
-      }
+  // Optimistic update - update UI immediately
+  const newState = !currentState;
+  setAssignments(prev => prev.map(assignment => {
+    if (assignment.class_id === classId) {
+      return {
+        ...assignment,
+        subjects: assignment.subjects.map(subject => 
+          subject.id === subjectId 
+            ? { ...subject, is_assigned: newState }
+            : subject
+        )
+      };
+    }
+    // If activating, mark this subject as "assigned elsewhere" in other classes
+    if (newState) {
+      return {
+        ...assignment,
+        subjects: assignment.subjects.map(subject =>
+          subject.id === subjectId
+            ? { ...subject, is_assigned_elsewhere: true }
+            : subject
+        )
+      };
+    } else {
+      // If deactivating, remove "assigned elsewhere" flag from other classes
+      return {
+        ...assignment,
+        subjects: assignment.subjects.map(subject =>
+          subject.id === subjectId
+            ? { ...subject, is_assigned_elsewhere: false }
+            : subject
+        )
+      };
+    }
+  }));
 
-      // Update local state
+  try {
+    const response = await fetch(`/api/trainers/${userId}/subject-assignments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term_id: termId,
+        class_subject_id: classSubjectId,
+        subject_id: subjectId,
+        is_active: newState
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      // Revert optimistic update on error
       setAssignments(prev => prev.map(assignment => {
         if (assignment.class_id === classId) {
           return {
             ...assignment,
             subjects: assignment.subjects.map(subject => 
               subject.id === subjectId 
-                ? { ...subject, is_assigned: !currentState }
+                ? { ...subject, is_assigned: currentState }
                 : subject
             )
           };
         }
-        return assignment;
+        // Revert "assigned elsewhere" flags
+        return {
+          ...assignment,
+          subjects: assignment.subjects.map(subject =>
+            subject.id === subjectId
+              ? { ...subject, is_assigned_elsewhere: currentState }
+              : subject
+          )
+        };
       }));
-
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to update subject');
-    } finally {
-      setUpdatingSubjects(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(classId);
-        return newSet;
-      });
+      
+      throw new Error(result.error || 'Failed to update subject assignment');
     }
-  };
+
+  } catch (error) {
+    setError(error instanceof Error ? error.message : 'Failed to update subject');
+  } finally {
+    setUpdatingSubjects(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(classId);
+      return newSet;
+    });
+  }
+};
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-KE', {
@@ -311,7 +402,7 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
                     </CardDescription>
                   )}
                 </CardHeader>
-                
+
                 <CardContent className="space-y-3">
                   <div className="flex items-center gap-4 text-sm text-muted-foreground">
                     <div className="flex items-center gap-1">
@@ -326,14 +417,14 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
 
                   {/* Subjects Section */}
                   {assignment.subjects.length > 0 && (
-                    <Collapsible 
+                    <Collapsible
                       open={isExpanded}
                       onOpenChange={() => toggleClassExpansion(assignment.class_id)}
                     >
                       <CollapsibleTrigger asChild>
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
+                        <Button
+                          variant="outline"
+                          size="sm"
                           className="w-full justify-between"
                         >
                           <div className="flex items-center gap-2">
@@ -347,28 +438,30 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
                           )}
                         </Button>
                       </CollapsibleTrigger>
-                      
+
                       <CollapsibleContent className="mt-3 space-y-2 p-3 bg-gray-50 rounded-md">
                         {updatingSubjects.has(assignment.class_id) && (
                           <div className="text-xs text-blue-600 mb-2">Updating subjects...</div>
                         )}
                         {assignment.subjects.map((subject) => (
-                          <div 
+                          <div
                             key={subject.id}
-                            className="flex items-start space-x-3 p-2 hover:bg-white rounded transition-colors"
+                            className={`flex items-start space-x-3 p-2 hover:bg-white rounded transition-colors ${subject.is_assigned_elsewhere ? 'opacity-60' : ''
+                              }`}
                           >
                             <Checkbox
                               id={`subject-${assignment.class_id}-${subject.id}`}
                               checked={subject.is_assigned}
-                              onCheckedChange={() => 
+                              onCheckedChange={() =>
                                 handleSubjectToggle(
-                                  assignment.class_id, 
+                                  assignment.class_id,
                                   subject.id,
                                   subject.class_subject_id,
-                                  subject.is_assigned
+                                  subject.is_assigned,
+                                  subject.is_assigned_elsewhere
                                 )
                               }
-                              disabled={updatingSubjects.has(assignment.class_id)}
+                              disabled={updatingSubjects.has(assignment.class_id) || subject.is_assigned_elsewhere}
                             />
                             <label
                               htmlFor={`subject-${assignment.class_id}-${subject.id}`}
@@ -382,11 +475,15 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
                                     {subject.credit_hours && ` • ${subject.credit_hours}h`}
                                   </div>
                                 </div>
-                                {!subject.is_assigned && (
+                                {subject.is_assigned_elsewhere ? (
+                                  <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-700">
+                                    Assigned in another class
+                                  </Badge>
+                                ) : !subject.is_assigned ? (
                                   <Badge variant="outline" className="text-xs">
                                     Not teaching
                                   </Badge>
-                                )}
+                                ) : null}
                               </div>
                             </label>
                           </div>
@@ -399,7 +496,7 @@ export default function MyClasses({ userId, termId: propTermId, showRemoveOption
                     <div className="text-xs text-muted-foreground mb-2">
                       Assigned: {formatDate(assignment.assigned_at)}
                     </div>
-                    
+
                     {assignment.lastAttendance ? (
                       <div className="space-y-1">
                         <div className="flex items-center gap-1 text-sm text-green-600">
