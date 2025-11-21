@@ -292,23 +292,21 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // ✅ Check if the subject is assigned to this class
-    const classSubject = await db.classsubjects.findUnique({
+    // ✅ Check if the subject is assigned to this class for this term
+    const classSubject = await db.classsubjects.findFirst({
       where: {
-        class_id_subject_id: {
-          class_id: class_id,
-          subject_id: subject_id
-        }
+        class_id: class_id,
+        subject_id: subject_id,
+        term_id: term_id
       }
     });
 
     if (!classSubject) {
       return NextResponse.json({
-        error: 'Subject not assigned to class',
-        details: `${subject.name} (${subject.code}) must be assigned to ${classRecord.name} before scheduling`
+        error: 'Subject not assigned to class for this term',
+        details: `${subject.name} (${subject.code}) must be assigned to ${classRecord.name} for ${term.name} before scheduling`
       }, { status: 400 });
     }
-
     // Check for conflicts (same room, same time, same day OR same trainer, same time, same day)
     const existingSlot = await db.timetableslots.findFirst({
       where: {

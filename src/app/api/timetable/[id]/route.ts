@@ -246,27 +246,27 @@ export async function PUT(
     
     if (status !== undefined) updateData.status = status;
 
-    // ✅ Validate class-subject relationship if being changed
-    if (class_id !== undefined || subject_id !== undefined) {
-      const checkClassId = class_id ?? existingSlot.class_id;
-      const checkSubjectId = subject_id ?? existingSlot.subject_id;
+  // ✅ Validate class-subject relationship if being changed
+if (class_id !== undefined || subject_id !== undefined) {
+  const checkClassId = class_id ?? existingSlot.class_id;
+  const checkSubjectId = subject_id ?? existingSlot.subject_id;
+  const checkTermId = term_id ?? existingSlot.term_id;
 
-      const classSubject = await db.classsubjects.findUnique({
-        where: {
-          class_id_subject_id: {
-            class_id: checkClassId,
-            subject_id: checkSubjectId
-          }
-        }
-      });
-
-      if (!classSubject) {
-        return NextResponse.json({
-          error: 'Invalid class-subject combination',
-          details: 'The subject must be assigned to the class'
-        }, { status: 400 });
-      }
+  const classSubject = await db.classsubjects.findFirst({
+    where: {
+      class_id: checkClassId,
+      subject_id: checkSubjectId,
+      term_id: checkTermId
     }
+  });
+
+  if (!classSubject) {
+    return NextResponse.json({
+      error: 'Invalid class-subject combination',
+      details: 'The subject must be assigned to the class for this term'
+    }, { status: 400 });
+  }
+}
 
     // Check for conflicts if rescheduling
     if (room_id !== undefined || lesson_period_id !== undefined || day_of_week !== undefined) {

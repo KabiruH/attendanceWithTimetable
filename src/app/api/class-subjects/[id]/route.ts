@@ -236,8 +236,7 @@ export async function DELETE(
       await db.classsubjects.update({
         where: { id: classSubjectId },
         data: { 
-          is_active: false,
-          term_id: null 
+          is_active: false
         }
       });
     }

@@ -9,7 +9,7 @@ async function verifyAuth() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
       return { error: 'No token found', status: 401 };
     }
@@ -147,11 +147,11 @@ export async function POST(
     const body = await request.json();
     const { subjectId, term_id } = body; // ✅ ADD term_id
 
-    console.log('🔍 Admin adding subject - received:', { 
-      subjectId, 
-      term_id, 
+    console.log('🔍 Admin adding subject - received:', {
+      subjectId,
+      term_id,
       classId,
-      term_id_type: typeof term_id 
+      term_id_type: typeof term_id
     });
 
     if (!subjectId) {
@@ -161,39 +161,28 @@ export async function POST(
       );
     }
 
-    // ✅ Check if term_id was provided
     if (!term_id) {
-      console.warn('⚠️ Warning: No term_id provided when adding subject to class');
+      return NextResponse.json(
+        { error: 'Term ID is required' },
+        { status: 400 }
+      );
     }
 
-    // ✅ UPDATED: Check for existing with term consideration
-    let existing;
-    if (term_id) {
-      // If term_id provided, check for this specific class-subject-term combination
-      existing = await db.classsubjects.findFirst({
-        where: {
-          class_id: classId,
-          subject_id: subjectId,
-          term_id: term_id
-        },
-      });
-    } else {
-      // If no term_id, check using the unique constraint
-      existing = await db.classsubjects.findUnique({
-        where: {
-          class_id_subject_id: {
-            class_id: classId,
-            subject_id: subjectId,
-          },
-        },
-      });
-    }
+    // Check for existing class-subject-term combination
+    const existing = await db.classsubjects.findFirst({
+      where: {
+        class_id: classId,
+        subject_id: subjectId,
+        term_id: term_id || null
+      },
+    });
 
     if (existing) {
       return NextResponse.json(
-        { error: term_id 
-          ? 'Subject already assigned to this class for this term' 
-          : 'Subject already assigned to this class' 
+        {
+          error: term_id
+            ? 'Subject already assigned to this class for this term'
+            : 'Subject already assigned to this class'
         },
         { status: 400 }
       );
