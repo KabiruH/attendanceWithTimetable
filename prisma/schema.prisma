@@ -103,6 +103,7 @@ model classes {
   termclasses             termclasses[]
   timetableslots          timetableslots[]
   trainerclassassignments trainerclassassignments[]
+  subjectassignmentlog    subjectassignmentlog[]    // ADD THIS
 
   @@index([code], map: "Classes_code_idx")
   @@index([department], map: "Classes_department_idx")
@@ -236,6 +237,7 @@ model subjects {
   classsubjects             classsubjects[]
   timetableslots            timetableslots[]
   trainersubjectassignments trainersubjectassignments[]
+  subjectassignmentlog      subjectassignmentlog[]      // ADD THIS
 
   @@index([code], map: "Subjects_code_idx")
   @@index([department], map: "Subjects_department_idx")
@@ -342,6 +344,11 @@ model users {
   name                        String                       @db.VarChar(100)
   id_number                   String                       @unique(map: "Users_id_number_key") @db.VarChar(50)
   role                        String                       @db.VarChar(20)
+  has_timetable_admin         Boolean   @default(false)
+  is_blocked                  Boolean   @default(false)
+  blocked_at                  DateTime?
+  blocked_by                  Int?
+  blocked_reason              String?
   phone_number                String                       @db.VarChar(20)
   department                  String?                      @db.VarChar(20)
   gender                      String                       @db.VarChar(10)
@@ -361,6 +368,18 @@ model users {
   trainersubjectassignments   trainersubjectassignments[]
   webauthncredentialchallenge webauthncredentialchallenge?
   webauthncredentials         webauthncredentials[]
+  
+  // Block relations - changed User to users
+  blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
+  users_blocked           users[]    @relation("BlockedUsers")
+  
+  // Assignment log relations
+  admin_assignments       subjectassignmentlog[] @relation("AdminAssignments")
+  trainer_selections      subjectassignmentlog[] @relation("TrainerSelections")
+  
+  // Block log relations
+  block_logs_as_user      userblocklog[] @relation("BlockedUser")
+  block_logs_as_blocker   userblocklog[] @relation("BlockerUser")
 
   @@index([id_number], map: "Users_id_number_idx")
 }
@@ -388,3 +407,46 @@ model webauthncredentialchallenge {
 
       @@index([userId], map: "WebAuthnCredentials_userId_fkey")
     }
+
+ model userblocklog {
+  id              Int       @id @default(autoincrement())
+  user_id         Int
+  blocked_by      Int
+  action          String    // 'blocked' or 'unblocked'
+  reason          String?
+  created_at      DateTime  @default(now())
+  
+  // Changed User to users
+  user            users     @relation("BlockedUser", fields: [user_id], references: [id], onDelete: Cascade)
+  blocked_by_user users     @relation("BlockerUser", fields: [blocked_by], references: [id], onDelete: Cascade)
+}
+
+model timetablesettings {
+  id                          Int       @id @default(autoincrement())
+  subject_selection_deadline  DateTime?
+  deadline_enabled            Boolean   @default(false)
+  allow_admin_assignment      Boolean   @default(false)
+  created_at                  DateTime  @default(now())
+  updated_at                  DateTime  @updatedAt
+}
+
+model subjectassignmentlog {
+  id              Int       @id @default(autoincrement())
+  trainer_id      Int
+  subject_id      Int
+  class_id        Int
+  assigned_by     Int
+  assignment_type String    // 'self' or 'admin'
+  created_at      DateTime  @default(now())
+  
+  // Changed User, Subject, Class to users, subjects, classes
+  trainer         users     @relation("TrainerSelections", fields: [trainer_id], references: [id], onDelete: Cascade)
+  assigned_by_user users    @relation("AdminAssignments", fields: [assigned_by], references: [id], onDelete: Cascade)
+  subject         subjects  @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  class           classes   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  
+  @@index([trainer_id], map: "SubjectAssignmentLog_trainer_id_idx")
+  @@index([subject_id], map: "SubjectAssignmentLog_subject_id_idx")
+  @@index([class_id], map: "SubjectAssignmentLog_class_id_idx")
+  @@index([assigned_by], map: "SubjectAssignmentLog_assigned_by_idx")
+}

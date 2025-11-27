@@ -150,7 +150,7 @@ export default function TimetablePage() {
   // Fetch all trainers for print dialog
   const fetchAllTrainers = async () => {
     try {
-      const response = await fetch('/api/users?role=trainer');
+      const response = await fetch('/api/users?role=employee');
       if (!response.ok) throw new Error('Failed to fetch trainers');
       const data = await response.json();
       

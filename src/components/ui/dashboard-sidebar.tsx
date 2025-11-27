@@ -1,3 +1,4 @@
+// components/DashboardSidebar.tsx
 'use client';
 import {
   Sidebar,
@@ -10,13 +11,11 @@ import {
   LayoutDashboard, 
   ClipboardCheck, 
   FileBarChart, 
-  BookOpen, 
+  User as UserIcon, 
   Users, 
   LogOut, 
-  User as UserIcon, 
   Shield, 
   Calendar, 
-  Clock,
   Settings,
   ChevronDown,
   ChevronRight,
@@ -25,7 +24,7 @@ import {
   DoorOpen,
   ClockIcon,
   CalendarDays,
-  UserCog
+  BookOpen,
 } from "lucide-react";
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -37,6 +36,7 @@ interface User {
   email: string;
   role: string;
   name: string;
+  has_timetable_admin?: boolean;
 }
 
 type NavItem = {
@@ -59,6 +59,7 @@ export function DashboardSidebar() {
   const { toast } = useToast();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isTimetableSetupOpen, setIsTimetableSetupOpen] = useState(false);
   const { setOpen, isMobile } = useSidebar();
 
   useEffect(() => {
@@ -87,9 +88,14 @@ export function DashboardSidebar() {
 
   // Auto-expand admin menu if on an admin page
   useEffect(() => {
-    const adminPaths = ['/departments', '/subjects', '/classes', '/term', '/rooms', '/lesson-periods', '/timetable', '/users', '/login-logs'];
+    const adminPaths = ['/departments', '/users', '/login-logs'];
     if (adminPaths.some(path => pathname.startsWith(path))) {
       setIsAdminOpen(true);
+    }
+
+    const timetablePaths = ['/timetable', '/rooms', '/term', '/subjects', '/lesson-periods', '/classes'];
+    if (timetablePaths.some(path => pathname.startsWith(path))) {
+      setIsTimetableSetupOpen(true);
     }
   }, [pathname]);
 
@@ -146,18 +152,11 @@ export function DashboardSidebar() {
       type: 'link'
     },
     {
-      label: 'Classes',
-      icon: <BookOpen size={20} />,
-      href: '/classes',
-      type: 'link'
-    },
-    {
       label: 'Profile',
       icon: <UserIcon size={20} />,
       href: '/profile',
       type: 'link'
     },
-   
     {
       label: 'Logout',
       icon: <LogOut size={20} />,
@@ -167,37 +166,12 @@ export function DashboardSidebar() {
     }
   ];
 
-  // Add Timetable nav item for trainers/employees (appears after Classes, before Profile)
-  const getNavItemsWithTimetable = () => {
-    if (currentUser?.role === 'trainer' || currentUser?.role === 'employee') {
-      const items = [...baseNavItems];
-      // Insert Timetable after Classes (index 3) and before Profile (index 4)
-      items.splice(4, 0, {
-        label: 'My Timetable',
-        icon: <CalendarDays size={20} />,
-        href: '/timetable',
-        type: 'link'
-      });
-      return items;
-    }
-    return baseNavItems;
-  };
-
-  const adminSubMenuItems: SubMenuItem[] = [
+  // Timetable Setup menu items (for admin and timetable admins)
+  const timetableSetupItems: SubMenuItem[] = [
     {
-      label: 'Departments',
-      icon: <Building2 size={18} />,
-      href: '/departments'
-    },
-     {
-      label: 'Subjects',
-      icon: <BookOpen size={18} />,
-      href: '/subjects'
-    },
-     {
-      label: 'Classes',
-      icon: <GraduationCap size={18} />,
-      href: '/classes'
+      label: 'Timetable',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable'
     },
     {
       label: 'Terms',
@@ -215,10 +189,24 @@ export function DashboardSidebar() {
       href: '/lesson-periods'
     },
     {
-      label: 'Timetable',
-      icon: <CalendarDays size={18} />,
-      href: '/timetable'
-    }, 
+      label: 'Subjects',
+      icon: <BookOpen size={18} />,
+      href: '/subjects'
+    },
+    {
+      label: 'Classes',
+      icon: <GraduationCap size={18} />,
+      href: '/classes'
+    },
+  ];
+
+  // Admin-only menu items
+  const adminOnlyItems: SubMenuItem[] = [
+    {
+      label: 'Departments',
+      icon: <Building2 size={18} />,
+      href: '/departments'
+    },
     {
       label: 'Employees',
       icon: <Users size={18} />,
@@ -229,16 +217,20 @@ export function DashboardSidebar() {
       icon: <Shield size={18} />,
       href: '/login-logs'
     },
- 
+    {
+      label: 'Timetable Settings',
+      icon: <Settings size={18} />,
+      href: '/timetable/settings'
+    },
   ];
 
   if (!currentUser) {
     return null;
   }
 
-  const navItemsToRender = getNavItemsWithTimetable();
-  const itemsBeforeAdmin = currentUser?.role === 'admin' ? navItemsToRender.slice(0, 4) : navItemsToRender.slice(0, -1); // All except Logout
-  const itemsAfterAdmin = currentUser?.role === 'admin' ? navItemsToRender.slice(4) : navItemsToRender.slice(-1); // Only Logout
+  const isAdmin = currentUser?.role === 'admin';
+  const hasTimetableAdmin = currentUser?.has_timetable_admin || false;
+  const isRegularEmployee = currentUser?.role === 'employee' && !hasTimetableAdmin && !isAdmin;
 
   return (
     <Sidebar className="mt-16 bg-slate-900 border-r border-slate-700">
@@ -246,59 +238,111 @@ export function DashboardSidebar() {
         <SidebarGroup>
           <nav className="p-4">
             <ul className="space-y-2">
-              {/* Nav items before Admin menu */}
-              {itemsBeforeAdmin.map((item) => (
+              {/* Base navigation items */}
+              {baseNavItems.slice(0, 3).map((item) => (
                 <li key={item.href}>
-                  {item.type === 'link' ? (
-                    <Link
-                      href={item.href}
-                      onClick={handleNavClick}
-                      className={`flex items-center space-x-3 p-3 rounded-lg
-                        transition-all duration-200
-                        ${pathname === item.href
-                          ? 'bg-blue-600 text-white font-semibold shadow-lg'
-                          : 'text-black hover:bg-blue-500 hover:text-white'
-                        }`}
-                    >
-                      <span className="transition-transform duration-200 hover:scale-110">
-                        {item.icon}
-                      </span>
-                      <span className="font-medium">{item.label}</span>
-                    </Link>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        item.action?.();
-                        handleNavClick();
-                      }}
-                      className="w-full flex items-center space-x-3 p-3 rounded-lg
-                        text-black hover:bg-red-600 hover:text-white
-                        transition-all duration-200 text-left"
-                    >
-                      <span className="transition-transform duration-200 hover:scale-110">
-                        {item.icon}
-                      </span>
-                      <span className="font-medium">{item.label}</span>
-                    </button>
-                  )}
+                  <Link
+                    href={item.href}
+                    onClick={handleNavClick}
+                    className={`flex items-center space-x-3 p-3 rounded-lg
+                      transition-all duration-200
+                      ${pathname === item.href
+                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                        : 'text-black hover:bg-blue-500 hover:text-white'
+                      }`}
+                  >
+                    <span className="transition-transform duration-200 hover:scale-110">
+                      {item.icon}
+                    </span>
+                    <span className="font-medium">{item.label}</span>
+                  </Link>
                 </li>
               ))}
 
-              {/* Admin Settings Dropdown (Admin Only) */}
-              {currentUser?.role === 'admin' && (
+              {/* My Timetable - For Regular Employees Only */}
+              {isRegularEmployee && (
+                <li>
+                  <Link
+                    href="/timetable"
+                    onClick={handleNavClick}
+                    className={`flex items-center space-x-3 p-3 rounded-lg
+                      transition-all duration-200
+                      ${pathname === '/timetable'
+                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                        : 'text-black hover:bg-blue-500 hover:text-white'
+                      }`}
+                  >
+                    <span className="transition-transform duration-200 hover:scale-110">
+                      <CalendarDays size={20} />
+                    </span>
+                    <span className="font-medium">My Timetable</span>
+                  </Link>
+                </li>
+              )}
+
+              {/* Timetable Setup Dropdown (Admin OR Timetable Admin) */}
+              {(isAdmin || hasTimetableAdmin) && (
+                <li>
+                  <button
+                    onClick={() => setIsTimetableSetupOpen(!isTimetableSetupOpen)}
+                    className={`w-full flex items-center justify-between space-x-3 p-3 rounded-lg
+                      transition-all duration-200 text-left
+                      ${timetableSetupItems.some(item => pathname.startsWith(item.href))
+                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                        : 'text-black hover:bg-blue-500 hover:text-white'
+                      }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <CalendarDays size={20} />
+                      <span className="font-medium">Timetable Setup</span>
+                    </div>
+                    {isTimetableSetupOpen ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )}
+                  </button>
+
+                  {/* Timetable Setup Submenu */}
+                  {isTimetableSetupOpen && (
+                    <ul className="mt-1 ml-4 space-y-1 border-l-2 border-slate-700 pl-3">
+                      {timetableSetupItems.map((subItem) => (
+                        <li key={subItem.href}>
+                          <Link
+                            href={subItem.href}
+                            onClick={handleNavClick}
+                            className={`flex items-center space-x-2 p-2 rounded-lg text-sm
+                              transition-all duration-200
+                              ${pathname === subItem.href || pathname.startsWith(subItem.href)
+                                ? 'bg-blue-500 text-white font-medium'
+                                : 'text-black hover:bg-blue-400 hover:text-white'
+                              }`}
+                          >
+                            <span>{subItem.icon}</span>
+                            <span>{subItem.label}</span>
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              )}
+
+              {/* Admin Settings Dropdown (Full Admin Only) */}
+              {isAdmin && (
                 <li>
                   <button
                     onClick={() => setIsAdminOpen(!isAdminOpen)}
                     className={`w-full flex items-center justify-between space-x-3 p-3 rounded-lg
                       transition-all duration-200 text-left
-                      ${adminSubMenuItems.some(item => pathname.startsWith(item.href))
+                      ${adminOnlyItems.some(item => pathname.startsWith(item.href))
                         ? 'bg-blue-600 text-white font-semibold shadow-lg'
                         : 'text-black hover:bg-blue-500 hover:text-white'
                       }`}
                   >
                     <div className="flex items-center space-x-3">
                       <Settings size={20} />
-                      <span className="font-medium">Admin Setup</span>
+                      <span className="font-medium">Admin Settings</span>
                     </div>
                     {isAdminOpen ? (
                       <ChevronDown size={16} />
@@ -307,10 +351,10 @@ export function DashboardSidebar() {
                     )}
                   </button>
 
-                  {/* Submenu */}
+                  {/* Admin Submenu */}
                   {isAdminOpen && (
                     <ul className="mt-1 ml-4 space-y-1 border-l-2 border-slate-700 pl-3">
-                      {adminSubMenuItems.map((subItem) => (
+                      {adminOnlyItems.map((subItem) => (
                         <li key={subItem.href}>
                           <Link
                             href={subItem.href}
@@ -333,7 +377,7 @@ export function DashboardSidebar() {
               )}
 
               {/* Profile and Logout */}
-              {itemsAfterAdmin.map((item) => (
+              {baseNavItems.slice(3).map((item) => (
                 <li key={item.href}>
                   {item.type === 'link' ? (
                     <Link

@@ -1,3 +1,4 @@
+// app/classes/page.tsx
 'use client';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
