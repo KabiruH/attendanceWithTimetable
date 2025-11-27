@@ -167,6 +167,22 @@ export function DashboardSidebar() {
     }
   ];
 
+  // Add Timetable nav item for trainers/employees (appears after Classes, before Profile)
+  const getNavItemsWithTimetable = () => {
+    if (currentUser?.role === 'trainer' || currentUser?.role === 'employee') {
+      const items = [...baseNavItems];
+      // Insert Timetable after Classes (index 3) and before Profile (index 4)
+      items.splice(4, 0, {
+        label: 'My Timetable',
+        icon: <CalendarDays size={20} />,
+        href: '/timetable',
+        type: 'link'
+      });
+      return items;
+    }
+    return baseNavItems;
+  };
+
   const adminSubMenuItems: SubMenuItem[] = [
     {
       label: 'Departments',
@@ -220,29 +236,51 @@ export function DashboardSidebar() {
     return null;
   }
 
+  const navItemsToRender = getNavItemsWithTimetable();
+  const itemsBeforeAdmin = currentUser?.role === 'admin' ? navItemsToRender.slice(0, 4) : navItemsToRender.slice(0, -1); // All except Logout
+  const itemsAfterAdmin = currentUser?.role === 'admin' ? navItemsToRender.slice(4) : navItemsToRender.slice(-1); // Only Logout
+
   return (
     <Sidebar className="mt-16 bg-slate-900 border-r border-slate-700">
       <SidebarContent>
         <SidebarGroup>
           <nav className="p-4">
             <ul className="space-y-2">
-              {baseNavItems.slice(0, 4).map((item) => (
+              {/* Nav items before Admin menu */}
+              {itemsBeforeAdmin.map((item) => (
                 <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    onClick={handleNavClick}
-                    className={`flex items-center space-x-3 p-3 rounded-lg
-                      transition-all duration-200
-                      ${pathname === item.href
-                        ? 'bg-blue-600 text-white font-semibold shadow-lg'
-                        : 'text-black hover:bg-blue-500 hover:text-white'
-                      }`}
-                  >
-                    <span className="transition-transform duration-200 hover:scale-110">
-                      {item.icon}
-                    </span>
-                    <span className="font-medium">{item.label}</span>
-                  </Link>
+                  {item.type === 'link' ? (
+                    <Link
+                      href={item.href}
+                      onClick={handleNavClick}
+                      className={`flex items-center space-x-3 p-3 rounded-lg
+                        transition-all duration-200
+                        ${pathname === item.href
+                          ? 'bg-blue-600 text-white font-semibold shadow-lg'
+                          : 'text-black hover:bg-blue-500 hover:text-white'
+                        }`}
+                    >
+                      <span className="transition-transform duration-200 hover:scale-110">
+                        {item.icon}
+                      </span>
+                      <span className="font-medium">{item.label}</span>
+                    </Link>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        item.action?.();
+                        handleNavClick();
+                      }}
+                      className="w-full flex items-center space-x-3 p-3 rounded-lg
+                        text-black hover:bg-red-600 hover:text-white
+                        transition-all duration-200 text-left"
+                    >
+                      <span className="transition-transform duration-200 hover:scale-110">
+                        {item.icon}
+                      </span>
+                      <span className="font-medium">{item.label}</span>
+                    </button>
+                  )}
                 </li>
               ))}
 
@@ -295,7 +333,7 @@ export function DashboardSidebar() {
               )}
 
               {/* Profile and Logout */}
-              {baseNavItems.slice(4).map((item) => (
+              {itemsAfterAdmin.map((item) => (
                 <li key={item.href}>
                   {item.type === 'link' ? (
                     <Link
