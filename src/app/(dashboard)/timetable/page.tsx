@@ -1,13 +1,17 @@
 // app/timetable/page.tsx
 'use client';
 import { useState, useEffect } from 'react';
-import { Button } from "@/components/ui/button";
-import { PlusCircle, Calendar, Filter, X, BookOpen } from "lucide-react";
 import TimetableGrid from '@/components/timetable/TimetableGrid';
 import WeekNavigator from '@/components/timetable/WeekNavigator';
 import GenerateTimetableDialog from '@/components/timetable/GenerateTimetableDialog';
 import CreateSlotDialog from '@/components/timetable/CreateSlotDialog';
 import SlotDetailsDialog from '@/components/timetable/SlotDetailsDialog';
+import TimetableHeader from '@/components/timetable/TimetableHeader';
+import TermSelector from '@/components/timetable/TermSelector';
+import TimetableFilters from '@/components/timetable/TimetableFilters';
+import ActiveFiltersDisplay from '@/components/timetable/ActiveFiltersDisplay';
+import PrintableTimetable from '@/components/timetable/PrintableTimetable';
+import MasterTimetablePrint from '@/components/timetable/MasterTimetablePrint';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,23 +22,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Separator } from "@/components/ui/separator";
 import { TimetableSlot } from '@/lib/types/timetable';
+import { Printer, FileText } from "lucide-react";
+import { Button } from '@/components/ui/button';
 
 interface User {
   id: number;
@@ -50,7 +41,6 @@ interface Term {
   end_date: string;
   is_active: boolean;
 }
-
 
 export default function TimetablePage() {
   // User and auth state
@@ -71,6 +61,9 @@ export default function TimetablePage() {
   const [selectedSlot, setSelectedSlot] = useState<TimetableSlot | null>(null);
   const [isSlotDetailsOpen, setIsSlotDetailsOpen] = useState(false);
 
+  // Print mode state
+  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped'>('none');
+
   // Delete confirmation
   const [deletingSlot, setDeletingSlot] = useState<TimetableSlot | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -83,11 +76,16 @@ export default function TimetablePage() {
   const [filterDepartment, setFilterDepartment] = useState<string | null>(null);
   const [filterClass, setFilterClass] = useState<number | null>(null);
   const [filterSubject, setFilterSubject] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<'all' | 'mine'>('all'); // For admin toggle
-  const [availableTrainers, setAvailableTrainers] = useState<Array<{id: number, name: string}>>([]);
+  const [viewMode, setViewMode] = useState<'all' | 'mine'>('all');
+
+  // Available filter options
+  const [availableTrainers, setAvailableTrainers] = useState<Array<{ id: number, name: string }>>([]);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
-  const [availableClasses, setAvailableClasses] = useState<Array<{id: number, name: string, code: string}>>([]);
-  const [availableSubjects, setAvailableSubjects] = useState<Array<{id: number, name: string, code: string}>>([]);
+  const [availableClasses, setAvailableClasses] = useState<Array<{ id: number, name: string, code: string }>>([]);
+  const [availableSubjects, setAvailableSubjects] = useState<Array<{ id: number, name: string, code: string }>>([]);
+
+  // Computed values
+  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     fetchUserData();
@@ -107,7 +105,7 @@ export default function TimetablePage() {
       if (!response.ok) throw new Error('Failed to fetch user data');
       const data = await response.json();
       setUser(data.user);
-      
+
       // If not admin, automatically set view to their schedule
       if (data.user.role !== 'admin') {
         setViewMode('mine');
@@ -146,10 +144,10 @@ export default function TimetablePage() {
   const fetchTimetableData = async () => {
     try {
       setIsLoading(true);
-      
+
       const params = new URLSearchParams();
       if (selectedTerm) params.append('term_id', selectedTerm.toString());
-      
+
       // Apply filters based on view mode
       if (viewMode === 'mine' && user) {
         params.append('trainer_id', user.id.toString());
@@ -159,51 +157,16 @@ export default function TimetablePage() {
         if (filterClass) params.append('class_id', filterClass.toString());
         if (filterSubject) params.append('subject_id', filterSubject.toString());
       }
-      
+
       const response = await fetch(`/api/timetable?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to fetch timetable');
-      
+
       const data = await response.json();
       setTimetableSlots(data.data);
 
       // Extract unique trainers, departments, classes, and subjects for filters
       if (viewMode === 'all' && user?.role === 'admin') {
-        const trainers = new Map<number, string>();
-        const departments = new Set<string>();
-        const classes = new Map<number, {name: string, code: string}>();
-        const subjects = new Map<number, {name: string, code: string}>();
-
-        data.data.forEach((slot: TimetableSlot) => {
-          if (slot.users) {
-            trainers.set(slot.users.id, slot.users.name);
-          }
-          if (slot.subjects?.department) {
-            departments.add(slot.subjects.department);
-          }
-          if (slot.classes) {
-            classes.set(slot.classes.id, {
-              name: slot.classes.name,
-              code: slot.classes.code
-            });
-          }
-          if (slot.subjects) {
-            subjects.set(slot.subjects.id, {
-              name: slot.subjects.name,
-              code: slot.subjects.code
-            });
-          }
-        });
-
-        setAvailableTrainers(
-          Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
-        );
-        setAvailableDepartments(Array.from(departments));
-        setAvailableClasses(
-          Array.from(classes.entries()).map(([id, data]) => ({ id, ...data }))
-        );
-        setAvailableSubjects(
-          Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data }))
-        );
+        extractFilterOptions(data.data);
       }
     } catch (error) {
       console.error('Error fetching timetable:', error);
@@ -211,6 +174,74 @@ export default function TimetablePage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Extract filter options from timetable data
+  const extractFilterOptions = (slots: TimetableSlot[]) => {
+    const trainers = new Map<number, string>();
+    const departments = new Set<string>();
+    const classes = new Map<number, { name: string, code: string }>();
+    const subjects = new Map<number, { name: string, code: string }>();
+
+    slots.forEach((slot: TimetableSlot) => {
+      if (slot.users) {
+        trainers.set(slot.users.id, slot.users.name);
+      }
+      if (slot.subjects?.department) {
+        departments.add(slot.subjects.department);
+      }
+      if (slot.classes) {
+        classes.set(slot.classes.id, {
+          name: slot.classes.name,
+          code: slot.classes.code
+        });
+      }
+      if (slot.subjects) {
+        subjects.set(slot.subjects.id, {
+          name: slot.subjects.name,
+          code: slot.subjects.code
+        });
+      }
+    });
+
+    setAvailableTrainers(
+      Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
+    );
+    setAvailableDepartments(Array.from(departments));
+    setAvailableClasses(
+      Array.from(classes.entries()).map(([id, data]) => ({ id, ...data }))
+    );
+    setAvailableSubjects(
+      Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data }))
+    );
+  };
+
+  // Handle view mode change
+  const handleViewModeChange = (mode: 'all' | 'mine') => {
+    setViewMode(mode);
+    if (mode === 'mine' && user) {
+      setFilterTrainer(user.id);
+      clearFilters();
+    } else {
+      setFilterTrainer(null);
+    }
+  };
+
+  // Clear all filters
+  const clearFilters = () => {
+    setFilterTrainer(null);
+    setFilterDepartment(null);
+    setFilterClass(null);
+    setFilterSubject(null);
+  };
+
+  // Handle printing
+  const handlePrint = (mode: 'master' | 'grouped') => {
+    setPrintMode(mode);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => setPrintMode('none'), 500);
+    }, 100);
   };
 
   // Handle slot drag and drop
@@ -231,14 +262,10 @@ export default function TimetablePage() {
       }
 
       await fetchTimetableData();
-      
-      // Show success message
-      setError(''); // Clear any previous errors
+      setError('');
     } catch (error) {
       console.error('Error moving slot:', error);
       setError(error instanceof Error ? error.message : 'Failed to move slot');
-      
-      // Refresh to show original state
       await fetchTimetableData();
     }
   };
@@ -284,19 +311,6 @@ export default function TimetablePage() {
     setCurrentWeek(newWeek);
   };
 
-  // Clear all filters
-  const clearFilters = () => {
-    setFilterTrainer(null);
-    setFilterDepartment(null);
-    setFilterClass(null);
-    setFilterSubject(null);
-  };
-
-  // Count active filters
-  const activeFiltersCount = [filterTrainer, filterDepartment, filterClass, filterSubject].filter(Boolean).length;
-
-  const isAdmin = user?.role === 'admin';
-
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -307,30 +321,11 @@ export default function TimetablePage() {
 
   return (
     <div className="container mx-auto py-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <BookOpen className="h-6 w-6 text-blue-600" />
-            Timetable Management
-          </h1>
-          <p className="text-sm text-gray-600">
-            {isAdmin ? 'Manage all subject schedules' : 'View and reschedule your subjects'}
-          </p>
-        </div>
-        
-        {isAdmin && (
-          <div className="flex gap-2">
-            <Button onClick={() => setIsGenerateDialogOpen(true)}>
-              <Calendar className="mr-2 h-4 w-4" />
-              Generate Timetable
-            </Button>
-            <Button onClick={() => setIsCreateSlotDialogOpen(true)}>
-              <PlusCircle className="mr-2 h-4 w-4" />
-              Add Slot
-            </Button>
-          </div>
-        )}
-      </div>
+      <TimetableHeader
+        isAdmin={isAdmin}
+        onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
+        onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
+      />
 
       {error && (
         <Alert variant="destructive">
@@ -338,232 +333,66 @@ export default function TimetablePage() {
         </Alert>
       )}
 
-      <div className="flex items-center gap-4 p-4 bg-white rounded-lg border">
-        <div className="flex-1">
-          <Label>Term</Label>
-          <Select
-            value={selectedTerm?.toString()}
-            onValueChange={(value) => setSelectedTerm(parseInt(value))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select term" />
-            </SelectTrigger>
-            <SelectContent>
-              {terms.map((term) => (
-                <SelectItem key={term.id} value={term.id.toString()}>
-                  {term.name} {term.is_active && '(Active)'}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {isAdmin && (
-          <>
-            {/* View Mode Toggle */}
-            <div className="flex-1">
-              <Label>View Mode</Label>
-              <Select
-                value={viewMode}
-                onValueChange={(value: 'all' | 'mine') => {
-                  setViewMode(value);
-                  if (value === 'mine') {
-                    setFilterTrainer(user?.id || null);
-                    clearFilters();
-                  } else {
-                    setFilterTrainer(null);
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Subjects</SelectItem>
-                  <SelectItem value="mine">My Subjects Only</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Advanced Filters (only show when viewing all) */}
-            {viewMode === 'all' && (
-              <div className="flex items-end">
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" className="relative">
-                      <Filter className="mr-2 h-4 w-4" />
-                      Filters
-                      {activeFiltersCount > 0 && (
-                        <Badge 
-                          variant="destructive" 
-                          className="ml-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs"
-                        >
-                          {activeFiltersCount}
-                        </Badge>
-                      )}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-80" align="end">
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-semibold text-sm">Filter Timetable</h4>
-                        {activeFiltersCount > 0 && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={clearFilters}
-                            className="h-7 text-xs"
-                          >
-                            <X className="mr-1 h-3 w-3" />
-                            Clear All
-                          </Button>
-                        )}
-                      </div>
-
-                      <Separator />
-
-                      <div className="space-y-2">
-                        <Label className="text-xs">Filter by Trainer</Label>
-                        <Select
-                          value={filterTrainer?.toString() || 'all'}
-                          onValueChange={(value) => 
-                            setFilterTrainer(value === 'all' ? null : parseInt(value))
-                          }
-                        >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue placeholder="All trainers" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Trainers</SelectItem>
-                            {availableTrainers.map((trainer) => (
-                              <SelectItem key={trainer.id} value={trainer.id.toString()}>
-                                {trainer.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-xs">Filter by Class</Label>
-                        <Select
-                          value={filterClass?.toString() || 'all'}
-                          onValueChange={(value) => 
-                            setFilterClass(value === 'all' ? null : parseInt(value))
-                          }
-                        >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue placeholder="All classes" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Classes</SelectItem>
-                            {availableClasses.map((cls) => (
-                              <SelectItem key={cls.id} value={cls.id.toString()}>
-                                {cls.code} - {cls.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-xs flex items-center gap-1">
-                          <BookOpen className="h-3 w-3" />
-                          Filter by Subject
-                        </Label>
-                        <Select
-                          value={filterSubject?.toString() || 'all'}
-                          onValueChange={(value) => 
-                            setFilterSubject(value === 'all' ? null : parseInt(value))
-                          }
-                        >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue placeholder="All subjects" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Subjects</SelectItem>
-                            {availableSubjects.map((subj) => (
-                              <SelectItem key={subj.id} value={subj.id.toString()}>
-                                {subj.code} - {subj.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label className="text-xs">Filter by Department</Label>
-                        <Select
-                          value={filterDepartment || 'all'}
-                          onValueChange={(value) => 
-                            setFilterDepartment(value === 'all' ? null : value)
-                          }
-                        >
-                          <SelectTrigger className="text-sm">
-                            <SelectValue placeholder="All departments" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All Departments</SelectItem>
-                            {availableDepartments.map((dept) => (
-                              <SelectItem key={dept} value={dept}>
-                                {dept}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-            )}
-          </>
-        )}
+      {/* Print Buttons */}
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          onClick={() => handlePrint('master')}
+        >
+          <Printer className="mr-2 h-4 w-4" />
+          Print Master Timetable
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => handlePrint('grouped')}
+        >
+          <FileText className="mr-2 h-4 w-4" />
+          Print by Class
+        </Button>
       </div>
 
-      {/* Active Filters Display */}
-      {isAdmin && viewMode === 'all' && activeFiltersCount > 0 && (
-        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
-          <span className="text-sm text-blue-900 font-medium">Active Filters:</span>
-          {filterTrainer && (
-            <Badge variant="secondary" className="gap-1">
-              Trainer: {availableTrainers.find(t => t.id === filterTrainer)?.name}
-              <X 
-                className="h-3 w-3 cursor-pointer hover:text-red-600" 
-                onClick={() => setFilterTrainer(null)}
-              />
-            </Badge>
-          )}
-          {filterClass && (
-            <Badge variant="secondary" className="gap-1">
-              Class: {availableClasses.find(c => c.id === filterClass)?.code}
-              <X 
-                className="h-3 w-3 cursor-pointer hover:text-red-600" 
-                onClick={() => setFilterClass(null)}
-              />
-            </Badge>
-          )}
-          {filterSubject && (
-            <Badge variant="secondary" className="gap-1">
-              <BookOpen className="h-3 w-3" />
-              Subject: {availableSubjects.find(s => s.id === filterSubject)?.code}
-              <X 
-                className="h-3 w-3 cursor-pointer hover:text-red-600" 
-                onClick={() => setFilterSubject(null)}
-              />
-            </Badge>
-          )}
-          {filterDepartment && (
-            <Badge variant="secondary" className="gap-1">
-              Department: {filterDepartment}
-              <X 
-                className="h-3 w-3 cursor-pointer hover:text-red-600" 
-                onClick={() => setFilterDepartment(null)}
-              />
-            </Badge>
-          )}
-        </div>
-      )}
+      <div className="flex items-center gap-4 p-4 bg-white rounded-lg border">
+        <TermSelector
+          terms={terms}
+          selectedTerm={selectedTerm}
+          onTermChange={setSelectedTerm}
+        />
+
+        <TimetableFilters
+          isAdmin={isAdmin}
+          viewMode={viewMode}
+          onViewModeChange={handleViewModeChange}
+          filterTrainer={filterTrainer}
+          filterDepartment={filterDepartment}
+          filterClass={filterClass}
+          filterSubject={filterSubject}
+          onTrainerChange={setFilterTrainer}
+          onDepartmentChange={setFilterDepartment}
+          onClassChange={setFilterClass}
+          onSubjectChange={setFilterSubject}
+          onClearFilters={clearFilters}
+          availableTrainers={availableTrainers}
+          availableDepartments={availableDepartments}
+          availableClasses={availableClasses}
+          availableSubjects={availableSubjects}
+        />
+      </div>
+
+      <ActiveFiltersDisplay
+        isAdmin={isAdmin}
+        viewMode={viewMode}
+        filterTrainer={filterTrainer}
+        filterClass={filterClass}
+        filterSubject={filterSubject}
+        filterDepartment={filterDepartment}
+        availableTrainers={availableTrainers}
+        availableClasses={availableClasses}
+        availableSubjects={availableSubjects}
+        onRemoveTrainer={() => setFilterTrainer(null)}
+        onRemoveClass={() => setFilterClass(null)}
+        onRemoveSubject={() => setFilterSubject(null)}
+        onRemoveDepartment={() => setFilterDepartment(null)}
+      />
 
       <WeekNavigator
         currentWeek={currentWeek}
@@ -579,6 +408,24 @@ export default function TimetablePage() {
         isAdmin={isAdmin}
         userId={user?.id || 0}
       />
+
+      {/* Print Views - Conditionally Rendered */}
+      {printMode === 'master' && (
+        <MasterTimetablePrint
+          slots={timetableSlots}
+          currentWeek={currentWeek}
+          termName={terms.find(t => t.id === selectedTerm)?.name}
+        />
+      )}
+
+      {printMode === 'grouped' && (
+        <PrintableTimetable
+          slots={timetableSlots}
+          currentWeek={currentWeek}
+          termName={terms.find(t => t.id === selectedTerm)?.name}
+          groupBy={viewMode === 'mine' || filterTrainer ? 'trainer' : 'class'}
+        />
+      )}
 
       <GenerateTimetableDialog
         open={isGenerateDialogOpen}
@@ -637,11 +484,11 @@ function getCurrentWeekInfo() {
   const start = new Date(today);
   start.setDate(today.getDate() - dayOfWeek);
   start.setHours(0, 0, 0, 0);
-  
+
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   end.setHours(23, 59, 59, 999);
-  
+
   return {
     start,
     end,

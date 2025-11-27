@@ -34,17 +34,23 @@ export default function TimetableGrid({
   userId
 }: TimetableGridProps) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set());
+  const [expandedSlots, setExpandedSlots] = useState<Set<string>>(new Set());
   const [draggedSlot, setDraggedSlot] = useState<TimetableSlot | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
 
-  const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  
+const daysOfWeek: Array<{ name: string; value: number }> = [
+  { name: 'Monday', value: 1 },
+  { name: 'Tuesday', value: 2 },
+  { name: 'Wednesday', value: 3 },
+  { name: 'Thursday', value: 4 },
+  { name: 'Friday', value: 5 }
+];
   // Get unique lesson periods from slots
- const lessonPeriods = slots.length > 0 
-  ? Array.from(
+  const lessonPeriods = slots.length > 0
+    ? Array.from(
       new Map(
         slots
-          .filter(slot => slot.lessonperiods) // Filter out slots without lessonPeriod
+          .filter(slot => slot.lessonperiods)
           .map(slot => [
             slot.lesson_period_id,
             slot.lessonperiods
@@ -55,9 +61,9 @@ export default function TimetableGrid({
       const timeB = new Date(b.start_time).getTime();
       return timeA - timeB;
     })
-  : [];
+    : [];
 
-  // Group slots by day and period (multiple slots per cell possible)
+  // Group slots by day and period
   const slotsByDayAndPeriod = new Map<string, TimetableSlot[]>();
   slots.forEach(slot => {
     const key = `${slot.day_of_week}-${slot.lesson_period_id}`;
@@ -75,27 +81,43 @@ export default function TimetableGrid({
   };
 
   // Get slots for specific day and period
-  const getSlots = (day: number, periodId: number): TimetableSlot[] => {
-    const key = `${day}-${periodId}`;
-    return slotsByDayAndPeriod.get(key) || [];
-  };
+const getSlots = (dayOfWeekValue: number, periodId: number): TimetableSlot[] => {
+  const key = `${dayOfWeekValue}-${periodId}`;
+  return slotsByDayAndPeriod.get(key) || [];
+};
 
   // Check if cell is expanded
-  const isCellExpanded = (day: number, periodId: number): boolean => {
-    const key = `${day}-${periodId}`;
-    return expandedCells.has(key);
-  };
+const isCellExpanded = (dayOfWeekValue: number, periodId: number): boolean => {
+  const key = `${dayOfWeekValue}-${periodId}`;
+  return expandedCells.has(key);
+};
 
   // Toggle cell expansion
-  const toggleCellExpansion = (day: number, periodId: number) => {
-    const key = `${day}-${periodId}`;
-    const newExpanded = new Set(expandedCells);
-    if (newExpanded.has(key)) {
-      newExpanded.delete(key);
+  const toggleCellExpansion = (dayOfWeekValue: number, periodId: number) => {
+  const key = `${dayOfWeekValue}-${periodId}`;
+  const newExpanded = new Set(expandedCells);
+  if (newExpanded.has(key)) {
+    newExpanded.delete(key);
+  } else {
+    newExpanded.add(key);
+  }
+  setExpandedCells(newExpanded);
+};
+
+  // Check if individual slot is expanded
+  const isSlotExpanded = (slotId: string): boolean => {
+    return expandedSlots.has(slotId);
+  };
+
+  // Toggle individual slot expansion
+  const toggleSlotExpansion = (slotId: string) => {
+    const newExpanded = new Set(expandedSlots);
+    if (newExpanded.has(slotId)) {
+      newExpanded.delete(slotId);
     } else {
-      newExpanded.add(key);
+      newExpanded.add(slotId);
     }
-    setExpandedCells(newExpanded);
+    setExpandedSlots(newExpanded);
   };
 
   // Check if slot belongs to current user
@@ -103,24 +125,24 @@ export default function TimetableGrid({
     return slot.employee_id === userId;
   };
 
-  // Get card styling based on ownership and department
+  // Get card styling based on ownership
   const getCardStyle = (slot: TimetableSlot, isStacked: boolean = false) => {
     const isOwn = isOwnSlot(slot);
     const baseTransition = "transition-all duration-200";
-    
+
     if (isOwn && isAdmin) {
       return {
-        className: `bg-gradient-to-br from-purple-100 via-violet-100 to-indigo-100 border-2 border-purple-500 hover:shadow-lg ${baseTransition} ${isStacked ? '' : 'cursor-pointer'}`,
+        className: `bg-gradient-to-br from-purple-100 via-violet-100 to-indigo-100 border-2 border-purple-500 hover:shadow-lg ${baseTransition}`,
         badgeClassName: "bg-purple-600"
       };
     } else if (isOwn) {
       return {
-        className: `bg-gradient-to-br from-green-100 to-emerald-100 border-2 border-green-500 hover:shadow-lg ${baseTransition} ${isStacked ? '' : 'cursor-pointer'}`,
+        className: `bg-gradient-to-br from-green-100 to-emerald-100 border-2 border-green-500 hover:shadow-lg ${baseTransition}`,
         badgeClassName: "bg-green-600"
       };
     } else {
       return {
-        className: `bg-white border hover:bg-gray-50 hover:shadow-md ${baseTransition} ${isStacked ? '' : 'cursor-pointer'}`,
+        className: `bg-white border hover:bg-gray-50 hover:shadow-md ${baseTransition}`,
         badgeClassName: "bg-gray-500"
       };
     }
@@ -169,39 +191,31 @@ export default function TimetableGrid({
     e.preventDefault();
     if (!isAdmin || !draggedSlot || !onSlotMove) return;
 
-    // Don't do anything if dropped on same cell
     if (draggedSlot.day_of_week === day && draggedSlot.lesson_period_id === periodId) {
       setDragOverCell(null);
       return;
     }
 
-    // Call the move handler
     onSlotMove(draggedSlot.id, day, periodId);
     setDragOverCell(null);
   };
 
-  // Render a single slot card
+  // Render a single slot card with compressed/expanded view
   const renderSlotCard = (slot: TimetableSlot, isStacked: boolean = false, isInCollapsible: boolean = false) => {
     const cardStyle = getCardStyle(slot, isStacked);
-    
+    const isExpanded = isSlotExpanded(slot.id);
+
     return (
       <Card
         key={slot.id}
-        className={`${cardStyle.className} ${draggedSlot?.id === slot.id ? 'opacity-50' : ''} ${
-          isAdmin ? 'cursor-move' : ''
-        }`}
+        className={`${cardStyle.className} ${draggedSlot?.id === slot.id ? 'opacity-50' : ''} ${isAdmin ? 'cursor-move' : ''
+          }`}
         draggable={isAdmin}
         onDragStart={(e) => handleDragStart(e, slot)}
         onDragEnd={handleDragEnd}
-        onClick={(e) => {
-          if (!isStacked || isInCollapsible) {
-            e.stopPropagation();
-            onSlotClick(slot);
-          }
-        }}
       >
-        <CardContent className="p-3 space-y-2">
-          {/* Drag Handle & Own Badge */}
+        <CardContent className="p-2 space-y-2">
+          {/* Drag Handle & Own Badge - Always visible */}
           {isAdmin && (
             <div className="flex items-center justify-between">
               <GripVertical className="h-4 w-4 text-gray-400" />
@@ -213,46 +227,20 @@ export default function TimetableGrid({
             </div>
           )}
 
-          {/* Subject Info - Primary */}
-          <div>
-            <div className="flex items-center gap-1 mb-0.5">
-              <BookOpen className="h-3 w-3 text-blue-600 flex-shrink-0" />
-              <div className="font-bold text-sm line-clamp-1">
-                {slot.subjects.code}
-              </div>
+          {/* COMPRESSED VIEW - Always visible */}
+          <div className="space-y-1">
+            {/* Subject Code - Bold and prominent */}
+            <div className="font-bold text-sm text-gray-900">
+              {slot.subjects.code}
             </div>
-            <div className="text-xs font-medium text-gray-700 line-clamp-2 leading-tight">
-              {slot.subjects.name}
+
+            {/* Room */}
+            <div className="flex items-center gap-1 text-xs text-gray-600">
+              <MapPin className="h-3 w-3 flex-shrink-0" />
+              <span>{slot.rooms.name}</span>
             </div>
-          </div>
 
-          {/* Class Info - Secondary */}
-          <div className="flex items-center gap-1 pt-1 border-t border-gray-200">
-            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-              {slot.classes.code}
-            </Badge>
-            <span className="text-[10px] text-gray-600 line-clamp-1">
-              {slot.classes.name}
-            </span>
-          </div>
-
-          {/* Trainer */}
-          <div className="flex items-center gap-1 text-xs text-gray-600">
-            <User className="h-3 w-3 flex-shrink-0" />
-            <span className="line-clamp-1">{slot.users.name}</span>
-          </div>
-
-          {/* Room */}
-          <div className="flex items-center gap-1 text-xs text-gray-600">
-            <MapPin className="h-3 w-3 flex-shrink-0" />
-            <span>{slot.rooms.name}</span>
-          </div>
-
-          {/* Department & Status */}
-          <div className="flex items-center justify-between gap-1">
-            <Badge variant="outline" className="text-[10px] px-1 py-0 line-clamp-1">
-              {slot.subjects.department}
-            </Badge>
+            {/* Status Badge - if not scheduled */}
             {slot.status !== 'scheduled' && (
               <Badge className={`text-[10px] px-1 py-0 flex-shrink-0 ${getStatusColor(slot.status)}`}>
                 {slot.status}
@@ -260,12 +248,80 @@ export default function TimetableGrid({
             )}
           </div>
 
-          {/* Credit Hours (optional) */}
-          {slot.subjects.credit_hours && (
-            <div className="text-[10px] text-gray-500">
-              {slot.subjects.credit_hours}h
+          {/* EXPANDED VIEW - Shows when toggled */}
+          {isExpanded && (
+            <div className="pt-2 border-t border-gray-300 space-y-2">
+              {/* Subject Name */}
+              <div className="text-xs font-medium text-gray-700 line-clamp-2 leading-tight">
+                {slot.subjects.name}
+              </div>
+
+              {/* Class Info */}
+              <div className="flex items-center gap-1">
+                <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                  {slot.classes.code}
+                </Badge>
+                <span className="text-[10px] text-gray-600 line-clamp-1">
+                  {slot.classes.name}
+                </span>
+              </div>
+
+              {/* Trainer */}
+              <div className="flex items-center gap-1 text-xs text-gray-600">
+                <User className="h-3 w-3 flex-shrink-0" />
+                <span className="line-clamp-1">{slot.users.name}</span>
+              </div>
+
+              {/* Department */}
+              <div className="flex items-center justify-between gap-1">
+                <Badge variant="outline" className="text-[10px] px-1 py-0 line-clamp-1">
+                  {slot.subjects.department}
+                </Badge>
+              </div>
+
+              {/* Credit Hours */}
+              {slot.subjects.credit_hours && (
+                <div className="text-[10px] text-gray-500">
+                  {slot.subjects.credit_hours}h
+                </div>
+              )}
             </div>
           )}
+
+          {/* More/Less Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full h-6 text-xs hover:bg-white/50"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSlotExpansion(slot.id);
+            }}
+          >
+            {isExpanded ? (
+              <>
+                Less <ChevronUp className="h-3 w-3 ml-1" />
+              </>
+            ) : (
+              <>
+                More <ChevronDown className="h-3 w-3 ml-1" />
+              </>
+            )}
+          </Button>
+
+          {/* View Full Details Button - Always available */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-6 text-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSlotClick(slot);
+            }}
+          >
+            <BookOpen className="h-3 w-3 mr-1" />
+            Full Details
+          </Button>
         </CardContent>
       </Card>
     );
@@ -282,7 +338,7 @@ export default function TimetableGrid({
   return (
     <div className="space-y-4">
       {/* Legend */}
-      <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg border text-sm flex-wrap">
+      <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg border text-sm flex-wrap no-print">
         <span className="font-semibold text-gray-700">Legend:</span>
         {isAdmin && (
           <div className="flex items-center gap-2">
@@ -309,25 +365,26 @@ export default function TimetableGrid({
       {/* Timetable Grid */}
       <div className="overflow-x-auto">
         <div className="inline-block min-w-full align-middle">
-          <div className="grid grid-cols-[150px_repeat(7,minmax(200px,1fr))] gap-2">
+          <div className="grid grid-cols-[150px_repeat(5,minmax(200px,1fr))] gap-2">
             {/* Header Row - Days */}
             <div className="bg-gray-100 p-3 rounded-lg font-semibold text-center sticky left-0 z-10">
               Time / Day
             </div>
-            {daysOfWeek.map((day, index) => (
-              <div
-                key={day}
-                className="bg-gray-100 p-3 rounded-lg font-semibold text-center"
-              >
-                <div>{day}</div>
-                <div className="text-xs text-gray-500 font-normal mt-1">
-                  {new Date(currentWeek.start.getTime() + index * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric'
-                  })}
-                </div>
-              </div>
-            ))}
+
+     {daysOfWeek.map((day) => (
+  <div
+    key={day.value}
+    className="bg-gray-100 p-3 rounded-lg font-semibold text-center"
+  >
+    <div>{day.name}</div>
+    <div className="text-xs text-gray-500 font-normal mt-1">
+      {new Date(currentWeek.start.getTime() + day.value * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      })}
+    </div>
+  </div>
+))}
 
             {/* Time Rows */}
             {lessonPeriods.map((period) => (
@@ -342,29 +399,29 @@ export default function TimetableGrid({
                 </div>
 
                 {/* Slots for each day */}
-                {daysOfWeek.map((_, dayIndex) => {
-                  const slotsInCell = getSlots(dayIndex, period.id);
-                  const isExpanded = isCellExpanded(dayIndex, period.id);
-                  const hasMultipleSlots = slotsInCell.length > 1;
-                  const cellKey = `${dayIndex}-${period.id}`;
-                  const isDraggedOver = dragOverCell === cellKey;
+            {daysOfWeek.map((day) => {
+  const slotsInCell = getSlots(day.value, period.id);
+  const isExpanded = isCellExpanded(day.value, period.id);
+  const hasMultipleSlots = slotsInCell.length > 1;
+  const cellKey = `${day.value}-${period.id}`;
+  const isDraggedOver = dragOverCell === cellKey;
 
-                  return (
-                    <div 
-                      key={cellKey} 
-                      className={`min-h-[160px] rounded-lg transition-all ${
-                        isDraggedOver ? 'bg-blue-100 border-2 border-blue-400 border-dashed' : ''
-                      }`}
-                      onDragOver={(e) => handleDragOver(e, dayIndex, period.id)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, dayIndex, period.id)}
-                    >
-                      {slotsInCell.length > 0 ? (
-                        hasMultipleSlots ? (
+  return (
+    <div 
+      key={cellKey} 
+      className={`min-h-[120px] rounded-lg transition-all ${
+        isDraggedOver ? 'bg-blue-100 border-2 border-blue-400 border-dashed' : ''
+      }`}
+      onDragOver={(e) => handleDragOver(e, day.value, period.id)}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => handleDrop(e, day.value, period.id)}
+    >
+      {slotsInCell.length > 0 ? (
+        hasMultipleSlots ? (
                           // Multiple slots - Show collapsible
                           <Collapsible
                             open={isExpanded}
-                            onOpenChange={() => toggleCellExpansion(dayIndex, period.id)}
+                            onOpenChange={() => toggleCellExpansion(day.value, period.id)}
                           >
                             <div className="space-y-2">
                               {/* First slot - always visible */}
@@ -402,10 +459,9 @@ export default function TimetableGrid({
                           renderSlotCard(slotsInCell[0])
                         )
                       ) : (
-                        <div 
-                          className={`border-2 border-dashed rounded-lg h-full min-h-[160px] flex items-center justify-center text-gray-400 text-xs transition-all ${
-                            isDraggedOver ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
-                          }`}
+                        <div
+                          className={`border-2 border-dashed rounded-lg h-full min-h-[120px] flex items-center justify-center text-gray-400 text-xs transition-all ${isDraggedOver ? 'border-blue-400 bg-blue-50' : 'border-gray-200'
+                            }`}
                         >
                           {isDraggedOver ? 'Drop here' : 'Free'}
                         </div>
