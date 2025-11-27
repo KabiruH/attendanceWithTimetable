@@ -11,7 +11,7 @@ interface PrintableTimetableProps {
     weekNumber: number;
   };
   termName?: string;
-  groupBy: 'class' | 'trainer';
+  groupBy: 'class' | 'trainer' | 'department';
 }
 
 export default function PrintableTimetable({
@@ -54,7 +54,7 @@ export default function PrintableTimetable({
     });
   };
 
-  // Group slots by class or trainer
+  // Group slots by class, trainer, or department
   const groupedSlots = new Map<string, { name: string; code: string; slots: TimetableSlot[] }>();
   
   slots.forEach(slot => {
@@ -66,10 +66,14 @@ export default function PrintableTimetable({
       key = slot.class_id.toString();
       name = slot.classes.name;
       code = slot.classes.code;
-    } else {
+    } else if (groupBy === 'trainer') {
       key = slot.employee_id.toString();
       name = slot.users.name;
       code = `T-${slot.employee_id}`;
+    } else { // department
+      key = slot.subjects?.department || 'Unknown';
+      name = slot.subjects?.department || 'Unknown Department';
+      code = slot.subjects?.department || 'UNKNOWN';
     }
 
     if (!groupedSlots.has(key)) {
@@ -83,6 +87,20 @@ export default function PrintableTimetable({
     return groupSlots.find(
       slot => slot.day_of_week === dayOfWeekValue && slot.lesson_period_id === periodId
     ) || null;
+  };
+
+  // Get title based on groupBy
+  const getTitle = () => {
+    switch (groupBy) {
+      case 'class':
+        return 'Class Timetable';
+      case 'trainer':
+        return 'Trainer Schedule';
+      case 'department':
+        return 'Department Timetable';
+      default:
+        return 'Timetable';
+    }
   };
 
   return (
@@ -162,11 +180,16 @@ export default function PrintableTimetable({
             <div className="flex justify-between items-start">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">
-                  {groupBy === 'class' ? 'Class Timetable' : 'Trainer Schedule'}
+                  {getTitle()}
                 </h1>
                 <p className="text-lg font-semibold text-gray-700 mt-1">
-                  {group.code} - {group.name}
+                  {groupBy === 'department' ? group.name : `${group.code} - ${group.name}`}
                 </p>
+                {groupBy === 'department' && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    Total Sessions: {group.slots.length}
+                  </p>
+                )}
               </div>
               <div className="text-right text-sm">
                 {termName && <p className="font-semibold">{termName}</p>}
@@ -252,6 +275,27 @@ export default function PrintableTimetable({
                               {slot.subjects.code}
                             </div>
 
+                            {/* Subject Name - only show for department grouping */}
+                            {groupBy === 'department' && (
+                              <div className="text-xs text-gray-700 font-medium">
+                                {slot.subjects.name}
+                              </div>
+                            )}
+
+                            {/* Class info - show for department grouping */}
+                            {groupBy === 'department' && (
+                              <div className="text-xs text-gray-600">
+                                Class: {slot.classes.code}
+                              </div>
+                            )}
+
+                            {/* Trainer info - show for department and class grouping */}
+                            {(groupBy === 'department' || groupBy === 'class') && (
+                              <div className="text-xs text-gray-600">
+                                Trainer: {slot.users.name}
+                              </div>
+                            )}
+
                             {/* Room with icon */}
                             <div className="flex items-center gap-1 text-sm text-gray-700">
                               <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
@@ -291,7 +335,7 @@ export default function PrintableTimetable({
               Page {index + 1} of {groupedSlots.size}
             </div>
             <div>
-              {groupBy === 'class' ? 'Class Timetable' : 'Trainer Schedule'} - {termName || 'Current Term'}
+              {getTitle()} - {termName || 'Current Term'}
             </div>
           </div>
         </div>

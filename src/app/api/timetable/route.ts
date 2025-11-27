@@ -97,10 +97,16 @@ export async function GET(request: NextRequest) {
       whereConditions.subject_id = parseInt(subjectId);
     }
 
+   // Room filter 
+    const roomId = searchParams.get('room_id');
+    if (roomId) {
+      whereConditions.room_id = parseInt(roomId);
+    }
+
     // Department filter (filter by class department)
     const department = searchParams.get('department');
     if (department) {
-      whereConditions.class = {
+      whereConditions.subjects = {
         department: department
       };
     }

@@ -12,6 +12,7 @@ import TimetableFilters from '@/components/timetable/TimetableFilters';
 import ActiveFiltersDisplay from '@/components/timetable/ActiveFiltersDisplay';
 import PrintableTimetable from '@/components/timetable/PrintableTimetable';
 import MasterTimetablePrint from '@/components/timetable/MasterTimetablePrint';
+import PrintTrainerDialog from '@/components/timetable/PrintTrainerDialog'; // Add this import
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TimetableSlot } from '@/lib/types/timetable';
-import { Printer, FileText } from "lucide-react";
+import { Printer, FileText, Building2, UserCheck } from "lucide-react"; // Add UserCheck icon
 import { Button } from '@/components/ui/button';
 
 interface User {
@@ -46,6 +47,8 @@ export default function TimetablePage() {
   // User and auth state
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [filterRoom, setFilterRoom] = useState<number | null>(null);
+  const [availableRooms, setAvailableRooms] = useState<Array<{ id: number, name: string }>>([]);
 
   // Timetable data
   const [timetableSlots, setTimetableSlots] = useState<TimetableSlot[]>([]);
@@ -60,9 +63,11 @@ export default function TimetablePage() {
   const [isCreateSlotDialogOpen, setIsCreateSlotDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<TimetableSlot | null>(null);
   const [isSlotDetailsOpen, setIsSlotDetailsOpen] = useState(false);
+  const [isPrintTrainerDialogOpen, setIsPrintTrainerDialogOpen] = useState(false); // Add this
 
   // Print mode state
-  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped'>('none');
+  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer'>('none');
+  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null); // Add this
 
   // Delete confirmation
   const [deletingSlot, setDeletingSlot] = useState<TimetableSlot | null>(null);
@@ -84,19 +89,24 @@ export default function TimetablePage() {
   const [availableClasses, setAvailableClasses] = useState<Array<{ id: number, name: string, code: string }>>([]);
   const [availableSubjects, setAvailableSubjects] = useState<Array<{ id: number, name: string, code: string }>>([]);
 
+  // All trainers for print dialog
+  const [allTrainers, setAllTrainers] = useState<Array<{ id: number, name: string }>>([]);
+
   // Computed values
   const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     fetchUserData();
     fetchTerms();
+    fetchDepartments();
+    fetchAllTrainers(); // Add this
   }, []);
 
   useEffect(() => {
     if (selectedTerm) {
       fetchTimetableData();
     }
-  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, filterClass, filterSubject, viewMode]);
+  }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, filterClass, filterSubject, viewMode, filterRoom]);
 
   // Fetch current user
   const fetchUserData = async () => {
@@ -116,6 +126,44 @@ export default function TimetablePage() {
       setError('Failed to load user data');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Fetch departments from API
+  const fetchDepartments = async () => {
+    try {
+      const response = await fetch('/api/departments');
+      if (!response.ok) throw new Error('Failed to fetch departments');
+      const data = await response.json();
+      
+      // Filter only active departments and map to names
+      const activeDeptNames = data
+        .filter((dept: any) => dept.is_active)
+        .map((dept: any) => dept.name);
+      
+      setAvailableDepartments(activeDeptNames);
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+    }
+  };
+
+  // Fetch all trainers for print dialog
+  const fetchAllTrainers = async () => {
+    try {
+      const response = await fetch('/api/users?role=trainer');
+      if (!response.ok) throw new Error('Failed to fetch trainers');
+      const data = await response.json();
+      
+      // Map to simple array of id and name
+      const trainerList = data.data.map((trainer: any) => ({
+        id: trainer.id,
+        name: trainer.name
+      }));
+      
+      setAllTrainers(trainerList);
+    } catch (error) {
+      console.error('Error fetching trainers:', error);
+      // Fallback to availableTrainers if API call fails
     }
   };
 
@@ -156,6 +204,7 @@ export default function TimetablePage() {
         if (filterDepartment) params.append('department', filterDepartment);
         if (filterClass) params.append('class_id', filterClass.toString());
         if (filterSubject) params.append('subject_id', filterSubject.toString());
+        if (filterRoom) params.append('room_id', filterRoom.toString());
       }
 
       const response = await fetch(`/api/timetable?${params.toString()}`);
@@ -164,7 +213,7 @@ export default function TimetablePage() {
       const data = await response.json();
       setTimetableSlots(data.data);
 
-      // Extract unique trainers, departments, classes, and subjects for filters
+      // Extract unique trainers, classes, subjects, and rooms for filters
       if (viewMode === 'all' && user?.role === 'admin') {
         extractFilterOptions(data.data);
       }
@@ -176,19 +225,35 @@ export default function TimetablePage() {
     }
   };
 
+  // Fetch timetable data for a specific trainer (for printing)
+  const fetchTrainerTimetableData = async (trainerId: number) => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedTerm) params.append('term_id', selectedTerm.toString());
+      params.append('trainer_id', trainerId.toString());
+
+      const response = await fetch(`/api/timetable?${params.toString()}`);
+      if (!response.ok) throw new Error('Failed to fetch trainer timetable');
+
+      const data = await response.json();
+      return data.data;
+    } catch (error) {
+      console.error('Error fetching trainer timetable:', error);
+      setError('Failed to load trainer timetable');
+      return [];
+    }
+  };
+
   // Extract filter options from timetable data
   const extractFilterOptions = (slots: TimetableSlot[]) => {
     const trainers = new Map<number, string>();
-    const departments = new Set<string>();
     const classes = new Map<number, { name: string, code: string }>();
     const subjects = new Map<number, { name: string, code: string }>();
+    const rooms = new Map<number, string>();
 
     slots.forEach((slot: TimetableSlot) => {
       if (slot.users) {
         trainers.set(slot.users.id, slot.users.name);
-      }
-      if (slot.subjects?.department) {
-        departments.add(slot.subjects.department);
       }
       if (slot.classes) {
         classes.set(slot.classes.id, {
@@ -202,17 +267,22 @@ export default function TimetablePage() {
           code: slot.subjects.code
         });
       }
+      if (slot.rooms) { 
+        rooms.set(slot.rooms.id, slot.rooms.name);
+      }
     });
 
     setAvailableTrainers(
       Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
     );
-    setAvailableDepartments(Array.from(departments));
     setAvailableClasses(
       Array.from(classes.entries()).map(([id, data]) => ({ id, ...data }))
     );
     setAvailableSubjects(
       Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data }))
+    );
+    setAvailableRooms( 
+      Array.from(rooms.entries()).map(([id, name]) => ({ id, name }))
     );
   };
 
@@ -233,14 +303,30 @@ export default function TimetablePage() {
     setFilterDepartment(null);
     setFilterClass(null);
     setFilterSubject(null);
+    setFilterRoom(null);
   };
 
   // Handle printing
-  const handlePrint = (mode: 'master' | 'grouped') => {
+  const handlePrint = (mode: 'master' | 'grouped' | 'department') => {
     setPrintMode(mode);
     setTimeout(() => {
       window.print();
       setTimeout(() => setPrintMode('none'), 500);
+    }, 100);
+  };
+
+  // Handle trainer print
+  const handlePrintTrainer = async (trainerId: number) => {
+    setPrintTrainerId(trainerId);
+    setPrintMode('trainer');
+    
+    // Small delay to ensure state is set before printing
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        setPrintMode('none');
+        setPrintTrainerId(null);
+      }, 500);
     }, 100);
   };
 
@@ -311,6 +397,12 @@ export default function TimetablePage() {
     setCurrentWeek(newWeek);
   };
 
+  // Get filtered slots for trainer print
+  const getTrainerPrintSlots = () => {
+    if (!printTrainerId) return [];
+    return timetableSlots.filter(slot => slot.employee_id === printTrainerId);
+  };
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -333,7 +425,7 @@ export default function TimetablePage() {
         </Alert>
       )}
 
-      {/* Print Buttons */}
+      {/* Print Buttons - Updated */}
       <div className="flex justify-end gap-2">
         <Button
           variant="outline"
@@ -348,6 +440,20 @@ export default function TimetablePage() {
         >
           <FileText className="mr-2 h-4 w-4" />
           Print by Class
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => handlePrint('department')}
+        >
+          <Building2 className="mr-2 h-4 w-4" />
+          Print by Department
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setIsPrintTrainerDialogOpen(true)}
+        >
+          <UserCheck className="mr-2 h-4 w-4" />
+          Print Trainer Schedule
         </Button>
       </div>
 
@@ -366,15 +472,18 @@ export default function TimetablePage() {
           filterDepartment={filterDepartment}
           filterClass={filterClass}
           filterSubject={filterSubject}
+          filterRoom={filterRoom}
           onTrainerChange={setFilterTrainer}
           onDepartmentChange={setFilterDepartment}
           onClassChange={setFilterClass}
           onSubjectChange={setFilterSubject}
+          onRoomChange={setFilterRoom} 
           onClearFilters={clearFilters}
           availableTrainers={availableTrainers}
           availableDepartments={availableDepartments}
           availableClasses={availableClasses}
           availableSubjects={availableSubjects}
+          availableRooms={availableRooms}
         />
       </div>
 
@@ -385,13 +494,16 @@ export default function TimetablePage() {
         filterClass={filterClass}
         filterSubject={filterSubject}
         filterDepartment={filterDepartment}
+        filterRoom={filterRoom} 
         availableTrainers={availableTrainers}
         availableClasses={availableClasses}
         availableSubjects={availableSubjects}
+        availableRooms={availableRooms} 
         onRemoveTrainer={() => setFilterTrainer(null)}
         onRemoveClass={() => setFilterClass(null)}
         onRemoveSubject={() => setFilterSubject(null)}
         onRemoveDepartment={() => setFilterDepartment(null)}
+        onRemoveRoom={() => setFilterRoom(null)} 
       />
 
       <WeekNavigator
@@ -427,6 +539,24 @@ export default function TimetablePage() {
         />
       )}
 
+      {printMode === 'department' && (
+        <PrintableTimetable
+          slots={timetableSlots}
+          currentWeek={currentWeek}
+          termName={terms.find(t => t.id === selectedTerm)?.name}
+          groupBy="department"
+        />
+      )}
+
+      {printMode === 'trainer' && printTrainerId && (
+        <PrintableTimetable
+          slots={getTrainerPrintSlots()}
+          currentWeek={currentWeek}
+          termName={terms.find(t => t.id === selectedTerm)?.name}
+          groupBy="trainer"
+        />
+      )}
+
       <GenerateTimetableDialog
         open={isGenerateDialogOpen}
         onOpenChange={setIsGenerateDialogOpen}
@@ -451,6 +581,14 @@ export default function TimetablePage() {
           isAdmin={isAdmin}
         />
       )}
+
+      {/* Print Trainer Dialog */}
+      <PrintTrainerDialog
+        open={isPrintTrainerDialogOpen}
+        onOpenChange={setIsPrintTrainerDialogOpen}
+        trainers={allTrainers.length > 0 ? allTrainers : availableTrainers}
+        onPrint={handlePrintTrainer}
+      />
 
       <AlertDialog open={!!deletingSlot} onOpenChange={() => setDeletingSlot(null)}>
         <AlertDialogContent>

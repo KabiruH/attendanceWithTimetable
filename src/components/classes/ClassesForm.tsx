@@ -30,6 +30,13 @@ interface Class {
   created_by: string;
 }
 
+interface Department {
+  id: number;
+  name: string;
+  code: string;
+  is_active: boolean;
+}
+
 interface ClassesFormProps {
   isOpen: boolean;
   onClose: () => void;
@@ -55,6 +62,37 @@ export default function ClassesForm({
     duration_hours: 2,
     is_active: true
   });
+
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [loadingDepartments, setLoadingDepartments] = useState(false);
+  const [departmentError, setDepartmentError] = useState('');
+
+  // Fetch departments
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      setLoadingDepartments(true);
+      setDepartmentError('');
+      try {
+        const response = await fetch('/api/departments');
+        if (!response.ok) {
+          throw new Error('Failed to fetch departments');
+        }
+        const data = await response.json();
+        // Filter only active departments
+        const activeDepartments = data.filter((dept: Department) => dept.is_active);
+        setDepartments(activeDepartments);
+      } catch (err) {
+        console.error('Error fetching departments:', err);
+        setDepartmentError('Failed to load departments');
+      } finally {
+        setLoadingDepartments(false);
+      }
+    };
+
+    if (isOpen) {
+      fetchDepartments();
+    }
+  }, [isOpen]);
 
   // Reset form when dialog opens/closes or editing class changes
   useEffect(() => {
@@ -145,47 +183,34 @@ export default function ClassesForm({
 
           <div className="space-y-2">
             <Label htmlFor="department">Department</Label>
+            {departmentError && (
+              <Alert variant="destructive" className="py-2">
+                <AlertDescription className="text-xs">{departmentError}</AlertDescription>
+              </Alert>
+            )}
             <Select
               value={formData.department}
               onValueChange={(value) => setFormData({ ...formData, department: value })}
+              disabled={loadingDepartments}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select department" />
+                <SelectValue placeholder={loadingDepartments ? "Loading departments..." : "Select department"} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="Marketing">Marketing</SelectItem>
-                <SelectItem value="Engineering">Engineering</SelectItem>
-                <SelectItem value="Finance">Finance</SelectItem>
-                <SelectItem value="Human Resources">Human Resources</SelectItem>
-                <SelectItem value="Sales">Sales</SelectItem>
-                <SelectItem value="Operations">Operations</SelectItem>
-                <SelectItem value="Customer Service">Customer Service</SelectItem>
-                <SelectItem value="IT">IT</SelectItem>
-                <SelectItem value="Legal">Legal</SelectItem>
-                <SelectItem value="Administration">Administration</SelectItem>
+                {departments.length === 0 && !loadingDepartments ? (
+                  <SelectItem value="no-departments" disabled>
+                    No active departments available
+                  </SelectItem>
+                ) : (
+                  departments.map((dept) => (
+                    <SelectItem key={dept.id} value={dept.name}>
+                      {dept.name} ({dept.code})
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
-
-          {/* <div className="space-y-2">
-            <Label htmlFor="duration">Duration (Hours)</Label>
-            <Select
-              value={formData.duration_hours.toString()}
-              onValueChange={(value) => setFormData({ ...formData, duration_hours: parseInt(value) })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select duration" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">1 hour</SelectItem>
-                <SelectItem value="2">2 hours</SelectItem>
-                <SelectItem value="3">3 hours</SelectItem>
-                <SelectItem value="4">4 hours</SelectItem>
-                <SelectItem value="6">6 hours</SelectItem>
-                <SelectItem value="8">8 hours</SelectItem>
-              </SelectContent>
-            </Select>
-          </div> */}
 
           {editingClass && (
             <div className="space-y-2">

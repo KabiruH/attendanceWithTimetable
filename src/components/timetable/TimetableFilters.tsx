@@ -1,7 +1,7 @@
 // components/timetable/TimetableFilters.tsx
 'use client';
 import { Button } from "@/components/ui/button";
-import { Filter, X, BookOpen } from "lucide-react";
+import { Filter, X, BookOpen, MapPin } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -28,12 +28,14 @@ interface TimetableFiltersProps {
   filterDepartment: string | null;
   filterClass: number | null;
   filterSubject: number | null;
+  filterRoom: number | null;
   
   // Filter setters
   onTrainerChange: (trainerId: number | null) => void;
   onDepartmentChange: (department: string | null) => void;
   onClassChange: (classId: number | null) => void;
   onSubjectChange: (subjectId: number | null) => void;
+  onRoomChange: (roomId: number | null) => void;
   onClearFilters: () => void;
   
   // Available options
@@ -41,6 +43,7 @@ interface TimetableFiltersProps {
   availableDepartments: string[];
   availableClasses: Array<{id: number, name: string, code: string}>;
   availableSubjects: Array<{id: number, name: string, code: string}>;
+  availableRooms: Array<{id: number, name: string}>;
 }
 
 export default function TimetableFilters({
@@ -51,18 +54,21 @@ export default function TimetableFilters({
   filterDepartment,
   filterClass,
   filterSubject,
+  filterRoom,
   onTrainerChange,
   onDepartmentChange,
   onClassChange,
   onSubjectChange,
+  onRoomChange,
   onClearFilters,
   availableTrainers,
   availableDepartments,
   availableClasses,
   availableSubjects,
+  availableRooms,
 }: TimetableFiltersProps) {
   // Count active filters
-  const activeFiltersCount = [filterTrainer, filterDepartment, filterClass, filterSubject].filter(Boolean).length;
+  const activeFiltersCount = [filterTrainer, filterDepartment, filterClass, filterSubject, filterRoom].filter(Boolean).length;
 
   if (!isAdmin) {
     return null;
@@ -124,6 +130,30 @@ export default function TimetableFilters({
 
                 <Separator />
 
+                {/* Department Filter */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Filter by Department</Label>
+                  <Select
+                    value={filterDepartment || 'all'}
+                    onValueChange={(value) => 
+                      onDepartmentChange(value === 'all' ? null : value)
+                    }
+                  >
+                    <SelectTrigger className="text-sm">
+                      <SelectValue placeholder="All departments" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Departments</SelectItem>
+                      {availableDepartments.map((dept) => (
+                        <SelectItem key={dept} value={dept}>
+                          {dept}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Trainer Filter */}
                 <div className="space-y-2">
                   <Label className="text-xs">Filter by Trainer</Label>
                   <Select
@@ -146,6 +176,7 @@ export default function TimetableFilters({
                   </Select>
                 </div>
 
+                {/* Class Filter */}
                 <div className="space-y-2">
                   <Label className="text-xs">Filter by Class</Label>
                   <Select
@@ -168,6 +199,7 @@ export default function TimetableFilters({
                   </Select>
                 </div>
 
+                {/* Subject Filter */}
                 <div className="space-y-2">
                   <Label className="text-xs flex items-center gap-1">
                     <BookOpen className="h-3 w-3" />
@@ -193,22 +225,26 @@ export default function TimetableFilters({
                   </Select>
                 </div>
 
+                {/* Room Filter */}
                 <div className="space-y-2">
-                  <Label className="text-xs">Filter by Department</Label>
+                  <Label className="text-xs flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />
+                    Filter by Room
+                  </Label>
                   <Select
-                    value={filterDepartment || 'all'}
+                    value={filterRoom?.toString() || 'all'}
                     onValueChange={(value) => 
-                      onDepartmentChange(value === 'all' ? null : value)
+                      onRoomChange(value === 'all' ? null : parseInt(value))
                     }
                   >
                     <SelectTrigger className="text-sm">
-                      <SelectValue placeholder="All departments" />
+                      <SelectValue placeholder="All rooms" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Departments</SelectItem>
-                      {availableDepartments.map((dept) => (
-                        <SelectItem key={dept} value={dept}>
-                          {dept}
+                      <SelectItem value="all">All Rooms</SelectItem>
+                      {availableRooms.map((room) => (
+                        <SelectItem key={room.id} value={room.id.toString()}>
+                          {room.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
