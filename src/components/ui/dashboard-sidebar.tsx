@@ -168,12 +168,7 @@ export function DashboardSidebar() {
 
   // Timetable Setup menu items (for admin and timetable admins)
   const timetableSetupItems: SubMenuItem[] = [
-    {
-      label: 'Timetable',
-      icon: <CalendarDays size={18} />,
-      href: '/timetable'
-    },
-    {
+       {
       label: 'Terms',
       icon: <Calendar size={18} />,
       href: '/term'
@@ -197,6 +192,11 @@ export function DashboardSidebar() {
       label: 'Classes',
       icon: <GraduationCap size={18} />,
       href: '/classes'
+    },
+     {
+      label: 'Timetable',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable'
     },
   ];
 
