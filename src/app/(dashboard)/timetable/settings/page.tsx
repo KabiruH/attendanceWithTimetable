@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/use-toast";
 import TimetableAdminsSection from '@/components/timetable/settings/TimetableAdminsSection';
 import UserAccessControlSection from '@/components/timetable/settings/UserAccessControlSection';
 import SubjectDeadlineSection from '@/components/timetable/settings/SubjectDeadlineSection';
-import AdminAssignmentSection from '@/components/timetable/settings/AdminAssignmentSection';
+import TimetableAdminAssignmentSection from '@/components/timetable/settings/AdminAssignmentSection';
 
 export default function TimetableSettingsPage() {
   const { toast } = useToast();
@@ -138,7 +138,7 @@ export default function TimetableSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <AdminAssignmentSection />
+              <TimetableAdminAssignmentSection />
             </CardContent>
           </Card>
         </TabsContent>

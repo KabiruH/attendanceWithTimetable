@@ -24,7 +24,14 @@ async function verifyAuth() {
 
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
+      select: { 
+        id: true, 
+        name: true, 
+        role: true, 
+        department: true, 
+        is_active: true,
+        is_blocked: true // ADD THIS
+      }
     });
 
     if (!user || !user.is_active) {
@@ -35,6 +42,12 @@ async function verifyAuth() {
   } catch (error) {
     return { error: 'Invalid token', status: 401 };
   }
+}
+
+// ADD THIS HELPER FUNCTION
+async function isSubjectSelectionBlocked(): Promise<boolean> {
+  const settings = await db.timetablesettings.findFirst();
+  return settings?.block_all_subject_selection || false;
 }
 
 // GET /api/trainers/[id]/assignments
@@ -105,6 +118,23 @@ export async function POST(
     if (user.role !== 'admin' && user.id !== trainerUserId) {
       return NextResponse.json(
         { error: 'Unauthorized. You can only update your own assignments.' },
+        { status: 403 }
+      );
+    }
+
+    // ✅ CHECK GLOBAL BLOCK (ADD THIS)
+    const isGloballyBlocked = await isSubjectSelectionBlocked();
+    if (isGloballyBlocked && user.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Class selection is currently disabled by administrator. Please contact admin for assistance.' },
+        { status: 403 }
+      );
+    }
+
+    // ✅ CHECK INDIVIDUAL BLOCK (ADD THIS)
+    if (user.is_blocked && user.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Your account is blocked from selecting classes. Please contact admin.' },
         { status: 403 }
       );
     }

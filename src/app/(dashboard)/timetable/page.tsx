@@ -25,8 +25,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TimetableSlot } from '@/lib/types/timetable';
-import { Printer, FileText, Building2, UserCheck } from "lucide-react"; // Add UserCheck icon
+import { Printer, FileText, Building2, UserCheck, Filter } from "lucide-react"; // Add UserCheck icon
 import { Button } from '@/components/ui/button';
+import PrintFilterDialog from '@/components/timetable/PrintFilterDialog';
 
 interface User {
   id: number;
@@ -67,8 +68,10 @@ export default function TimetablePage() {
   const [isPrintTrainerDialogOpen, setIsPrintTrainerDialogOpen] = useState(false); // Add this
 
   // Print mode state
-  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer'>('none');
-  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null); // Add this
+const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer' | 'filtered'>('none');  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null); // Add this
+const [isPrintFilterDialogOpen, setIsPrintFilterDialogOpen] = useState(false);
+const [printFilterType, setPrintFilterType] = useState<'department' | 'class' | 'combined' | null>(null);
+const [printFilterValue, setPrintFilterValue] = useState<string | number | { department: string; classIds: number[] } | null>(null);
 
   // Delete confirmation
   const [deletingSlot, setDeletingSlot] = useState<TimetableSlot | null>(null);
@@ -228,24 +231,45 @@ const fetchUserData = async () => {
     }
   };
 
-  // Fetch timetable data for a specific trainer (for printing)
-  const fetchTrainerTimetableData = async (trainerId: number) => {
-    try {
-      const params = new URLSearchParams();
-      if (selectedTerm) params.append('term_id', selectedTerm.toString());
-      params.append('trainer_id', trainerId.toString());
+// Handle filtered print
+// Update the handleFilteredPrint function
+const handleFilteredPrint = (
+  filterType: 'department' | 'class' | 'combined', 
+  filterValue: string | number | { department: string; classIds: number[] }
+) => {
+  setPrintFilterType(filterType);
+  setPrintFilterValue(filterValue);
+  setPrintMode('filtered');
+  
+  setTimeout(() => {
+    window.print();
+    setTimeout(() => {
+      setPrintMode('none');
+      setPrintFilterType(null);
+      setPrintFilterValue(null);
+    }, 500);
+  }, 100);
+};
 
-      const response = await fetch(`/api/timetable?${params.toString()}`);
-      if (!response.ok) throw new Error('Failed to fetch trainer timetable');
-
-      const data = await response.json();
-      return data.data;
-    } catch (error) {
-      console.error('Error fetching trainer timetable:', error);
-      setError('Failed to load trainer timetable');
-      return [];
-    }
-  };
+// Update getFilteredPrintSlots function
+const getFilteredPrintSlots = () => {
+  if (!printFilterType || !printFilterValue) return [];
+  
+  if (printFilterType === 'department') {
+    return timetableSlots.filter(slot => slot.subjects?.department === printFilterValue);
+  } else if (printFilterType === 'class') {
+    return timetableSlots.filter(slot => slot.class_id === printFilterValue);
+  } else if (printFilterType === 'combined' && typeof printFilterValue === 'object') {
+    const { department, classIds } = printFilterValue as { department: string; classIds: number[] };
+    return timetableSlots.filter(
+      slot => 
+        slot.subjects?.department === department && 
+        classIds.includes(slot.class_id)
+    );
+  }
+  
+  return [];
+};
 
   // Extract filter options from timetable data
   const extractFilterOptions = (slots: TimetableSlot[]) => {
@@ -458,6 +482,14 @@ const fetchUserData = async () => {
           <UserCheck className="mr-2 h-4 w-4" />
           Print Trainer Schedule
         </Button>
+
+          <Button
+    variant="outline"
+    onClick={() => setIsPrintFilterDialogOpen(true)}
+  >
+    <Filter className="mr-2 h-4 w-4" />
+    Print Filtered
+  </Button>
       </div>
 
       <div className="flex items-center gap-4 p-4 bg-white rounded-lg border">
@@ -560,6 +592,16 @@ viewMode={viewMode}
         />
       )}
 
+      {/* Add after printMode === 'trainer' section */}
+{printMode === 'filtered' && printFilterType && printFilterValue && (
+  <PrintableTimetable
+    slots={getFilteredPrintSlots()}
+    currentWeek={currentWeek}
+    termName={terms.find(t => t.id === selectedTerm)?.name}
+    groupBy={printFilterType === 'class' ? 'class' : 'department'}
+  />
+)}
+
       <GenerateTimetableDialog
         open={isGenerateDialogOpen}
         onOpenChange={setIsGenerateDialogOpen}
@@ -592,6 +634,15 @@ viewMode={viewMode}
         trainers={allTrainers.length > 0 ? allTrainers : availableTrainers}
         onPrint={handlePrintTrainer}
       />
+
+      {/* Add after PrintTrainerDialog */}
+<PrintFilterDialog
+  open={isPrintFilterDialogOpen}
+  onOpenChange={setIsPrintFilterDialogOpen}
+  departments={availableDepartments}
+  classes={availableClasses}
+  onPrint={handleFilteredPrint}
+/>
 
       <AlertDialog open={!!deletingSlot} onOpenChange={() => setDeletingSlot(null)}>
         <AlertDialogContent>

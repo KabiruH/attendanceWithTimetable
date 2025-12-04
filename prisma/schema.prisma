@@ -426,6 +426,7 @@ model timetablesettings {
   subject_selection_deadline  DateTime?
   deadline_enabled            Boolean   @default(false)
   allow_admin_assignment      Boolean   @default(false)
+  block_all_subject_selection Boolean   @default(false)
   created_at                  DateTime  @default(now())
   updated_at                  DateTime  @updatedAt
 }

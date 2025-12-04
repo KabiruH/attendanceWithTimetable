@@ -157,6 +157,12 @@ export function DashboardSidebar() {
       href: '/reports',
       type: 'link'
     },
+     {
+      label: 'Classes',
+      icon: <GraduationCap size={20} />,
+      href: '/classes',
+      type: 'link'
+    },
     {
       label: 'Profile',
       icon: <UserIcon size={20} />,
