@@ -4,24 +4,14 @@ import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
 import { db } from '@/lib/db/db';
 
-/**
- * GET /api/terms/[id]/classes
- * Get all classes assigned to a term
- */
-export async function GET(
-  request: NextRequest,
-  context: { params: Promise<{ id: string }> }
-) {
+// Helper function to verify authentication
+async function verifyAuth() {
   try {
-    // Authentication
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
    
     if (!token) {
-      return NextResponse.json(
-        { error: 'No token found' },
-        { status: 401 }
-      );
+      return { error: 'No token found', status: 401 };
     }
 
     const { payload } = await jwtVerify(
@@ -32,23 +22,46 @@ export async function GET(
     const userId = Number(payload.id);
 
     if (!userId || isNaN(userId)) {
-      return NextResponse.json(
-        { error: 'Invalid user ID in token' },
-        { status: 401 }
-      );
+      return { error: 'Invalid user ID in token', status: 401 };
     }
 
     // Verify user exists and is active
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
+      select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
     });
 
     if (!user || !user.is_active) {
-      return NextResponse.json(
-        { error: 'User not found or inactive' },
-        { status: 401 }
-      );
+      return { error: 'User not found or inactive', status: 401 };
+    }
+
+    return { user };
+  } catch (error) {
+    return { error: 'Invalid token', status: 401 };
+  }
+}
+
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+  return user.role === 'admin' || user.has_timetable_admin === true;
+}
+
+/**
+ * GET /api/terms/[id]/classes
+ * Get all classes assigned to a term
+ */
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
     const params = await context.params;
@@ -132,55 +145,28 @@ export async function GET(
 
 /**
  * POST /api/terms/[id]/classes
- * Assign classes to a term with validation for duplicates and conflicts
+ * Assign classes to a term - classes CAN be assigned to multiple terms
  */
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Authentication
-    const cookieStore = await cookies();
-    const token = cookieStore.get('token');
-   
-    if (!token) {
-      return NextResponse.json(
-        { error: 'No token found' },
-        { status: 401 }
-      );
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
-    const { payload } = await jwtVerify(
-      token.value,
-      new TextEncoder().encode(process.env.JWT_SECRET)
-    );
-
-    const userId = Number(payload.id);
-
-    if (!userId || isNaN(userId)) {
-      return NextResponse.json(
-        { error: 'Invalid user ID in token' },
-        { status: 401 }
-      );
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
-    // Verify user exists and is active
-    const user = await db.users.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
-    });
+    const { user } = authResult;
 
-    if (!user || !user.is_active) {
+    // Check if user is admin or timetable admin
+    if (!hasTimetableAdminAccess(user)) {
       return NextResponse.json(
-        { error: 'User not found or inactive' },
-        { status: 401 }
-      );
-    }
-
-    // Check if user is admin
-    if (user.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }
@@ -250,63 +236,6 @@ export async function POST(
           { status: 400 }
         );
       }
-
-      // Check if any of these classes are already assigned to OTHER active terms
-      const conflictingAssignments = await db.termclasses.findMany({
-        where: {
-          class_id: { in: class_ids },
-          term_id: { not: termId }, // Exclude current term
-          terms: {
-            is_active: true // Only check active terms
-          }
-        },
-        include: {
-          terms: {
-            select: {
-              id: true,
-              name: true,
-              start_date: true,
-              end_date: true
-            }
-          },
-          classes: {
-            select: {
-              id: true,
-              name: true,
-              code: true
-            }
-          }
-        }
-      });
-
-      if (conflictingAssignments.length > 0) {
-        // Group conflicts by term for better error message
-        const conflictsByTerm = conflictingAssignments.reduce((acc, assignment) => {
-          const termName = assignment.terms.name;
-          if (!acc[termName]) {
-            acc[termName] = {
-              term_id: assignment.terms.id,
-              term_name: termName,
-              classes: []
-            };
-          }
-          acc[termName].classes.push({
-            id: assignment.classes.id,
-            code: assignment.classes.code,
-            name: assignment.classes.name
-          });
-          return acc;
-        }, {} as Record<string, any>);
-
-        return NextResponse.json(
-          { 
-            error: 'Some classes are already assigned to other active terms',
-            conflicts: Object.values(conflictsByTerm),
-            message: 'A class cannot be assigned to multiple active terms simultaneously'
-          },
-          { status: 409 }
-        );
-      }
     }
 
     // Delete existing assignments for this term
@@ -314,7 +243,7 @@ export async function POST(
       where: { term_id: termId }
     });
 
-    // Create new assignments
+    // Create new assignments (classes can be in multiple terms)
     if (class_ids.length > 0) {
       await db.termclasses.createMany({
         data: class_ids.map((class_id: number) => ({
@@ -373,48 +302,21 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Authentication
-    const cookieStore = await cookies();
-    const token = cookieStore.get('token');
-   
-    if (!token) {
-      return NextResponse.json(
-        { error: 'No token found' },
-        { status: 401 }
-      );
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
-    const { payload } = await jwtVerify(
-      token.value,
-      new TextEncoder().encode(process.env.JWT_SECRET)
-    );
-
-    const userId = Number(payload.id);
-
-    if (!userId || isNaN(userId)) {
-      return NextResponse.json(
-        { error: 'Invalid user ID in token' },
-        { status: 401 }
-      );
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
-    // Verify user exists and is active
-    const user = await db.users.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
-    });
+    const { user } = authResult;
 
-    if (!user || !user.is_active) {
+    // Check if user is admin or timetable admin
+    if (!hasTimetableAdminAccess(user)) {
       return NextResponse.json(
-        { error: 'User not found or inactive' },
-        { status: 401 }
-      );
-    }
-
-    // Check if user is admin
-    if (user.role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }

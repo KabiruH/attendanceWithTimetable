@@ -23,10 +23,10 @@ async function verifyAuth() {
     const role = payload.role as string;
     const name = payload.name as string;
 
-    // Verify user is still active
+    // Verify user is still active and get has_timetable_admin
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
+      select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
     });
 
     if (!user || !user.is_active) {
@@ -37,6 +37,11 @@ async function verifyAuth() {
   } catch (error) {
     return { error: 'Invalid token', status: 401 };
   }
+}
+
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+  return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
 /**
@@ -128,8 +133,8 @@ export async function GET(
       );
     }
 
-    // If not admin, only allow viewing their own slots
-    if (user.role !== 'admin' && timetableSlot.employee_id !== user.id) {
+    // If not admin or timetable admin, only allow viewing their own slots
+    if (!hasTimetableAdminAccess(user) && timetableSlot.employee_id !== user.id) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 403 }
@@ -156,7 +161,7 @@ export async function GET(
 /**
  * PUT /api/timetable/[id]
  * Update a timetable slot (reschedule)
- * Admin: Can update any slot
+ * Admin/Timetable Admin: Can update any slot
  * Trainer: Can only reschedule their own slots
  */
 export async function PUT(
@@ -190,10 +195,10 @@ export async function PUT(
     }
 
     // Check authorization
-    const isAdmin = user.role === 'admin';
+    const isAdminOrTimetableAdmin = hasTimetableAdminAccess(user);
     const isOwnSlot = existingSlot.employee_id === user.id;
 
-    if (!isAdmin && !isOwnSlot) {
+    if (!isAdminOrTimetableAdmin && !isOwnSlot) {
       return NextResponse.json(
         { error: 'Unauthorized. You can only update your own slots.' },
         { status: 403 }
@@ -220,10 +225,10 @@ export async function PUT(
     if (subject_id !== undefined) updateData.subject_id = subject_id;
     
     if (employee_id !== undefined) {
-      // Only admin can change trainer
-      if (!isAdmin) {
+      // Only admin or timetable admin can change trainer
+      if (!isAdminOrTimetableAdmin) {
         return NextResponse.json(
-          { error: 'Only admin can change the assigned trainer' },
+          { error: 'Only admin or timetable admin can change the assigned trainer' },
           { status: 403 }
         );
       }
@@ -246,27 +251,27 @@ export async function PUT(
     
     if (status !== undefined) updateData.status = status;
 
-  // ✅ Validate class-subject relationship if being changed
-if (class_id !== undefined || subject_id !== undefined) {
-  const checkClassId = class_id ?? existingSlot.class_id;
-  const checkSubjectId = subject_id ?? existingSlot.subject_id;
-  const checkTermId = term_id ?? existingSlot.term_id;
+    // ✅ Validate class-subject relationship if being changed
+    if (class_id !== undefined || subject_id !== undefined) {
+      const checkClassId = class_id ?? existingSlot.class_id;
+      const checkSubjectId = subject_id ?? existingSlot.subject_id;
+      const checkTermId = term_id ?? existingSlot.term_id;
 
-  const classSubject = await db.classsubjects.findFirst({
-    where: {
-      class_id: checkClassId,
-      subject_id: checkSubjectId,
-      term_id: checkTermId
+      const classSubject = await db.classsubjects.findFirst({
+        where: {
+          class_id: checkClassId,
+          subject_id: checkSubjectId,
+          term_id: checkTermId
+        }
+      });
+
+      if (!classSubject) {
+        return NextResponse.json({
+          error: 'Invalid class-subject combination',
+          details: 'The subject must be assigned to the class for this term'
+        }, { status: 400 });
+      }
     }
-  });
-
-  if (!classSubject) {
-    return NextResponse.json({
-      error: 'Invalid class-subject combination',
-      details: 'The subject must be assigned to the class for this term'
-    }, { status: 400 });
-  }
-}
 
     // Check for conflicts if rescheduling
     if (room_id !== undefined || lesson_period_id !== undefined || day_of_week !== undefined) {
@@ -344,7 +349,7 @@ if (class_id !== undefined || subject_id !== undefined) {
 
 /**
  * DELETE /api/timetable/[id]
- * Delete a timetable slot (Admin only)
+ * Delete a timetable slot (Admin/Timetable Admin only)
  */
 export async function DELETE(
   request: NextRequest,
@@ -364,10 +369,10 @@ export async function DELETE(
     const params = await context.params;
     const slotId = params.id;
 
-    // Only admin can delete slots
-    if (user.role !== 'admin') {
+    // Only admin or timetable admin can delete slots
+    if (!hasTimetableAdminAccess(user)) {
       return NextResponse.json(
-        { error: 'Unauthorized. Only admin can delete timetable slots.' },
+        { error: 'Unauthorized. Only admin or timetable admin can delete timetable slots.' },
         { status: 403 }
       );
     }

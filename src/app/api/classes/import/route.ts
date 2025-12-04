@@ -30,10 +30,10 @@ async function verifyAuth() {
         const role = payload.role as string;
         const name = payload.name as string;
 
-        // Now this query should work
+        // Now this query should work - also get has_timetable_admin
         const user = await db.users.findUnique({
             where: { id: userId },
-            select: { id: true, name: true, role: true, department: true, is_active: true }
+            select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
         });
 
         if (!user || !user.is_active) {
@@ -47,7 +47,12 @@ async function verifyAuth() {
     }
 }
 
-// POST /api/classes/import - Bulk import classes from Excel (Admin only)
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+    return user.role === 'admin' || user.has_timetable_admin === true;
+}
+
+// POST /api/classes/import - Bulk import classes from Excel (Admin/Timetable Admin only)
 export async function POST(request: NextRequest) {
     try {
         const authResult = await verifyAuth();
@@ -55,17 +60,17 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: authResult.error }, { status: authResult.status });
         }
 
-        // ✅ NEW: Explicit check for user existence
+        // ✅ Explicit check for user existence
         if (!authResult.user) {
             return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
 
-        const { user } = authResult; // ✅ Now TypeScript knows user exists
+        const { user } = authResult;
 
-        // Check if user is admin
-        if (user.role !== 'admin') {
+        // Check if user is admin or timetable admin
+        if (!hasTimetableAdminAccess(user)) {
             return NextResponse.json(
-                { error: 'Unauthorized. Admin access required.' },
+                { error: 'Unauthorized. Admin or Timetable Admin access required.' },
                 { status: 403 }
             );
         }

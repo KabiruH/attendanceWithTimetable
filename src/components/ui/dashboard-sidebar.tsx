@@ -84,6 +84,12 @@ export function DashboardSidebar() {
       }
     };
     checkAuth();
+
+    // Set up an interval to refresh user data every 30 seconds
+    // This ensures that if an admin grants timetable access, it reflects quickly
+    const refreshInterval = setInterval(checkAuth, 30000);
+
+    return () => clearInterval(refreshInterval);
   }, [router]);
 
   // Auto-expand admin menu if on an admin page
@@ -228,8 +234,9 @@ export function DashboardSidebar() {
     return null;
   }
 
+  // Safely get the role and ensure has_timetable_admin defaults to false
   const isAdmin = currentUser?.role === 'admin';
-  const hasTimetableAdmin = currentUser?.has_timetable_admin || false;
+  const hasTimetableAdmin = currentUser?.has_timetable_admin === true;
   const isRegularEmployee = currentUser?.role === 'employee' && !hasTimetableAdmin && !isAdmin;
 
   return (

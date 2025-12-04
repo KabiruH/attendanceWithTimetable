@@ -74,6 +74,7 @@ export async function GET(request: Request) {
       gender: user.gender,
       department: user.department,
       is_active: user.is_active,
+      has_timetable_admin: user.has_timetable_admin,
       created_at: user.created_at,
       // Employee data if it exists
       email: user.employees?.email || null,

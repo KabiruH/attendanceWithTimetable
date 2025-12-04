@@ -25,7 +25,7 @@ async function verifyAuth() {
 
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true, email: true }
+      select: { id: true, name: true, role: true, department: true, is_active: true, email: true, has_timetable_admin: true }
     });
 
     if (!user || !user.is_active) {
@@ -36,6 +36,11 @@ async function verifyAuth() {
   } catch (error) {
     return { error: 'Invalid token', status: 401 };
   }
+}
+
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+  return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
 // GET /api/subjects - Get all subjects
@@ -79,9 +84,10 @@ export async function POST(request: NextRequest) {
 
     const { user } = authResult;
 
-    if (user.role !== 'admin') {
+    // Check if user is either an admin OR has timetable admin privileges
+    if (!hasTimetableAdminAccess(user)) {
       return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }
@@ -146,9 +152,10 @@ export async function PUT(request: NextRequest) {
 
     const { user } = authResult;
 
-    if (user.role !== 'admin') {
+    // Check if user is either an admin OR has timetable admin privileges
+    if (!hasTimetableAdminAccess(user)) {
       return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }

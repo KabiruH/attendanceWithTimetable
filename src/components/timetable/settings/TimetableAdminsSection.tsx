@@ -93,10 +93,11 @@ export default function TimetableAdminsSection() {
 
       const result = await response.json();
 
-      // Update local state
+      // Update local state with the actual response data to ensure persistence
+      // This ensures the toggle state matches exactly what's in the database
       setUsers(users.map(user =>
         user.id === userId
-          ? { ...user, has_timetable_admin: !currentStatus }
+          ? { ...user, has_timetable_admin: result.user.has_timetable_admin }
           : user
       ));
 

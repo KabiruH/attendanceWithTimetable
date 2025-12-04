@@ -31,7 +31,7 @@ async function verifyAuth() {
 
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, is_active: true }
+      select: { id: true, name: true, role: true, is_active: true, has_timetable_admin: true }
     });
 
     if (!user || !user.is_active) {
@@ -44,6 +44,11 @@ async function verifyAuth() {
   }
 }
 
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+  return user.role === 'admin' || user.has_timetable_admin === true;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -51,9 +56,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
-    if (!authResult.user || authResult.user.role !== 'admin') {
+    if (!authResult.user || !hasTimetableAdminAccess(authResult.user)) {
       return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }

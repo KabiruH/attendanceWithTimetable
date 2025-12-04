@@ -33,6 +33,7 @@ interface User {
   name: string;
   role: string;
   department: string;
+  has_timetable_admin?: boolean; // Add this
 }
 
 interface Term {
@@ -94,6 +95,7 @@ export default function TimetablePage() {
 
   // Computed values
   const isAdmin = user?.role === 'admin';
+  const hasTimetableAdminAccess = user?.role === 'admin' || user?.has_timetable_admin === true;
 
   useEffect(() => {
     fetchUserData();
@@ -109,25 +111,26 @@ export default function TimetablePage() {
   }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, filterClass, filterSubject, viewMode, filterRoom]);
 
   // Fetch current user
-  const fetchUserData = async () => {
-    try {
-      const response = await fetch('/api/auth/check');
-      if (!response.ok) throw new Error('Failed to fetch user data');
-      const data = await response.json();
-      setUser(data.user);
+const fetchUserData = async () => {
+  try {
+    const response = await fetch('/api/auth/check');
+    if (!response.ok) throw new Error('Failed to fetch user data');
+    const data = await response.json();
+    setUser(data.user);
 
-      // If not admin, automatically set view to their schedule
-      if (data.user.role !== 'admin') {
-        setViewMode('mine');
-        setFilterTrainer(data.user.id);
-      }
-    } catch (error) {
-      console.error('Error fetching user:', error);
-      setError('Failed to load user data');
-    } finally {
-      setIsLoading(false);
+    // Only set view to 'mine' if user is NOT admin and NOT timetable admin
+    const hasTimetableAccess = data.user.role === 'admin' || data.user.has_timetable_admin === true;
+    if (!hasTimetableAccess) {
+      setViewMode('mine');
+      setFilterTrainer(data.user.id);
     }
-  };
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    setError('Failed to load user data');
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   // Fetch departments from API
   const fetchDepartments = async () => {
@@ -214,9 +217,9 @@ export default function TimetablePage() {
       setTimetableSlots(data.data);
 
       // Extract unique trainers, classes, subjects, and rooms for filters
-      if (viewMode === 'all' && user?.role === 'admin') {
-        extractFilterOptions(data.data);
-      }
+     if (viewMode === 'all' && hasTimetableAdminAccess) {
+  extractFilterOptions(data.data);
+}
     } catch (error) {
       console.error('Error fetching timetable:', error);
       setError('Failed to load timetable data');
@@ -414,10 +417,10 @@ export default function TimetablePage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       <TimetableHeader
-        isAdmin={isAdmin}
-        onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
-        onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
-      />
+  isAdmin={hasTimetableAdminAccess} // Changed from isAdmin
+  onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
+  onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
+/>
 
       {error && (
         <Alert variant="destructive">
@@ -465,8 +468,8 @@ export default function TimetablePage() {
         />
 
         <TimetableFilters
-          isAdmin={isAdmin}
-          viewMode={viewMode}
+  isAdmin={hasTimetableAdminAccess}         
+  viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
           filterTrainer={filterTrainer}
           filterDepartment={filterDepartment}
@@ -488,8 +491,8 @@ export default function TimetablePage() {
       </div>
 
       <ActiveFiltersDisplay
-        isAdmin={isAdmin}
-        viewMode={viewMode}
+isAdmin={hasTimetableAdminAccess}        
+viewMode={viewMode}
         filterTrainer={filterTrainer}
         filterClass={filterClass}
         filterSubject={filterSubject}
@@ -578,7 +581,7 @@ export default function TimetablePage() {
           slot={selectedSlot}
           onDelete={() => handleDeleteSlot(selectedSlot)}
           onUpdate={fetchTimetableData}
-          isAdmin={isAdmin}
+  isAdmin={hasTimetableAdminAccess}
         />
       )}
 

@@ -83,17 +83,23 @@ export default function AssignClassesDialog({
       const classesData = await classesResponse.json();
       
       // Fetch all term-class assignments to check which classes are assigned where
-      const allTermClassesResponse = await fetch('/api/terms/all-assignments');
       let classAssignments: Record<number, string> = {};
       
-      if (allTermClassesResponse.ok) {
-        const assignmentsData = await allTermClassesResponse.json();
-        // Create a map of class_id -> term_name (excluding current term)
-        assignmentsData.data.forEach((assignment: any) => {
-          if (assignment.term_id !== term.id && assignment.term.is_active) {
-            classAssignments[assignment.class_id] = assignment.term.name;
+      try {
+        const allTermClassesResponse = await fetch('/api/terms/all-assignments');
+        if (allTermClassesResponse.ok) {
+          const assignmentsData = await allTermClassesResponse.json();
+          // Create a map of class_id -> term_name (excluding current term)
+          if (assignmentsData.data && Array.isArray(assignmentsData.data)) {
+            assignmentsData.data.forEach((assignment: any) => {
+              if (assignment.term_id !== term.id && assignment.term?.is_active) {
+                classAssignments[assignment.class_id] = assignment.term.name;
+              }
+            });
           }
-        });
+        }
+      } catch (error) {
+        console.log('Could not fetch term assignments - continuing without conflict detection');
       }
 
       // Enhance classes with assignment info

@@ -1,6 +1,7 @@
 // app/api/terms/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
+import { verifyJwtToken } from '@/lib/auth/jwt';
 
 const prisma = new PrismaClient();
 
@@ -10,6 +11,41 @@ const prisma = new PrismaClient();
  */
 export async function POST(request: NextRequest) {
   try {
+    // Verify authentication
+    const cookieHeader = request.headers.get('cookie');
+    const token = cookieHeader?.split(';')
+      .find(cookie => cookie.trim().startsWith('token='))
+      ?.split('=')[1];
+
+    if (!token) {
+      return NextResponse.json(
+        { error: "Unauthorized: No token provided" },
+        { status: 401 }
+      );
+    }
+
+    // Verify token
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken) {
+      return NextResponse.json(
+        { error: "Unauthorized: Invalid token" },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is admin or timetable admin
+    const user = await prisma.users.findUnique({
+      where: { id: decodedToken.id as number },
+      select: { role: true, has_timetable_admin: true }
+    });
+
+    if (!user || (user.role !== 'admin' && !user.has_timetable_admin)) {
+      return NextResponse.json(
+        { error: "Unauthorized: Only admins and timetable admins can create terms" },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const { name, start_date, end_date, working_days, holidays } = body;
 
@@ -58,7 +94,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the term
-    const now = Date()
+    const now = new Date();
     const term = await prisma.terms.create({
       data: {
         name,
@@ -79,7 +115,6 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
-
   } catch (error: any) {
     console.error('Error creating term:', error);
     return NextResponse.json(
@@ -98,6 +133,28 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
+    // Verify authentication
+    const cookieHeader = request.headers.get('cookie');
+    const token = cookieHeader?.split(';')
+      .find(cookie => cookie.trim().startsWith('token='))
+      ?.split('=')[1];
+
+    if (!token) {
+      return NextResponse.json(
+        { error: "Unauthorized: No token provided" },
+        { status: 401 }
+      );
+    }
+
+    // Verify token
+    const decodedToken = await verifyJwtToken(token);
+    if (!decodedToken) {
+      return NextResponse.json(
+        { error: "Unauthorized: Invalid token" },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const isActive = searchParams.get('is_active');
     const includeInactive = searchParams.get('include_inactive');
@@ -134,7 +191,6 @@ export async function GET(request: NextRequest) {
       data: terms,
       count: terms.length
     });
-
   } catch (error: any) {
     console.error('Error fetching terms:', error);
     return NextResponse.json(

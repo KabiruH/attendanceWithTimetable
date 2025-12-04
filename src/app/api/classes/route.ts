@@ -23,10 +23,10 @@ async function verifyAuth() {
         const role = payload.role as string;
         const name = payload.name as string;
 
-        // Verify user is still active
+        // Verify user is still active and get has_timetable_admin status
         const user = await db.users.findUnique({
             where: { id: userId },
-            select: { id: true, name: true, role: true, department: true, is_active: true }
+            select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
         });
 
         if (!user || !user.is_active) {
@@ -39,7 +39,12 @@ async function verifyAuth() {
     }
 }
 
-// GET /api/classes - Fetch all classes (Admin) or active classes (Trainers) WITH SUBJECT COUNT
+// Helper function to check if user has timetable admin access
+function hasTimetableAdminAccess(user: any): boolean {
+    return user.role === 'admin' || user.has_timetable_admin === true;
+}
+
+// GET /api/classes - Fetch all classes (Admin/Timetable Admin) or active classes (Trainers) WITH SUBJECT COUNT
 export async function GET(request: NextRequest) {
     try {
         const authResult = await verifyAuth();
@@ -58,8 +63,8 @@ export async function GET(request: NextRequest) {
         // Build query conditions
         const whereConditions: any = {};
 
-        // If not admin or explicitly requesting active only, filter for active classes
-        if (user.role !== 'admin' || activeOnly) {
+        // If not admin/timetable admin or explicitly requesting active only, filter for active classes
+        if (!hasTimetableAdminAccess(user) || activeOnly) {
             whereConditions.is_active = true;
         }
 
@@ -106,7 +111,7 @@ export async function GET(request: NextRequest) {
     }
 }
 
-// POST /api/classes - Create new class (Admin only)
+// POST /api/classes - Create new class (Admin/Timetable Admin only)
 export async function POST(request: NextRequest) {
     try {
         const authResult = await verifyAuth();
@@ -120,10 +125,10 @@ export async function POST(request: NextRequest) {
 
         const { user } = authResult;
 
-        // Check if user is admin
-        if (user.role !== 'admin') {
+        // Check if user is admin or timetable admin
+        if (!hasTimetableAdminAccess(user)) {
             return NextResponse.json(
-                { error: 'Unauthorized. Admin access required.' },
+                { error: 'Unauthorized. Admin or Timetable Admin access required.' },
                 { status: 403 }
             );
         }
@@ -173,7 +178,7 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// PUT /api/classes - Update existing class (Admin only)
+// PUT /api/classes - Update existing class (Admin/Timetable Admin only)
 export async function PUT(request: NextRequest) {
     try {
         const authResult = await verifyAuth();
@@ -187,10 +192,10 @@ export async function PUT(request: NextRequest) {
 
         const { user } = authResult;
 
-        // Check if user is admin
-        if (user.role !== 'admin') {
+        // Check if user is admin or timetable admin
+        if (!hasTimetableAdminAccess(user)) {
             return NextResponse.json(
-                { error: 'Unauthorized. Admin access required.' },
+                { error: 'Unauthorized. Admin or Timetable Admin access required.' },
                 { status: 403 }
             );
         }

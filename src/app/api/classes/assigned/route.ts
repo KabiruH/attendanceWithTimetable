@@ -10,6 +10,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
   name: string; 
   role: string; 
   is_active: boolean;
+  has_timetable_admin?: boolean;
   authMethod: 'jwt' | 'mobile_jwt';
 }> {
   // Try JWT first (web app)
@@ -20,7 +21,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
       const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number };
       const user = await db.users.findUnique({
         where: { id: decoded.userId },
-        select: { id: true, name: true, role: true, is_active: true }
+        select: { id: true, name: true, role: true, is_active: true, has_timetable_admin: true }
       });
 
       if (user && user.is_active) {
@@ -37,7 +38,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
     if (mobileAuth.success && mobileAuth.payload) {
       const user = await db.users.findUnique({
         where: { id: mobileAuth.payload.employeeId || mobileAuth.payload.userId },
-        select: { id: true, name: true, role: true, is_active: true }
+        select: { id: true, name: true, role: true, is_active: true, has_timetable_admin: true }
       });
 
       if (user && user.is_active) {
