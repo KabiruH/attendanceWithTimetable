@@ -62,15 +62,18 @@ export default function PrintFilterDialog({
     if (filterType === 'department' && selectedDepartment) {
       onPrint('department', selectedDepartment);
       onOpenChange(false);
+      handleReset();
     } else if (filterType === 'class' && selectedClass) {
       onPrint('class', parseInt(selectedClass));
       onOpenChange(false);
+      handleReset();
     } else if (filterType === 'combined' && combinedDepartment && selectedClassIds.length > 0) {
       onPrint('combined', {
         department: combinedDepartment,
         classIds: selectedClassIds
       });
       onOpenChange(false);
+      handleReset();
     }
   };
 
@@ -99,6 +102,7 @@ export default function PrintFilterDialog({
           </DialogTitle>
           <DialogDescription>
             Select a filter type and choose what to print. Only slots matching your selection will be included.
+            Multiple subjects in the same time slot will be shown together.
           </DialogDescription>
         </DialogHeader>
 
@@ -147,7 +151,7 @@ export default function PrintFilterDialog({
                 </Label>
               </div>
 
-              {/* Combined Filter - NEW */}
+              {/* Combined Filter */}
               <div className="flex items-center space-x-2 p-3 border rounded-lg hover:bg-gray-50 cursor-pointer">
                 <RadioGroupItem value="combined" id="combined" />
                 <Label 
@@ -222,7 +226,7 @@ export default function PrintFilterDialog({
             </div>
           )}
 
-          {/* Combined Filter Selection - NEW */}
+          {/* Combined Filter Selection */}
           {filterType === 'combined' && (
             <div className="space-y-4">
               {/* Step 1: Select Department */}

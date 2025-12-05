@@ -1,4 +1,4 @@
-// components/timetable/settings/SubjectDeadlineSection.tsx
+// components/timetable/settings/TimetableGenerationDeadlineSection.tsx
 'use client';
 import { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
@@ -7,17 +7,17 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
-import { Calendar as CalendarIcon, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { Calendar as CalendarIcon, AlertTriangle, CheckCircle2, Clock, Sparkles, Badge } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { format } from "date-fns";
 
 interface TimetableSettings {
   id: number;
-  subject_selection_deadline: string | null;
-  deadline_enabled: boolean;
+  timetable_generation_deadline: string | null;
+  generation_deadline_enabled: boolean;
 }
 
-export default function SubjectDeadlineSection() {
+export default function TimetableGenerationDeadlineSection() {
   const { toast } = useToast();
   const [settings, setSettings] = useState<TimetableSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,9 +38,9 @@ export default function SubjectDeadlineSection() {
       
       if (data.data) {
         setSettings(data.data);
-        setDeadlineEnabled(data.data.deadline_enabled);
-        if (data.data.subject_selection_deadline) {
-          setSelectedDate(new Date(data.data.subject_selection_deadline));
+        setDeadlineEnabled(data.data.generation_deadline_enabled || false);
+        if (data.data.timetable_generation_deadline) {
+          setSelectedDate(new Date(data.data.timetable_generation_deadline));
         }
       }
     } catch (error) {
@@ -62,8 +62,8 @@ export default function SubjectDeadlineSection() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          deadline_enabled: deadlineEnabled,
-          subject_selection_deadline: selectedDate?.toISOString() || null,
+          generation_deadline_enabled: deadlineEnabled,
+          timetable_generation_deadline: selectedDate?.toISOString() || null,
         }),
       });
 
@@ -77,7 +77,7 @@ export default function SubjectDeadlineSection() {
 
       toast({
         title: "Success",
-        description: "Deadline settings saved successfully",
+        description: "Timetable generation deadline saved successfully",
       });
     } catch (error) {
       console.error('Error saving settings:', error);
@@ -108,29 +108,37 @@ export default function SubjectDeadlineSection() {
       return {
         type: 'expired',
         message: `Deadline passed ${Math.abs(diffDays)} day${Math.abs(diffDays) !== 1 ? 's' : ''} ago`,
-        icon: <AlertTriangle className="h-4 w-4" />,
-        color: 'destructive'
+        description: 'Timetable can now be generated',
+        icon: <CheckCircle2 className="h-4 w-4" />,
+        color: 'default',
+        canGenerate: true
       };
     } else if (diffDays === 0) {
       return {
         type: 'today',
         message: 'Deadline is today',
+        description: 'Timetable can be generated after midnight',
         icon: <Clock className="h-4 w-4" />,
-        color: 'warning'
+        color: 'warning',
+        canGenerate: false
       };
     } else if (diffDays <= 3) {
       return {
         type: 'soon',
-        message: `${diffDays} day${diffDays !== 1 ? 's' : ''} remaining`,
+        message: `${diffDays} day${diffDays !== 1 ? 's' : ''} until generation`,
+        description: 'Timetable generation will be available after this date',
         icon: <Clock className="h-4 w-4" />,
-        color: 'warning'
+        color: 'default',
+        canGenerate: false
       };
     } else {
       return {
         type: 'active',
-        message: `${diffDays} days remaining`,
-        icon: <CheckCircle2 className="h-4 w-4" />,
-        color: 'default'
+        message: `${diffDays} days until generation`,
+        description: 'Timetable generation will be available after this date',
+        icon: <CalendarIcon className="h-4 w-4" />,
+        color: 'default',
+        canGenerate: false
       };
     }
   };
@@ -148,11 +156,11 @@ export default function SubjectDeadlineSection() {
   return (
     <div className="space-y-6">
       <Alert>
-        <CalendarIcon className="h-4 w-4" />
+        <Sparkles className="h-4 w-4" />
         <AlertDescription>
-          Set a deadline for trainers to select their subjects. After the deadline, 
-          trainers will not be able to modify their subject selections unless an admin 
-          assigns on their behalf.
+          Set a deadline for when the timetable can be generated. This ensures all trainers 
+          have completed their class and subject selections before the timetable is created.
+          The "Generate Timetable" button will be disabled until this deadline passes.
         </AlertDescription>
       </Alert>
 
@@ -160,10 +168,10 @@ export default function SubjectDeadlineSection() {
         <div className="flex items-center justify-between p-4 border rounded-lg">
           <div className="space-y-0.5">
             <Label htmlFor="deadline-enabled" className="text-base font-medium">
-              Enable Deadline Enforcement
+              Enable Generation Deadline
             </Label>
             <p className="text-sm text-gray-600">
-              Automatically block subject selection after the deadline
+              Prevent timetable generation until after the deadline
             </p>
           </div>
           <Switch
@@ -176,7 +184,7 @@ export default function SubjectDeadlineSection() {
         {deadlineEnabled && (
           <>
             <div className="space-y-2">
-              <Label>Subject Selection Deadline</Label>
+              <Label>Timetable Generation Deadline</Label>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -195,18 +203,37 @@ export default function SubjectDeadlineSection() {
                     selected={selectedDate}
                     onSelect={setSelectedDate}
                     initialFocus
+                    disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
                   />
                 </PopoverContent>
               </Popover>
+              <p className="text-xs text-gray-600">
+                Timetable generation will be blocked until this date passes
+              </p>
             </div>
 
             {deadlineStatus && (
-              <Alert variant={deadlineStatus.color as any}>
+              <Alert 
+                variant={deadlineStatus.color as any}
+                className={deadlineStatus.canGenerate ? 'border-green-500 bg-green-50' : ''}
+              >
                 {deadlineStatus.icon}
-                <AlertDescription className="flex items-center justify-between">
-                  <span>
-                    <strong>Status:</strong> {deadlineStatus.message}
-                  </span>
+                <AlertDescription>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span>
+                        <strong>Status:</strong> {deadlineStatus.message}
+                      </span>
+                      {deadlineStatus.canGenerate && (
+                        <Badge className="bg-green-600">
+                          Ready to Generate
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-700">
+                      {deadlineStatus.description}
+                    </p>
+                  </div>
                 </AlertDescription>
               </Alert>
             )}
@@ -241,12 +268,33 @@ export default function SubjectDeadlineSection() {
         )}
       </div>
 
-      {deadlineStatus?.type === 'expired' && (
+      {/* Info boxes based on status */}
+      {deadlineStatus?.canGenerate && (
+        <Alert className="border-green-500 bg-green-50">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-900">
+            <strong>Timetable Generation Available:</strong> The deadline has passed. 
+            You can now generate the timetable from the Timetable page.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {deadlineStatus && !deadlineStatus.canGenerate && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Generation Blocked:</strong> The "Generate Timetable" button will remain 
+            disabled until {selectedDate ? format(selectedDate, 'PPP') : 'the deadline passes'}. 
+            This gives trainers time to complete their selections.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {deadlineEnabled && !selectedDate && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
-            <strong>Deadline Passed:</strong> Trainers can no longer select subjects. 
-            You can extend the deadline or use Admin Assignment to assign subjects on their behalf.
+            <strong>No Deadline Set:</strong> Please select a date to enable deadline enforcement.
           </AlertDescription>
         </Alert>
       )}

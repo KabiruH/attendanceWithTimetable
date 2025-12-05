@@ -29,6 +29,9 @@ export async function GET() {
         email: true,
         role: true,
         has_timetable_admin: true,
+        is_blocked: true,          
+        blocked_reason: true,      
+        blocked_at: true 
       }
     });
 

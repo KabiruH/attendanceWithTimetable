@@ -2,10 +2,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Clock, Users, Building, Calendar } from "lucide-react";
+import { Clock, Users, Building, Calendar, Ban, AlertTriangle } from "lucide-react"; // Added AlertTriangle
 import {
   Select,
   SelectContent,
@@ -57,6 +57,13 @@ export default function ClassSelection({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockMessage, setBlockMessage] = useState('');
+  const [isGloballyBlocked, setIsGloballyBlocked] = useState(false);
+  const [checkingBlock, setCheckingBlock] = useState(true); // NEW: Loading state for block check
+
+  // Computed: Can user select classes?
+  const canSelect = !isBlocked && !isGloballyBlocked;
 
   // Filter classes based on search term
   const filteredClasses = useMemo(() => {
@@ -69,6 +76,11 @@ export default function ClassSelection({
       classItem.department.toLowerCase().includes(term)
     );
   }, [availableClasses, searchTerm]);
+
+  // ✅ Check block status on mount
+  useEffect(() => {
+    checkBlockStatus();
+  }, []);
 
   // ✅ Fetch terms on mount
   useEffect(() => {
@@ -88,6 +100,39 @@ export default function ClassSelection({
       onClassesLoaded?.(availableClasses);
     }
   }, [availableClasses, onClassesLoaded]);
+
+  const checkBlockStatus = async () => {
+    setCheckingBlock(true);
+    try {
+      // Check if user is individually blocked
+      const userResponse = await fetch('/api/auth/check');
+      const userData = await userResponse.json();
+      
+      if (userData.user.is_blocked) {
+        setIsBlocked(true);
+        setBlockMessage(
+          userData.user.blocked_reason 
+            ? `Your account is blocked: ${userData.user.blocked_reason}` 
+            : 'Your account is blocked from selecting classes and subjects. Please contact an administrator.'
+        );
+        setCheckingBlock(false);
+        return;
+      }
+
+      // Check if globally blocked
+      const settingsResponse = await fetch('/api/timetable-settings');
+      const settingsData = await settingsResponse.json();
+      
+      if (settingsData.data?.block_all_subject_selection) {
+        setIsGloballyBlocked(true);
+        setBlockMessage('Class and subject selection is currently disabled by the administrator. Please try again later.');
+      }
+    } catch (error) {
+      console.error('Error checking block status:', error);
+    } finally {
+      setCheckingBlock(false);
+    }
+  };
 
   // ✅ NEW: Fetch available terms
   const fetchTerms = async () => {
@@ -149,6 +194,9 @@ export default function ClassSelection({
   };
 
   const handleClassToggle = (classId: number, checked: boolean) => {
+    // Prevent toggling if blocked
+    if (!canSelect) return;
+
     const newSelectedIds = checked 
       ? [...selectedClassIds, classId]
       : selectedClassIds.filter(id => id !== classId);
@@ -156,78 +204,91 @@ export default function ClassSelection({
     setSelectedClassIds(newSelectedIds);
   };
 
-const handleSaveSelections = async () => 
-  {
-  if (!selectedTerm) {
-    setError('Please select a term first');
-    return;
-  }
-
-  console.log('🔍 DEBUG 1 - Before sending:', {
-    selectedTerm,
-    type: typeof selectedTerm,
-    isNumber: !isNaN(selectedTerm),
-    userId
-  });
-
-  setIsSaving(true);
-  setError('');
-  setSuccessMessage('');
-
-  try {
-    // Combine currently selected with previously saved
-    const combinedClassIds = [...new Set([...savedClassIds, ...selectedClassIds])];
-    
-    const payload = {
-      class_ids: combinedClassIds,
-      term_id: selectedTerm
-    };
-    
-    console.log('🔍 DEBUG 2 - Payload:', JSON.stringify(payload, null, 2));
-          
-    const response = await fetch(`/api/trainers/${userId}/assignments`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const result = await response.json();
-    console.log('🔍 DEBUG 3 - API Response:', result);
-
-    if (!response.ok) {
-      console.error('API Error:', result);
-      throw new Error(result.error || 'Failed to save selections');
+  const handleSaveSelections = async () => {
+    // Prevent saving if blocked
+    if (!canSelect) {
+      setError(blockMessage);
+      return;
     }
 
-    // Update saved state
-    setSavedClassIds(combinedClassIds);
-    setSelectedClassIds(combinedClassIds);
+    if (!selectedTerm) {
+      setError('Please select a term first');
+      return;
+    }
 
-    // ✅ Show success message with details
-    const termName = terms.find(t => t.id === selectedTerm)?.name || 'selected term';
-    setSuccessMessage(
-      `Successfully updated class assignments for ${termName}! ` +
-      `You are now assigned to ${combinedClassIds.length} ${combinedClassIds.length === 1 ? 'class' : 'classes'} ` +
-      `with ${result.subject_assignments || 0} subjects.`
-    );
-    
-    // Call parent callback if provided
-    onSelectionSaved?.();
-    
-    // Clear success message after 5 seconds
-    setTimeout(() => setSuccessMessage(''), 5000);
-    
-  } catch (error) {
-    console.error('Save selections error:', error);
-    setError(error instanceof Error ? error.message : 'Failed to save selections');
-  } finally {
-    setIsSaving(false);
-  }
-};
+    console.log('🔍 DEBUG 1 - Before sending:', {
+      selectedTerm,
+      type: typeof selectedTerm,
+      isNumber: !isNaN(selectedTerm),
+      userId
+    });
 
-  if (isLoading && selectedTerm === null) {
+    setIsSaving(true);
+    setError('');
+    setSuccessMessage('');
+
+    try {
+      // Combine currently selected with previously saved
+      const combinedClassIds = [...new Set([...savedClassIds, ...selectedClassIds])];
+      
+      const payload = {
+        class_ids: combinedClassIds,
+        term_id: selectedTerm
+      };
+      
+      console.log('🔍 DEBUG 2 - Payload:', JSON.stringify(payload, null, 2));
+            
+      const response = await fetch(`/api/trainers/${userId}/assignments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const result = await response.json();
+      console.log('🔍 DEBUG 3 - API Response:', result);
+
+      if (!response.ok) {
+        // Handle 403 (blocked) specifically
+        if (response.status === 403) {
+          setError(result.error || 'You are blocked from making selections');
+          // Refresh block status
+          await checkBlockStatus();
+          return;
+        }
+        
+        console.error('API Error:', result);
+        throw new Error(result.error || 'Failed to save selections');
+      }
+
+      // Update saved state
+      setSavedClassIds(combinedClassIds);
+      setSelectedClassIds(combinedClassIds);
+
+      // ✅ Show success message with details
+      const termName = terms.find(t => t.id === selectedTerm)?.name || 'selected term';
+      setSuccessMessage(
+        `Successfully updated class assignments for ${termName}! ` +
+        `You are now assigned to ${combinedClassIds.length} ${combinedClassIds.length === 1 ? 'class' : 'classes'} ` +
+        `with ${result.subject_assignments || 0} subjects.`
+      );
+      
+      // Call parent callback if provided
+      onSelectionSaved?.();
+      
+      // Clear success message after 5 seconds
+      setTimeout(() => setSuccessMessage(''), 5000);
+      
+    } catch (error) {
+      console.error('Save selections error:', error);
+      setError(error instanceof Error ? error.message : 'Failed to save selections');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (checkingBlock || (isLoading && selectedTerm === null)) {
     return (
       <div className="flex justify-center items-center py-10">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -237,8 +298,37 @@ const handleSaveSelections = async () =>
 
   return (
     <div className="space-y-6">
-      {/* ✅ NEW: Term Selection */}
-      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+      {/* Block Alerts - Show at TOP */}
+      {isBlocked && (
+        <Alert variant="destructive">
+          <Ban className="h-4 w-4" />
+          <AlertTitle>Account Blocked</AlertTitle>
+          <AlertDescription>
+            {blockMessage}
+            <br />
+            <span className="text-xs mt-2 block">
+              Contact your administrator for assistance.
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {!isBlocked && isGloballyBlocked && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Selection Temporarily Disabled</AlertTitle>
+          <AlertDescription>
+            {blockMessage}
+            <br />
+            <span className="text-xs mt-2 block">
+              Please try again later or contact your administrator.
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* ✅ Term Selection - Disabled if blocked */}
+      <div className={`p-4 border rounded-lg ${canSelect ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
         <Label htmlFor="term" className="flex items-center gap-2 mb-2">
           <Calendar className="h-4 w-4" />
           <span className="font-semibold">Select Term</span>
@@ -246,6 +336,7 @@ const handleSaveSelections = async () =>
         <Select
           value={selectedTerm?.toString()}
           onValueChange={(value) => setSelectedTerm(parseInt(value))}
+          disabled={!canSelect}
         >
           <SelectTrigger className="bg-white">
             <SelectValue placeholder="Select a term" />
@@ -259,7 +350,10 @@ const handleSaveSelections = async () =>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground mt-2">
-          Class assignments are term-specific. Select the term you want to assign classes for.
+          {canSelect 
+            ? 'Class assignments are term-specific. Select the term you want to assign classes for.'
+            : 'Selection is currently disabled.'
+          }
         </p>
       </div>
 
@@ -284,18 +378,6 @@ const handleSaveSelections = async () =>
               {selectedClassIds.length} of {availableClasses.length} classes selected
             </div>
           </div>
-
-          {filteredClasses.length > 0 && (
-            <div className="flex justify-end pt-4 border-t">
-              <Button 
-                onClick={handleSaveSelections}
-                disabled={isSaving || !selectedTerm}
-                className="min-w-[120px]"
-              >
-                {isSaving ? 'Saving...' : 'Save Selection'}
-              </Button>
-            </div>
-          )}
 
           {error && (
             <Alert variant="destructive">
@@ -324,14 +406,18 @@ const handleSaveSelections = async () =>
                 return (
                   <Card 
                     key={classItem.id} 
-                    className={`cursor-pointer transition-all ${
+                    className={`transition-all ${
+                      !canSelect 
+                        ? 'opacity-60 cursor-not-allowed'
+                        : 'cursor-pointer'
+                    } ${
                       isAlreadySaved
                         ? 'ring-2 ring-green-500 bg-green-50/50'
                         : isNewlySelected 
                           ? 'ring-2 ring-blue-500 bg-blue-50/50'
                           : 'hover:shadow-md'
                     }`}
-                    onClick={() => handleClassToggle(classItem.id, !isSelected)}
+                    onClick={() => canSelect && handleClassToggle(classItem.id, !isSelected)}
                   >
                     <CardHeader className="pb-3">
                       <div className="flex items-start justify-between">
@@ -339,6 +425,7 @@ const handleSaveSelections = async () =>
                           <div className="flex items-center gap-2 mb-1">
                             <Checkbox 
                               checked={isSelected}
+                              disabled={!canSelect}
                               onChange={() => {}}
                             />
                             <Badge variant="outline" className="text-xs">
@@ -402,10 +489,10 @@ const handleSaveSelections = async () =>
             <div className="flex justify-end pt-4 border-t">
               <Button 
                 onClick={handleSaveSelections}
-                disabled={isSaving || !selectedTerm}
+                disabled={isSaving || !selectedTerm || !canSelect}
                 className="min-w-[120px]"
               >
-                {isSaving ? 'Saving...' : 'Save Selection'}
+                {isSaving ? 'Saving...' : canSelect ? 'Save Selection' : 'Selection Disabled'}
               </Button>
             </div>
           )}

@@ -8,7 +8,7 @@ import { Shield, Ban, Calendar, UserCog } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import TimetableAdminsSection from '@/components/timetable/settings/TimetableAdminsSection';
 import UserAccessControlSection from '@/components/timetable/settings/UserAccessControlSection';
-import SubjectDeadlineSection from '@/components/timetable/settings/SubjectDeadlineSection';
+import TimetableGenerationDeadlineSection from '@/components/timetable/settings/SubjectDeadlineSection';
 import TimetableAdminAssignmentSection from '@/components/timetable/settings/AdminAssignmentSection';
 
 export default function TimetableSettingsPage() {
@@ -124,7 +124,7 @@ export default function TimetableSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <SubjectDeadlineSection />
+              <TimetableGenerationDeadlineSection />
             </CardContent>
           </Card>
         </TabsContent>

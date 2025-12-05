@@ -78,6 +78,7 @@ export async function GET(request: NextRequest) {
 }
 
 // PUT - Update timetable settings
+
 export async function PUT(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -93,14 +94,17 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { allow_admin_assignment, block_all_subject_selection } = body;
+    const { 
+      allow_admin_assignment, 
+      block_all_subject_selection,
+      generation_deadline_enabled,          // ADD THIS
+      timetable_generation_deadline         // ADD THIS
+    } = body;
 
-    // Check if settings exist
     const existingSettings = await db.timetablesettings.findFirst();
 
     let settings;
     if (existingSettings) {
-      // Update existing
       settings = await db.timetablesettings.update({
         where: { id: existingSettings.id },
         data: {
@@ -110,15 +114,22 @@ export async function PUT(request: NextRequest) {
           block_all_subject_selection: block_all_subject_selection !== undefined 
             ? block_all_subject_selection 
             : existingSettings.block_all_subject_selection,
+          generation_deadline_enabled: generation_deadline_enabled !== undefined    // ADD THIS
+            ? generation_deadline_enabled 
+            : existingSettings.generation_deadline_enabled,
+          timetable_generation_deadline: timetable_generation_deadline !== undefined // ADD THIS
+            ? timetable_generation_deadline 
+            : existingSettings.timetable_generation_deadline,
           updated_at: new Date(),
         }
       });
     } else {
-      // Create new
       settings = await db.timetablesettings.create({
         data: {
           allow_admin_assignment: allow_admin_assignment || false,
           block_all_subject_selection: block_all_subject_selection || false,
+          generation_deadline_enabled: generation_deadline_enabled || false,     // ADD THIS
+          timetable_generation_deadline: timetable_generation_deadline || null,  // ADD THIS
         }
       });
     }

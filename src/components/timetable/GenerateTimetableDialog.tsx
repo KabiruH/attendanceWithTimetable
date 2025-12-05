@@ -1,6 +1,6 @@
 // components/timetable/GenerateTimetableDialog.tsx
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { format } from 'date-fns';
 
 interface Term {
   id: number;
@@ -110,7 +111,6 @@ export default function GenerateTimetableDialog({
 }: GenerateTimetableDialogProps) {
   const [selectedTerm, setSelectedTerm] = useState<string>('');
   const [method, setMethod] = useState<'auto' | 'manual'>('auto');
-  const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -125,6 +125,8 @@ export default function GenerateTimetableDialog({
 
   // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
+  const [canGenerate, setCanGenerate] = useState(true);
+const [deadlineMessage, setDeadlineMessage] = useState('');
 
   // Collapsible states for error details
   const [showSubjectsWithoutTrainer, setShowSubjectsWithoutTrainer] = useState(false);
@@ -216,6 +218,42 @@ export default function GenerateTimetableDialog({
     }
   };
 
+  useEffect(() => {
+  if (open) {
+    checkGenerationDeadline();
+  }
+}, [open]);
+
+const checkGenerationDeadline = async () => {
+  try {
+    const response = await fetch('/api/timetable-settings');
+    if (!response.ok) throw new Error('Failed to fetch settings');
+    const data = await response.json();
+    
+    if (data.data?.generation_deadline_enabled && data.data?.timetable_generation_deadline) {
+      const deadline = new Date(data.data.timetable_generation_deadline);
+      const now = new Date();
+      
+      if (now < deadline) {
+        setCanGenerate(false);
+        setDeadlineMessage(
+          `Timetable generation is blocked until ${format(deadline, 'PPP')}. ` +
+          `This allows trainers to complete their class and subject selections.`
+        );
+      } else {
+        setCanGenerate(true);
+        setDeadlineMessage('');
+      }
+    } else {
+      setCanGenerate(true);
+      setDeadlineMessage('');
+    }
+  } catch (error) {
+    console.error('Error checking deadline:', error);
+    setCanGenerate(true); // Allow generation if check fails
+  }
+};
+
   const handleManualRedirect = () => {
     onOpenChange(false);
   };
@@ -232,7 +270,7 @@ export default function GenerateTimetableDialog({
     setShowSubjectsWithoutTrainer(false);
   };
 
-  const canGenerate = preFlightResults?.passed && !isGenerating;
+  const allowGenerate = preFlightResults?.passed && !isGenerating;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -531,6 +569,13 @@ export default function GenerateTimetableDialog({
             </div>
           )}
 
+          {!canGenerate && (
+  <Alert variant="destructive">
+    <AlertTriangle className="h-4 w-4" />
+    <AlertDescription>{deadlineMessage}</AlertDescription>
+  </Alert>
+)}
+
           {/* Manual Entry Section */}
           {method === 'manual' && (
             <div className="p-4 bg-gray-50 rounded-lg">
@@ -575,7 +620,7 @@ export default function GenerateTimetableDialog({
               </Button>
               <Button
                 onClick={handleAutoGenerate}
-                disabled={!canGenerate}
+                disabled={isGenerating || !selectedTerm || !canGenerate}
               >
                 {isGenerating ? (
                   <>

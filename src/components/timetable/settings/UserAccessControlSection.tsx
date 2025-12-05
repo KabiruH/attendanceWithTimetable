@@ -181,7 +181,7 @@ const fetchUsers = async () => {
 
     setProcessingUserId(userToBlock.id);
     try {
-      const response = await fetch(`/api/users/block/${userToBlock.id}`, {
+      const response = await fetch(`/api/classes/block/${userToBlock.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: blockReason }),
@@ -229,7 +229,7 @@ const fetchUsers = async () => {
   const handleUnblockUser = async (user: User) => {
     setProcessingUserId(user.id);
     try {
-      const response = await fetch(`/api/users/unblock/${user.id}`, {
+      const response = await fetch(`/api/classes/unblock/${user.id}`, {
         method: 'POST',
       });
 
@@ -269,25 +269,7 @@ const fetchUsers = async () => {
     }
   };
 
-  const handleViewHistory = async (userId: number) => {
-    setLoadingHistory(true);
-    setIsHistoryDialogOpen(true);
-    try {
-      const response = await fetch(`/api/users/block-history/${userId}`);
-      if (!response.ok) throw new Error('Failed to fetch history');
-      const data = await response.json();
-      setBlockHistory(data.data);
-    } catch (error) {
-      console.error('Error fetching block history:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load block history",
-        variant: "destructive",
-      });
-    } finally {
-      setLoadingHistory(false);
-    }
-  };
+
 
   const blockedUserCount = users.filter(u => u.is_blocked).length;
 
@@ -428,14 +410,7 @@ const fetchUsers = async () => {
                       <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
                     ) : user.is_blocked ? (
                       <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleViewHistory(user.id)}
-                        >
-                          <History className="h-4 w-4 mr-1" />
-                          History
-                        </Button>
+                        
                         <Button
                           size="sm"
                           variant="default"

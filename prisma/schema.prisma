@@ -429,6 +429,8 @@ model timetablesettings {
   block_all_subject_selection Boolean   @default(false)
   created_at                  DateTime  @default(now())
   updated_at                  DateTime  @updatedAt
+  timetable_generation_deadline   DateTime?
+  generation_deadline_enabled     Boolean   @default(false)
 }
 
 model subjectassignmentlog {

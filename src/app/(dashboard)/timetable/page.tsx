@@ -274,8 +274,8 @@ const getFilteredPrintSlots = () => {
   // Extract filter options from timetable data
   const extractFilterOptions = (slots: TimetableSlot[]) => {
     const trainers = new Map<number, string>();
-    const classes = new Map<number, { name: string, code: string }>();
-    const subjects = new Map<number, { name: string, code: string }>();
+  const classes = new Map<number, { name: string, code: string, department: string }>();
+  const subjects = new Map<number, { name: string, code: string }>();
     const rooms = new Map<number, string>();
 
     slots.forEach((slot: TimetableSlot) => {
@@ -285,7 +285,8 @@ const getFilteredPrintSlots = () => {
       if (slot.classes) {
         classes.set(slot.classes.id, {
           name: slot.classes.name,
-          code: slot.classes.code
+          code: slot.classes.code,
+          department: slot.classes.department 
         });
       }
       if (slot.subjects) {
