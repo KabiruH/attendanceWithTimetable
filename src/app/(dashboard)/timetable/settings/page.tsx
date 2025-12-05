@@ -75,7 +75,7 @@ export default function TimetableSettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="access" className="flex items-center gap-2">
             <Ban className="h-4 w-4" />
-            User Access
+            Classes & Subjects 
           </TabsTrigger>
           <TabsTrigger value="deadline" className="flex items-center gap-2">
             <Calendar className="h-4 w-4" />
@@ -83,7 +83,7 @@ export default function TimetableSettingsPage() {
           </TabsTrigger>
           <TabsTrigger value="assignment" className="flex items-center gap-2">
             <UserCog className="h-4 w-4" />
-            Admin Assignment
+            Admin Class Assignment
           </TabsTrigger>
         </TabsList>
 

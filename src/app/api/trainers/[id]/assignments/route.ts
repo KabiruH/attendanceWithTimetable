@@ -61,6 +61,7 @@ export async function GET(
       return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
 
+    // ADD THIS CHECK
     if (!authResult.user) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
@@ -80,9 +81,24 @@ export async function GET(
       );
     }
 
+    // Get term_id from query params
+    const { searchParams } = new URL(request.url);
+    const termId = searchParams.get('term_id');
+
+    // Build where clause
+    const whereClause: any = { 
+      trainer_id: trainerUserId, 
+      is_active: true 
+    };
+
+    // Filter by term if provided
+    if (termId) {
+      whereClause.term_id = parseInt(termId);
+    }
+
     const assignments = await db.trainerclassassignments.findMany({
-      where: { trainer_id: trainerUserId, is_active: true },
-      select: { id: true, class_id: true, assigned_at: true }
+      where: whereClause,
+      select: { id: true, class_id: true, term_id: true, assigned_at: true }
     });
 
     return NextResponse.json(assignments);

@@ -272,6 +272,7 @@ model terms {
   termclasses               termclasses[]
   timetableslots            timetableslots[]
   trainersubjectassignments trainersubjectassignments[]
+  trainerclassassignments     trainerclassassignments[]
 }
 
 model timetableslots {
@@ -307,16 +308,19 @@ model trainerclassassignments {
   id          Int      @id @default(autoincrement())
   trainer_id  Int
   class_id    Int
+  term_id      Int     @default(1) 
   assigned_at DateTime @default(now())
   is_active   Boolean  @default(true)
   assigned_by String   @db.VarChar(100)
   classes     classes  @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "TrainerClassAssignments_class_id_fkey")
   users       users    @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "TrainerClassAssignments_trainer_id_fkey")
+  terms        terms    @relation(fields: [term_id], references: [id])
 
   @@unique([trainer_id, class_id], map: "TrainerClassAssignments_trainer_id_class_id_key")
   @@index([class_id], map: "TrainerClassAssignments_class_id_idx")
   @@index([is_active], map: "TrainerClassAssignments_is_active_idx")
   @@index([trainer_id], map: "TrainerClassAssignments_trainer_id_idx")
+   @@index([term_id], map: "TrainerClassAssignments_term_id_idx")
 }
 
 model trainersubjectassignments {

@@ -157,41 +157,44 @@ export default function ClassSelection({
     }
   };
 
-  const fetchClassesAndAssignments = async () => {
-    if (!selectedTerm) return;
+// components/classes/classSelection.tsx
+const fetchClassesAndAssignments = async () => {
+  if (!selectedTerm) return;
 
+  try {
+    setIsLoading(true);
+    
+    // Fetch all active classes
+    const classesResponse = await fetch('/api/classes?active_only=true');
+    if (!classesResponse.ok) throw new Error('Failed to fetch classes');
+    const classes = await classesResponse.json();
+    
+    let assignedClassIds: number[] = [];
+    
+    // ✅ CHANGED: Pass term_id to get term-specific assignments
     try {
-      setIsLoading(true);
-      
-      // Fetch all active classes
-      const classesResponse = await fetch('/api/classes?active_only=true');
-      if (!classesResponse.ok) throw new Error('Failed to fetch classes');
-      const classes = await classesResponse.json();
-      
-      let assignedClassIds: number[] = [];
-      
-      // Try to fetch user's current assignments for this term
-      try {
-        const assignmentsResponse = await fetch(`/api/trainers/${userId}/assignments`);
-        if (assignmentsResponse.ok) {
-          const assignments = await assignmentsResponse.json();
-          assignedClassIds = assignments.map((assignment: any) => assignment.class_id);
-        } else {
-          console.warn(`Failed to fetch assignments for user ${userId}: ${assignmentsResponse.status}`);
-        }
-      } catch (assignmentError) {
-        console.warn('Error fetching assignments:', assignmentError);
+      const assignmentsResponse = await fetch(
+        `/api/trainers/${userId}/assignments?term_id=${selectedTerm}` // ADD term_id
+      );
+      if (assignmentsResponse.ok) {
+        const assignments = await assignmentsResponse.json();
+        assignedClassIds = assignments.map((assignment: any) => assignment.class_id);
+      } else {
+        console.warn(`Failed to fetch assignments for user ${userId}: ${assignmentsResponse.status}`);
       }
-      
-      setAvailableClasses(classes);
-      setSelectedClassIds(assignedClassIds);
-      setSavedClassIds(assignedClassIds);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to load data');
-    } finally {
-      setIsLoading(false);
+    } catch (assignmentError) {
+      console.warn('Error fetching assignments:', assignmentError);
     }
-  };
+    
+    setAvailableClasses(classes);
+    setSelectedClassIds(assignedClassIds);
+    setSavedClassIds(assignedClassIds);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : 'Failed to load data');
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const handleClassToggle = (classId: number, checked: boolean) => {
     // Prevent toggling if blocked
