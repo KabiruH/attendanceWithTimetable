@@ -130,54 +130,88 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
     }
   };
 
-  const fetchPersonalAttendanceStatus = async () => {
-    if (!employee_id) return;
+const fetchPersonalAttendanceStatus = async () => {
+  if (!employee_id) return;
 
-    try {
-      let response = await fetch('/api/attendance/status', {
+  try {
+    let response = await fetch('/api/attendance/status', {
+      method: 'GET',
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      response = await fetch('/api/attendance', {
         method: 'GET',
         credentials: 'include',
       });
+    }
 
-      if (!response.ok) {
-        response = await fetch('/api/attendance', {
-          method: 'GET',
-          credentials: 'include',
-        });
-      }
-
-      if (response.ok) {
-        const data = await response.json();
-        setIsCheckedIn(data.isCheckedIn || false);
+    if (response.ok) {
+      const data = await response.json();
+      
+      // MORE ROBUST CHECK FOR CHECKED IN STATUS
+      let checkedInStatus = false;
+      
+      // Check multiple possible response structures
+      if (data.isCheckedIn !== undefined) {
+        checkedInStatus = data.isCheckedIn;
+      } else if (data.personalAttendance && data.personalAttendance.length > 0) {
+        // Check if there's an active session today
+        const today = new Date().toISOString().split('T')[0];
+        const todayRecord = data.personalAttendance.find((record: any) => 
+          record.date.startsWith(today)
+        );
         
-        // Calculate today's hours
-        const attendanceToCheck = data.personalAttendance || data.attendanceData;
-        if (attendanceToCheck && attendanceToCheck.length > 0) {
-          const today = new Date().toISOString().split('T')[0];
-          const todayRecord = attendanceToCheck.find((record: any) => 
-            record.date.startsWith(today)
-          );
-          
-          if (todayRecord) {
-            let hours = 0;
-            if (todayRecord.sessions && Array.isArray(todayRecord.sessions)) {
-              hours = calculateTotalHoursFromSessions(todayRecord.sessions);
-            } else if (todayRecord.check_in_time) {
-              const checkIn = new Date(todayRecord.check_in_time);
-              const checkOut = todayRecord.check_out_time ? new Date(todayRecord.check_out_time) : new Date();
-              hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-            }
-            
-            const hoursInt = Math.floor(hours);
-            const minutes = Math.floor((hours - hoursInt) * 60);
-            setTodayHours(`${hoursInt}h ${minutes}m`);
-          }
+        if (todayRecord) {
+          // If has check_in_time but no check_out_time, user is checked in
+          checkedInStatus = !!todayRecord.check_in_time && !todayRecord.check_out_time;
+        }
+      } else if (data.attendanceData && data.attendanceData.length > 0) {
+        const today = new Date().toISOString().split('T')[0];
+        const todayRecord = data.attendanceData.find((record: any) => 
+          record.date.startsWith(today)
+        );
+        
+        if (todayRecord) {
+          checkedInStatus = !!todayRecord.check_in_time && !todayRecord.check_out_time;
         }
       }
-    } catch (error) {
-      console.error('Error fetching personal attendance:', error);
+      
+      console.log('Check-in status determined:', checkedInStatus); // DEBUG LOG
+      setIsCheckedIn(checkedInStatus);
+      
+      // Calculate today's hours
+      const attendanceToCheck = data.personalAttendance || data.attendanceData;
+      if (attendanceToCheck && attendanceToCheck.length > 0) {
+        const today = new Date().toISOString().split('T')[0];
+        const todayRecord = attendanceToCheck.find((record: any) => 
+          record.date.startsWith(today)
+        );
+        
+        if (todayRecord) {
+          let hours = 0;
+          if (todayRecord.sessions && Array.isArray(todayRecord.sessions)) {
+            hours = calculateTotalHoursFromSessions(todayRecord.sessions);
+          } else if (todayRecord.check_in_time) {
+            const checkIn = new Date(todayRecord.check_in_time);
+            const checkOut = todayRecord.check_out_time ? new Date(todayRecord.check_out_time) : new Date();
+            hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+          }
+          
+          const hoursInt = Math.floor(hours);
+          const minutes = Math.floor((hours - hoursInt) * 60);
+          setTodayHours(`${hoursInt}h ${minutes}m`);
+        } else {
+          setTodayHours('0h 0m');
+        }
+      } else {
+        setTodayHours('0h 0m');
+      }
     }
-  };
+  } catch (error) {
+    console.error('Error fetching personal attendance:', error);
+  }
+};
 
   const calculateTotalHoursFromSessions = (sessions: any[]): number => {
     if (!sessions || sessions.length === 0) return 0;
@@ -196,57 +230,64 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
     return totalMinutes / 60;
   };
 
-  const handleAttendance = async (action: 'check-in' | 'check-out') => {
-    if (!locationResult?.isWithinArea) {
-      toast({
-        title: 'Location Required',
-        description: `You must be on campus to mark attendance. Currently ${locationResult?.formattedDistance || 'location unknown'}.`,
-        variant: 'destructive',
-      });
-      return;
+const handleAttendance = async (action: 'check-in' | 'check-out') => {
+  if (!locationResult?.isWithinArea) {
+    toast({
+      title: 'Location Required',
+      description: `You must be on campus to mark attendance. Currently ${locationResult?.formattedDistance || 'location unknown'}.`,
+      variant: 'destructive',
+    });
+    return;
+  }
+
+  setIsLoading(true);
+  try {
+    if (!employee_id) throw new Error('Employee ID is missing');
+
+    const response = await fetch('/api/attendance', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        action, 
+        employee_id,
+        locationInfo: locationResult
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to process attendance');
     }
 
-    setIsLoading(true);
-    try {
-      if (!employee_id) throw new Error('Employee ID is missing');
+    const result = await response.json();
+    console.log('Attendance response:', result); // DEBUG LOG
 
-      const response = await fetch('/api/attendance', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          action, 
-          employee_id,
-          locationInfo: locationResult
-        }),
-      });
+    // SET STATE IMMEDIATELY
+    const newCheckedInState = action === 'check-in';
+    setIsCheckedIn(newCheckedInState);
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to process attendance');
-      }
+    // THEN FETCH TO UPDATE HOURS
+    await fetchPersonalAttendanceStatus();
 
-      setIsCheckedIn(action === 'check-in');
-      await fetchPersonalAttendanceStatus();
+    toast({
+      title: 'Success',
+      description: `Successfully ${action === 'check-in' ? 'checked in' : 'checked out'}`,
+    });
 
-      toast({
-        title: 'Success',
-        description: `Successfully ${action === 'check-in' ? 'checked in' : 'checked out'}`,
-      });
-
-    } catch (error) {
-      console.error('Error handling attendance:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to process attendance',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  } catch (error) {
+    console.error('Error handling attendance:', error);
+    toast({
+      title: 'Error',
+      description: error instanceof Error ? error.message : 'Failed to process attendance',
+      variant: 'destructive',
+    });
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const handleClassCheckInClick = () => {
     if (!locationResult?.isWithinArea) {
