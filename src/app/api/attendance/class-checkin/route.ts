@@ -1,4 +1,4 @@
-// app/api/attendance/class-checkin/route.ts - Cleaned version without WebAuthn
+// app/api/attendance/class-checkin/route.ts - Timetable-integrated version
 import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
@@ -7,12 +7,11 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
 // Type definitions
-type ClassAttendanceWithClass = any & {
-  class?: {
-    name: string;
-    code?: string;
-    duration_hours?: number;
-  } | null;
+type TimetableSlotWithRelations = any & {
+  classes?: { name: string; code?: string; duration_hours?: number } | null;
+  subjects?: { name: string; code?: string } | null;
+  rooms?: { name: string } | null;
+  lessonperiods?: { start_time: Date; end_time: Date; name: string } | null;
 };
 
 // Mobile request validation schema
@@ -25,21 +24,17 @@ const mobileClassAttendanceSchema = z.object({
     timestamp: z.number(),
   }),
   biometric_verified: z.boolean(),
-  class_id: z.number(),
+  timetable_slot_id: z.string(), // Changed from class_id
 });
 
 // Geofence configuration
 const GEOFENCE = {
-  latitude: -0.0236,
-  longitude: 37.9062,
-  radius: 600_000, // meters - matching your work attendance
+  latitude: -1.2249434,
+  longitude: 36.7095401,
+  radius: 600_000, // meters
 };
 
-const CLASS_RULES = {
-  CLASS_DURATION_HOURS: 2, // 2 hours - automatic class checkout after this duration
-};
-
-// Simplified authentication supporting JWT and mobile JWT only
+// Simplified authentication
 async function getAuthenticatedUser(req: NextRequest): Promise<{ 
   id: number; 
   name: string; 
@@ -47,7 +42,6 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
   is_active: boolean;
   authMethod: 'jwt' | 'mobile_jwt';
 }> {
-  // Try JWT first (web app)
   const token = req.cookies.get('token')?.value;
   
   if (token) {
@@ -66,7 +60,6 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
     }
   }
 
-  // Try mobile JWT (mobile app)
   try {
     const mobileAuth = await verifyMobileJWT(req);
     if (mobileAuth.success && mobileAuth.payload) {
@@ -86,7 +79,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
   throw new Error('No valid authentication method provided');
 }
 
-// Mobile-specific helper functions
+// Geofence helpers
 function verifyGeofence(lat: number, lng: number): boolean {
   const distance = calculateDistance(lat, lng, GEOFENCE.latitude, GEOFENCE.longitude);
   return distance <= GEOFENCE.radius;
@@ -107,202 +100,203 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-function getClientIP(request: NextRequest): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  const real = request.headers.get('x-real-ip');
-  const clientIP = request.headers.get('x-client-ip');
+// Get trainer's schedule for today from timetable
+async function getTodaySchedule(trainerId: number, currentDate: Date) {
+  const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
   
-  if (forwarded) {
-    return forwarded.split(',')[0].trim();
-  }
-  if (real) {
-    return real;
-  }
-  if (clientIP) {
-    return clientIP;
-  }
-  
-  return 'unknown';
-}
-
-// Enhanced class attendance functions
-async function performAutomaticClassCheckout(trainerId: number, classId: number, checkoutTime: Date) {
-  const todayDate = new Date(checkoutTime.toISOString().split('T')[0]);
-  
-  const existingClassAttendance = await db.classattendance.findFirst({
-    where: {
-      trainer_id: trainerId,
-      class_id: classId,
-      date: todayDate,
-      check_out_time: null
-    }
+  // Get active term
+  const activeTerm = await db.terms.findFirst({
+    where: { is_active: true }
   });
 
-  if (existingClassAttendance) {
-    await db.classattendance.update({
-      where: { id: existingClassAttendance.id },
-      data: {
-        check_out_time: checkoutTime,
-        auto_checkout: true
-      }
-    });
-    
-    return true;
+  if (!activeTerm) {
+    return [];
   }
 
-  return false;
-}
-
-async function hasActiveClassSession(trainerId: number, currentDate: Date): Promise<{
-  hasActive: boolean;
-  activeClass?: {
-    id: number;
-    class_id: number;
-    check_in_time: Date;
-    class_name?: string;
-  };
-}> {
-  const activeSession = await db.classattendance.findFirst({
+  // Get all timetable slots for this trainer for today
+  const slots = await db.timetableslots.findMany({
     where: {
-      trainer_id: trainerId,
-      date: currentDate,
-      check_out_time: null
+      employee_id: trainerId,
+      term_id: activeTerm.id,
+      day_of_week: dayOfWeek,
+      status: 'scheduled'
     },
     include: {
       classes: {
         select: {
-          name: true
+          id: true,
+          name: true,
+          code: true,
+          description: true,
+          department: true,
+          duration_hours: true
+        }
+      },
+      subjects: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          department: true
+        }
+      },
+      rooms: {
+        select: {
+          id: true,
+          name: true,
+          capacity: true
+        }
+      },
+      lessonperiods: {
+        select: {
+          id: true,
+          name: true,
+          start_time: true,
+          end_time: true,
+          duration: true
         }
       }
-    }
-  }) as ClassAttendanceWithClass | null;
-
-  if (activeSession) {
-    return {
-      hasActive: true,
-      activeClass: {
-        id: activeSession.id,
-        class_id: activeSession.class_id,
-        check_in_time: activeSession.check_in_time!,
-        class_name: activeSession.class?.name
+    },
+    orderBy: {
+      lessonperiods: {
+        start_time: 'asc'
       }
-    };
-  }
-
-  return { hasActive: false };
-}
-
-async function checkAndPerformClassAutoCheckout(trainerId: number, currentTime: Date) {
-  const currentDate = new Date(currentTime.toISOString().split('T')[0]);
-  
-  const activeClassSessions = await db.classattendance.findMany({
-    where: {
-      trainer_id: trainerId,
-      date: currentDate,
-      check_out_time: null
     }
   });
 
-  for (const session of activeClassSessions) {
-    if (session.check_in_time) {
-      const timeDiff = currentTime.getTime() - session.check_in_time.getTime();
-      const hoursDiff = timeDiff / (1000 * 60 * 60);
-      
-      if (hoursDiff >= CLASS_RULES.CLASS_DURATION_HOURS) {
-        await performAutomaticClassCheckout(trainerId, session.class_id, currentTime);
-      }
-    }
-  }
+  return slots;
 }
 
-// GET /api/attendance/class-checkin 
+// Check if trainer can check in to this slot
+function canCheckIn(slot: TimetableSlotWithRelations, currentTime: Date, settings: any) {
+  if (!slot.lessonperiods) return { canCheckIn: false, reason: 'No lesson period found' };
+
+  const startTime = new Date(slot.lessonperiods.start_time);
+  const today = new Date(currentTime);
+  
+  // Combine today's date with lesson start time
+  const lessonStart = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+    startTime.getHours(),
+    startTime.getMinutes(),
+    0
+  );
+
+  // Calculate check-in window (default 15 minutes before)
+  const checkInWindow = settings?.attendance_check_in_window || 15;
+  const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
+  
+  // Calculate late threshold (default 10 minutes after)
+  const lateThreshold = settings?.attendance_late_threshold || 10;
+  const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+
+  const now = currentTime.getTime();
+
+  if (now < earliestCheckIn.getTime()) {
+    const minutesUntil = Math.ceil((earliestCheckIn.getTime() - now) / (60 * 1000));
+    return { 
+      canCheckIn: false, 
+      reason: `Too early. Check-in opens ${minutesUntil} minute${minutesUntil !== 1 ? 's' : ''} before class`,
+      earliestCheckIn 
+    };
+  }
+
+  if (now > latestCheckIn.getTime()) {
+    return { 
+      canCheckIn: false, 
+      reason: 'Check-in window closed. Class has started',
+      isLate: true 
+    };
+  }
+
+  const isLate = now > lessonStart.getTime();
+  
+  return { canCheckIn: true, isLate };
+}
+
+// GET /api/attendance/class-checkin - Get today's schedule
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
-    const currentDate = nowInKenya.toJSDate().toISOString().split('T')[0];
+    const currentTime = nowInKenya.toJSDate();
+    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
 
-    // Debug logging
-    const userAgent = request.headers.get('user-agent') || '';
-    const isMobileRequest = user.authMethod === 'mobile_jwt' || userAgent.includes('Mobile');
-    
-     const url = new URL(request.url);
+    const url = new URL(request.url);
     const queryEmployeeId = url.searchParams.get('employee_id');
     
-        const userIdToUse = user.role === 'admin' && queryEmployeeId ? 
+    const userIdToUse = user.role === 'admin' && queryEmployeeId ? 
       Number(queryEmployeeId) : user.id;
-    
-  
-    if (isMobileRequest) {
-    } else {
+
+    // Get timetable settings
+    const settings = await db.timetablesettings.findFirst();
+
+    // Get today's schedule from timetable
+    const todaySchedule = await getTodaySchedule(userIdToUse, currentTime);
+
+    // Get today's attendance records
+    const todayAttendance = await db.classattendance.findMany({
+      where: {
+        trainer_id: userIdToUse,
+        date: currentDate
+      },
+      select: {
+        id: true,
+        class_id: true,
+        timetable_slot_id: true,
+        check_in_time: true,
+        check_out_time: true,
+        status: true,
+        auto_checkout: true,
+        location_verified: true
+      }
+    });
+
+    // Enrich schedule with attendance status and check-in eligibility
+    const enrichedSchedule = todaySchedule.map(slot => {
+      const attendance = todayAttendance.find(att => att.timetable_slot_id === slot.id);
+      const checkInStatus = canCheckIn(slot, currentTime, settings);
       
-      // Get assignments
-      const assignments = await db.trainerclassassignments.findMany({
-        where: {
-          trainer_id: Number(user.id),
-          is_active: true
-        },
-        include: {
-          classes: {
-            select: {
-              id: true,
-              name: true,
-              code: true,
-              description: true,
-              department: true,
-              duration_hours: true,
-              is_active: true
-            }
-          }
-        },
-        orderBy: {
-          classes: {
-            name: 'asc'
-          }
-        }
-      });
+      return {
+        ...slot,
+        attendance,
+        canCheckIn: checkInStatus.canCheckIn,
+        checkInReason: checkInStatus.reason,
+        isLate: checkInStatus.isLate || false,
+        hasCheckedIn: !!attendance?.check_in_time,
+        hasCheckedOut: !!attendance?.check_out_time
+      };
+    });
 
-      const activeAssignments = assignments.filter(assignment => assignment.classes.is_active);
+    return NextResponse.json({
+      success: true,
+      schedule: enrichedSchedule,
+      todayAttendance,
+      currentTime: currentTime.toISOString(),
+      settings: {
+        check_in_window: settings?.attendance_check_in_window || 15,
+        late_threshold: settings?.attendance_late_threshold || 10,
+        location_required: settings?.attendance_location_required || false
+      },
+      userRole: user.role
+    });
 
-      const todayAttendance = await db.classattendance.findMany({
-        where: {
-          trainer_id: user.id,
-          date: new Date(currentDate)
-        },
-        select: {
-          id: true,
-          class_id: true,
-          check_in_time: true,
-          check_out_time: true,
-          status: true,
-          auto_checkout: true
-        }
-      });
-
-      return NextResponse.json({
-        success: true,
-        assignments: activeAssignments,
-        todayAttendance,
-        userRole: user.role
-      });
-    }
-    
   } catch (error) {
     console.error('❌ Error in class check-in GET:', error);
-    // ... error handling
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'Failed to fetch schedule' },
+      { status: 500 }
+    );
   }
 }
 
-// POST /api/attendance/class-checkin - Enhanced to handle both web and mobile
+// POST /api/attendance/class-checkin - Check in/out for a specific timetable slot
 export async function POST(request: NextRequest) {
-
   try {
     const body = await request.json();
-    
-    // Detect if this is a mobile request
     const isMobileRequest = body?.type?.startsWith('class_') || !!body?.location;
-  
-
     const user = await getAuthenticatedUser(request);
 
     // Mobile request validation
@@ -311,7 +305,6 @@ export async function POST(request: NextRequest) {
         mobileClassAttendanceSchema.parse(body);
       } catch (error) {
         if (error instanceof z.ZodError) {
-          console.error('Mobile validation error:', error.issues);
           return NextResponse.json(
             { success: false, error: error.issues[0].message },
             { status: 400 }
@@ -319,7 +312,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Verify location is within geofence for mobile
+      // Verify location
       if (body.location) {
         const isWithinGeofence = verifyGeofence(
           body.location.latitude,
@@ -342,7 +335,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Verify biometric was used for mobile
+      // Verify biometric
       if (!body.biometric_verified) {
         return NextResponse.json({
           success: false,
@@ -351,268 +344,297 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { class_id, action, type } = body;
+    const { timetable_slot_id, action, type } = body;
     
-    // Normalize mobile/web request formats
+    // Normalize action
     const normalizedAction = type === 'class_checkin' ? 'check-in' : 
                             type === 'class_checkout' ? 'check-out' : 
                             action;
-    const trainer_id = user.id;
 
-    if (!class_id) {
+    if (!timetable_slot_id) {
       return NextResponse.json(
-        { success: false, error: 'class_id is required' },
+        { success: false, error: 'timetable_slot_id is required' },
         { status: 400 }
       );
     }
 
-    // Get current time in Kenya timezone
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentTime = nowInKenya.toJSDate();
-    const currentDate = currentTime.toISOString().split('T')[0];
+    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
 
-    // Check for any class auto-checkouts
-    await checkAndPerformClassAutoCheckout(trainer_id, currentTime);
-
-    // Verify class exists and is active
-    const classInfo = await db.classes.findUnique({
-      where: { id: class_id },
-      select: { id: true, name: true, code: true, is_active: true, duration_hours: true }
+    // Get timetable slot with all details
+    const slot = await db.timetableslots.findUnique({
+      where: { id: timetable_slot_id },
+      include: {
+        classes: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            duration_hours: true
+          }
+        },
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true
+          }
+        },
+        rooms: {
+          select: {
+            id: true,
+            name: true
+          }
+        },
+        lessonperiods: {
+          select: {
+            id: true,
+            name: true,
+            start_time: true,
+            end_time: true,
+            duration: true
+          }
+        },
+        terms: {
+          select: {
+            id: true,
+            name: true
+          }
+        }
+      }
     });
 
-    if (!classInfo || !classInfo.is_active) {
-      console.error('Class not found or inactive:', class_id);
+    if (!slot) {
       return NextResponse.json(
-        { success: false, error: 'Class not found or inactive' },
+        { success: false, error: 'Timetable slot not found' },
         { status: 404 }
       );
     }
 
-    // Check if trainer is assigned to this class
-  const assignment = await db.trainerclassassignments.findFirst({
-  where: {
-    trainer_id: trainer_id,
-    class_id: class_id,
-    is_active: true
-  }
-});
+    // Verify this slot belongs to the trainer
+    if (slot.employee_id !== user.id) {
+      return NextResponse.json(
+        { success: false, error: 'This class is not assigned to you' },
+        { status: 403 }
+      );
+    }
 
-if (!assignment) {
-  console.error('Trainer not assigned to class:', trainer_id, class_id);
-  return NextResponse.json(
-    { success: false, error: 'You are not assigned to this class' },
-    { status: 403 }
-  );
-}
+    // Verify slot is for today
+    const todayDayOfWeek = currentTime.getDay();
+    if (slot.day_of_week !== todayDayOfWeek) {
+      return NextResponse.json(
+        { success: false, error: 'This class is not scheduled for today' },
+        { status: 400 }
+      );
+    }
+
+    // Get settings
+    const settings = await db.timetablesettings.findFirst();
 
     // Check if trainer has checked into work today
-  const employee = await db.employees.findFirst({
-  where: {
-    employee_id: trainer_id // This maps Users.id to Employees.employee_id
-  }
-});
+    const employee = await db.employees.findFirst({
+      where: { employee_id: user.id }
+    });
 
-if (!employee) {
-  return NextResponse.json(
-    { success: false, error: 'Employee record not found' },
-    { status: 404 }
-  );
-}
- const workAttendance = await db.attendance.findFirst({
-  where: {
-    employee_id: employee.id, // Now use the correct Employees.id
-   date: new Date(currentDate)
-  }
-});
-
-    if (!workAttendance) {
-      console.error('No work attendance found for trainer:', trainer_id);
+    if (!employee) {
       return NextResponse.json(
-        { success: false, error: 'You must check into work before checking into classes' },
-        { status: 400 }
+        { success: false, error: 'Employee record not found' },
+        { status: 404 }
       );
     }
 
-    // Check if trainer has an active work session
-    const hasActiveWorkSession = !!(workAttendance.check_in_time && !workAttendance.check_out_time);
-
-    if (!hasActiveWorkSession) {
-      console.error('No active work session for trainer:', trainer_id);
-      return NextResponse.json(
-        { success: false, error: 'You must be checked into work to check into classes' },
-        { status: 400 }
-      );
-    }
-
-    const existingClassAttendance = await db.classattendance.findFirst({
+    const workAttendance = await db.attendance.findFirst({
       where: {
-        trainer_id: trainer_id,
-        class_id: class_id,
-        date: new Date(currentDate)
+        employee_id: employee.id,
+        date: currentDate
+      }
+    });
+
+    if (!workAttendance?.check_in_time || workAttendance.check_out_time) {
+      return NextResponse.json(
+        { success: false, error: 'You must be checked into work to mark class attendance' },
+        { status: 400 }
+      );
+    }
+
+    // Check existing attendance
+    const existingAttendance = await db.classattendance.findFirst({
+      where: {
+        trainer_id: user.id,
+        class_id: slot.class_id,
+        date: currentDate,
+        timetable_slot_id: timetable_slot_id
       }
     });
 
     if (normalizedAction === 'check-in') {
-      // Handle check-in logic
-      if (existingClassAttendance) {
-        if (isMobileRequest) {
-          // Mobile: Check if it was auto-checked out
-          if (existingClassAttendance.check_out_time && existingClassAttendance.auto_checkout) {
-            // Allow re-checkin if it was auto-checked out
-            await db.classattendance.update({
-              where: { id: existingClassAttendance.id },
-              data: {
-                check_in_time: currentTime,
-                check_out_time: null,
-                auto_checkout: false,
-                status: 'Present'
-              }
-            });
-            
-            return NextResponse.json({
-              success: true,
-              message: `Re-checked in to class at ${currentTime.toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit' })} (previous session was auto-closed)`,
-              data: {
-                timestamp: currentTime,
-                type: body.type,
-                class_id: class_id,
-                location_verified: true,
-                class_check_in_time: currentTime
-              }
-            });
-          } else {
-            return NextResponse.json(
-              { success: false, error: 'You have already checked in to this class today' },
-              { status: 400 }
-            );
-          }
-        } else {
-          // Web: Original logic
-          return NextResponse.json(
-            { success: false, error: 'Already checked into this class today' },
-            { status: 400 }
-          );
-        }
-      }
-
-      // Check if user has any active class sessions
-      const activeClassSessions = await db.classattendance.findMany({
-        where: {
-          trainer_id: trainer_id,
-          date: new Date(currentDate),
-          check_out_time: null
-        },
-        include: {
-          classes: {
-            select: { name: true }
-          }
-        }
-      });
-
-      if (activeClassSessions.length > 0) {
-        const currentActiveSession = activeClassSessions[0];
+      // Verify check-in window
+      const checkInStatus = canCheckIn(slot, currentTime, settings);
+      
+      if (!checkInStatus.canCheckIn) {
         return NextResponse.json(
-          { success: false, error: `You are already checked into ${currentActiveSession.classes.name}. Please check out first.` },
+          { success: false, error: checkInStatus.reason },
           { status: 400 }
         );
       }
 
-      // Calculate auto-checkout time for web
-      const maxClassDuration = Math.min(classInfo.duration_hours || 2, 2);
-      const autoCheckoutTime = new Date(currentTime);
-      autoCheckoutTime.setHours(autoCheckoutTime.getHours() + maxClassDuration);
+      if (existingAttendance?.check_in_time && !existingAttendance.check_out_time) {
+        return NextResponse.json(
+          { success: false, error: 'You have already checked in to this class' },
+          { status: 400 }
+        );
+      }
 
-      // Create class attendance record
-      const classAttendance = await db.classattendance.create({
+      // Check for active sessions in other classes
+      const activeSession = await db.classattendance.findFirst({
+        where: {
+          trainer_id: user.id,
+          date: currentDate,
+          check_out_time: null,
+          timetable_slot_id: { not: timetable_slot_id }
+        },
+        include: {
+          classes: { 
+            select: { 
+              name: true 
+            } 
+          }
+        }
+      });
+
+      if (activeSession) {
+        // Get subject name from the active session's timetable slot
+        let activeSubjectName = activeSession.classes.name;
+        if (activeSession.timetable_slot_id) {
+          const activeSlot = await db.timetableslots.findUnique({
+            where: { id: activeSession.timetable_slot_id },
+            include: {
+              subjects: {
+                select: { name: true }
+              }
+            }
+          });
+          activeSubjectName = activeSlot?.subjects?.name || activeSession.classes.name;
+        }
+
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: `You are already checked into ${activeSubjectName}. Please check out first.` 
+          },
+          { status: 400 }
+        );
+      }
+
+      // Create attendance record
+      const attendance = await db.classattendance.create({
         data: {
-          trainer_id: trainer_id,
-          class_id: class_id,
-          date: new Date(currentDate),
+          trainer_id: user.id,
+          class_id: slot.class_id,
+          date: currentDate,
           check_in_time: currentTime,
-          check_out_time: isMobileRequest ? null : autoCheckoutTime,
-          status: 'Present',
-          auto_checkout: isMobileRequest ? false : true,
+          timetable_slot_id: timetable_slot_id,
+          status: checkInStatus.isLate ? 'Late' : 'Present',
+          location_verified: isMobileRequest ? true : false,
+          check_in_latitude: body.location?.latitude,
+          check_in_longitude: body.location?.longitude,
           work_attendance_id: workAttendance.id
         }
       });
 
-      // Create appropriate response based on request type
+      const subjectName = slot.subjects?.name || slot.classes?.name;
+      const responseMessage = checkInStatus.isLate 
+        ? `Checked in late to ${subjectName}`
+        : `Checked in to ${subjectName}`;
+
       if (isMobileRequest) {
         return NextResponse.json({
           success: true,
-          message: `Checked in to ${classInfo.name} at ${currentTime.toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit' })}`,
+          message: responseMessage,
           data: {
             timestamp: currentTime,
             type: body.type,
-            class_id: class_id,
-            class_name: classInfo.name,
+            timetable_slot_id,
+            class_name: slot.classes?.name,
+            subject_name: slot.subjects?.name,
+            room_name: slot.rooms?.name,
             location_verified: true,
-            class_check_in_time: currentTime
+            is_late: checkInStatus.isLate,
+            check_in_time: currentTime
           }
         });
       } else {
         return NextResponse.json({
           success: true,
-          message: `Successfully checked into ${classInfo.name}`,
-          className: classInfo.name,
-          class_attendance: {
-            id: classAttendance.id,
-            class: {
-              id: classInfo.id,
-              name: classInfo.name,
-              code: classInfo.code
-            },
+          message: responseMessage,
+          attendance: {
+            id: attendance.id,
+            class: slot.classes,
+            subject: slot.subjects,
+            room: slot.rooms,
             check_in_time: currentTime.toISOString(),
-            auto_checkout_time: autoCheckoutTime.toISOString(),
-            duration_hours: maxClassDuration,
-            max_duration_applied: maxClassDuration < (classInfo.duration_hours || 2)
+            is_late: checkInStatus.isLate
           }
         });
       }
 
     } else if (normalizedAction === 'check-out') {
-      // Handle check-out logic (mobile only)
-      if (!existingClassAttendance?.check_in_time) {
+      if (!existingAttendance?.check_in_time) {
         return NextResponse.json(
-          { success: false, error: 'You must check in to the class before checking out' },
+          { success: false, error: 'You must check in before checking out' },
           { status: 400 }
         );
       }
 
-      if (existingClassAttendance.check_out_time) {
+      if (existingAttendance.check_out_time) {
         return NextResponse.json(
-          { success: false, error: 'You have already checked out of this class today' },
+          { success: false, error: 'You have already checked out of this class' },
           { status: 400 }
         );
       }
 
       // Calculate duration
-      const timeDiff = currentTime.getTime() - existingClassAttendance.check_in_time.getTime();
+      const timeDiff = currentTime.getTime() - existingAttendance.check_in_time.getTime();
       const minutesDiff = Math.floor(timeDiff / (1000 * 60));
       const hoursDiff = Math.floor(minutesDiff / 60);
       const remainingMinutes = minutesDiff % 60;
 
       await db.classattendance.update({
-        where: { id: existingClassAttendance.id },
+        where: { id: existingAttendance.id },
         data: {
           check_out_time: currentTime,
-          auto_checkout: false
+          auto_checkout: false,
+          check_out_latitude: body.location?.latitude,
+          check_out_longitude: body.location?.longitude
         }
       });
 
-      return NextResponse.json({
-        success: true,
-        message: `Checked out from ${classInfo.name} at ${currentTime.toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit' })}`,
-        data: {
-          timestamp: currentTime,
-          type: body.type,
-          class_id: class_id,
-          class_name: classInfo.name,
-          location_verified: true,
-          class_check_out_time: currentTime,
-          duration: `${hoursDiff}h ${remainingMinutes}m`
-        }
-      });
+      const duration = `${hoursDiff}h ${remainingMinutes}m`;
+      const subjectName = slot.subjects?.name || slot.classes?.name;
+
+      if (isMobileRequest) {
+        return NextResponse.json({
+          success: true,
+          message: `Checked out from ${subjectName}`,
+          data: {
+            timestamp: currentTime,
+            type: body.type,
+            timetable_slot_id,
+            class_name: slot.classes?.name,
+            subject_name: slot.subjects?.name,
+            location_verified: true,
+            check_out_time: currentTime,
+            duration
+          }
+        });
+      } else {
+        return NextResponse.json({
+          success: true,
+          message: `Successfully checked out from ${subjectName}`,
+          duration
+        });
+      }
     } else {
       return NextResponse.json(
         { success: false, error: 'Invalid action' },
@@ -630,21 +652,14 @@ if (!employee) {
       );
     }
     
-    if (error instanceof Error) {
-      return NextResponse.json(
-        { success: false, error: error.message },
-        { status: 400 }
-      );
-    }
-    
     return NextResponse.json(
-      { success: false, error: "Failed to record class attendance" },
+      { success: false, error: error instanceof Error ? error.message : 'Failed to record class attendance' },
       { status: 500 }
     );
   }
 }
 
-// PATCH /api/attendance/class-checkin - Handle manual check-out (web only)
+// PATCH /api/attendance/class-checkin - Manual checkout (web only)
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
@@ -671,7 +686,13 @@ export async function PATCH(request: NextRequest) {
         trainer_id: user.id
       },
       include: {
-        classes: true
+        classes: {
+          select: {
+            id: true,
+            name: true,
+            code: true
+          }
+        }
       }
     });
 
@@ -682,25 +703,38 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    // If there's a timetable_slot_id, fetch the subject name separately
+    let subjectName = null;
+    if (attendance.timetable_slot_id) {
+      const slot = await db.timetableslots.findUnique({
+        where: { id: attendance.timetable_slot_id },
+        include: {
+          subjects: {
+            select: {
+              name: true
+            }
+          }
+        }
+      });
+      subjectName = slot?.subjects?.name;
+    }
+
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentTime = nowInKenya.toJSDate();
 
-    const updatedAttendance = await db.classattendance.update({
+    await db.classattendance.update({
       where: { id: attendance_id },
       data: {
         check_out_time: currentTime,
         auto_checkout: false
-      },
-      include: {
-        classes: true
       }
     });
 
+    const displayName = subjectName || attendance.classes.name;
+
     return NextResponse.json({
       success: true,
-      message: `Successfully checked out of ${attendance.classes.name}`,
-      className: attendance.classes.name,
-      attendance: updatedAttendance
+      message: `Successfully checked out of ${displayName}`
     });
 
   } catch (error) {

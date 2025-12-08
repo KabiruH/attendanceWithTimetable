@@ -66,25 +66,36 @@ model biometriclogs {
 }
 
 model classattendance {
-  id                 Int       @id @default(autoincrement())
-  trainer_id         Int
-  class_id           Int
-  date               DateTime  @db.Date
-  check_in_time      DateTime
-  check_out_time     DateTime?
-  status             String    @default("Present") @db.VarChar(20)
-  auto_checkout      Boolean   @default(false)
-  work_attendance_id Int?
-  created_at         DateTime  @default(now())
-  classes            classes   @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassAttendance_class_id_fkey")
-  users              users     @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "ClassAttendance_trainer_id_fkey")
+  id                  Int              @id @default(autoincrement())
+  trainer_id          Int
+  class_id            Int
+  date                DateTime         @db.Date
+  check_in_time       DateTime
+  check_out_time      DateTime?
+  status              String           @default("Present") @db.VarChar(20)
+  auto_checkout       Boolean          @default(false)
+  work_attendance_id  Int?
+  timetable_slot_id   String?          // ✅ NEW: Link to timetable slot
+  location_verified   Boolean          @default(false) // ✅ NEW: Was location check passed?
+  check_in_latitude   Decimal?         @db.Decimal(10, 8) // ✅ NEW: Check-in GPS coordinates
+  check_in_longitude  Decimal?         @db.Decimal(11, 8) // ✅ NEW: Check-in GPS coordinates
+  check_out_latitude  Decimal?         @db.Decimal(10, 8) // ✅ NEW: Check-out GPS coordinates
+  check_out_longitude Decimal?         @db.Decimal(11, 8) // ✅ NEW: Check-out GPS coordinates
+  notes               String?          @db.Text // ✅ NEW: Optional notes from trainer
+  created_at          DateTime         @default(now())
+  updated_at          DateTime         @default(now()) @updatedAt // ✅ NEW: Track updates
+  classes             classes          @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassAttendance_class_id_fkey")
+  users               users            @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "ClassAttendance_trainer_id_fkey")
+  timetableslots      timetableslots?  @relation(fields: [timetable_slot_id], references: [id], onDelete: SetNull, map: "ClassAttendance_timetable_slot_id_fkey") // ✅ NEW: Relation to timetable
 
-  @@unique([trainer_id, class_id, date], map: "ClassAttendance_trainer_id_class_id_date_key")
+  @@unique([trainer_id, class_id, date, timetable_slot_id], map: "ClassAttendance_unique_attendance") // ✅ UPDATED: More specific uniqueness
   @@index([auto_checkout], map: "ClassAttendance_auto_checkout_idx")
   @@index([check_in_time], map: "ClassAttendance_check_in_time_idx")
   @@index([class_id], map: "ClassAttendance_class_id_idx")
   @@index([date], map: "ClassAttendance_date_idx")
   @@index([trainer_id], map: "ClassAttendance_trainer_id_idx")
+  @@index([timetable_slot_id], map: "ClassAttendance_timetable_slot_id_idx") // ✅ NEW: Index for timetable lookup
+  @@index([location_verified], map: "ClassAttendance_location_verified_idx") // ✅ NEW: Index for location queries
 }
 
 model classes {
@@ -293,6 +304,7 @@ model timetableslots {
   rooms            rooms         @relation(fields: [room_id], references: [id], map: "TimetableSlots_room_id_fkey")
   subjects         subjects      @relation(fields: [subject_id], references: [id], map: "TimetableSlots_subject_id_fkey")
   terms            terms         @relation(fields: [term_id], references: [id], map: "TimetableSlots_term_id_fkey")
+  classattendance  classattendance[] // ✅ NEW: Relation to class attendance records
 
   @@unique([term_id, day_of_week, lesson_period_id, employee_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_employee_key")
   @@unique([term_id, day_of_week, lesson_period_id, room_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_room_id_key")
@@ -302,6 +314,8 @@ model timetableslots {
   @@index([room_id], map: "TimetableSlots_room_id_fkey")
   @@index([subject_id], map: "TimetableSlots_subject_id_idx")
   @@index([term_id], map: "TimetableSlots_term_id_idx")
+  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // ✅ NEW: Index for day queries
+
 }
 
 model trainerclassassignments {
@@ -426,15 +440,18 @@ model webauthncredentialchallenge {
 }
 
 model timetablesettings {
-  id                          Int       @id @default(autoincrement())
-  subject_selection_deadline  DateTime?
-  deadline_enabled            Boolean   @default(false)
-  allow_admin_assignment      Boolean   @default(false)
-  block_all_subject_selection Boolean   @default(false)
-  created_at                  DateTime  @default(now())
-  updated_at                  DateTime  @updatedAt
+  id                              Int       @id @default(autoincrement())
+  subject_selection_deadline      DateTime?
+  deadline_enabled                Boolean   @default(false)
+  allow_admin_assignment          Boolean   @default(false)
+  block_all_subject_selection     Boolean   @default(false)
   timetable_generation_deadline   DateTime?
   generation_deadline_enabled     Boolean   @default(false)
+  attendance_check_in_window      Int       @default(15) // Minutes before class trainers can check in
+  attendance_late_threshold       Int       @default(10) // Minutes after start time to mark as late
+  attendance_location_required    Boolean   @default(true) // Require location verification using existing geofence
+  created_at                      DateTime  @default(now())
+  updated_at                      DateTime  @updatedAt
 }
 
 model subjectassignmentlog {

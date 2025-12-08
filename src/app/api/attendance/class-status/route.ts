@@ -51,6 +51,25 @@ function calculateTotalHours(attendanceRecords: any[]): string {
   return `${hours}h ${minutes}m`;
 }
 
+// Helper function to get subject name for attendance record
+async function getSubjectNameForAttendance(timetableSlotId: string | null) {
+  if (!timetableSlotId) return null;
+  
+  const slot = await db.timetableslots.findUnique({
+    where: { id: timetableSlotId },
+    include: {
+      subjects: {
+        select: {
+          name: true,
+          code: true
+        }
+      }
+    }
+  });
+  
+  return slot?.subjects || null;
+}
+
 // GET - Get class attendance status and statistics
 export async function GET(req: NextRequest) {
   try {
@@ -84,6 +103,17 @@ export async function GET(req: NextRequest) {
       }
     });
 
+    // Enrich today's attendance with subject information
+    const enrichedTodayAttendance = await Promise.all(
+      todayAttendance.map(async (attendance) => {
+        const subject = await getSubjectNameForAttendance(attendance.timetable_slot_id);
+        return {
+          ...attendance,
+          subject
+        };
+      })
+    );
+
     // Get class attendance history for the current month
     const monthlyAttendance = await db.classattendance.findMany({
       where: {
@@ -109,16 +139,33 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Get total number of active class assignments
-    const activeClassAssignments = await db.trainerclassassignments.count({
-      where: {
-        trainer_id: user.id,
-        is_active: true,
-        classes: {
-          is_active: true
-        }
-      }
+    // Enrich monthly attendance with subject information
+    const enrichedMonthlyAttendance = await Promise.all(
+      monthlyAttendance.map(async (attendance) => {
+        const subject = await getSubjectNameForAttendance(attendance.timetable_slot_id);
+        return {
+          ...attendance,
+          subject
+        };
+      })
+    );
+
+    // Get active term
+    const activeTerm = await db.terms.findFirst({
+      where: { is_active: true }
     });
+
+    // Get total number of scheduled classes in timetable for this trainer
+    let scheduledClassesCount = 0;
+    if (activeTerm) {
+      scheduledClassesCount = await db.timetableslots.count({
+        where: {
+          employee_id: user.id,
+          term_id: activeTerm.id,
+          status: 'scheduled'
+        }
+      });
+    }
 
     // Calculate statistics
     const completedClassesThisMonth = monthlyAttendance.filter(
@@ -127,32 +174,101 @@ export async function GET(req: NextRequest) {
 
     const totalHoursThisMonth = calculateTotalHours(completedClassesThisMonth);
 
-    // Get currently active sessions (checked in but not yet auto-checked out)
+    // Get currently active sessions (checked in but not checked out)
     const now = nowInKenya.toJSDate();
-    const activeClassSessions = todayAttendance.filter(attendance => {
-      if (!attendance.check_out_time) return true;
-      // If auto-checkout time hasn't passed yet, consider it active
-      return new Date(attendance.check_out_time) > now && attendance.auto_checkout;
+    const activeClassSessions = enrichedTodayAttendance.filter(attendance => {
+      return !attendance.check_out_time;
     });
 
     // Check if user can check into a new class (no active sessions)
     const canCheckIntoNewClass = activeClassSessions.length === 0;
 
+    // Get today's schedule from timetable
+    const todayDayOfWeek = now.getDay();
+    let todaySchedule: any[] = [];
+    
+    if (activeTerm) {
+      todaySchedule = await db.timetableslots.findMany({
+        where: {
+          employee_id: user.id,
+          term_id: activeTerm.id,
+          day_of_week: todayDayOfWeek,
+          status: 'scheduled'
+        },
+        include: {
+          classes: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              department: true
+            }
+          },
+          subjects: {
+            select: {
+              id: true,
+              name: true,
+              code: true
+            }
+          },
+          rooms: {
+            select: {
+              id: true,
+              name: true
+            }
+          },
+          lessonperiods: {
+            select: {
+              id: true,
+              name: true,
+              start_time: true,
+              end_time: true,
+              duration: true
+            }
+          }
+        },
+        orderBy: {
+          lessonperiods: {
+            start_time: 'asc'
+          }
+        }
+      });
+
+      // Enrich schedule with attendance status
+      todaySchedule = todaySchedule.map(slot => {
+        const attendance = enrichedTodayAttendance.find(
+          att => att.timetable_slot_id === slot.id
+        );
+        return {
+          ...slot,
+          attendance,
+          hasCheckedIn: !!attendance?.check_in_time,
+          hasCheckedOut: !!attendance?.check_out_time
+        };
+      });
+    }
+
     const stats = {
       totalClassesThisMonth: completedClassesThisMonth.length,
       hoursThisMonth: totalHoursThisMonth,
-      activeClasses: activeClassAssignments,
-      activeSessionsToday: activeClassSessions.length
+      scheduledClasses: scheduledClassesCount,
+      activeSessionsToday: activeClassSessions.length,
+      scheduledToday: todaySchedule.length
     };
 
     return NextResponse.json({
       success: true,
-      todayAttendance,
-      attendanceHistory: monthlyAttendance,
+      todayAttendance: enrichedTodayAttendance,
+      todaySchedule, // NEW: Today's timetable schedule
+      attendanceHistory: enrichedMonthlyAttendance,
       activeClassSessions,
       canCheckIntoNewClass,
       stats,
-      userRole: user.role
+      userRole: user.role,
+      activeTerm: activeTerm ? {
+        id: activeTerm.id,
+        name: activeTerm.name
+      } : null
     });
 
   } catch (error) {

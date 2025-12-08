@@ -1,25 +1,33 @@
-// components/dashboard/ClassStatusCard.tsx
+// components/dashboard/employee/ClassStatusCard.tsx
 'use client';
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { GraduationCap, Clock, LogOut } from 'lucide-react';
+import { GraduationCap, Clock, LogOut, MapPin, BookOpen } from 'lucide-react';
 
 interface ActiveClassSession {
   id: number;
   class_id: number;
-  check_in_time: string;
-  check_out_time?: string;
+  timetable_slot_id: string | null;
+  check_in_time: Date;
+  check_out_time?: Date | null;
   status: string;
   auto_checkout: boolean;
-  class: {
+  location_verified: boolean;
+  classes: {
     id: number;
     name: string;
     code: string;
     department: string;
-    duration_hours: number;
   };
+  subject?: {
+    name: string;
+    code: string;
+  } | null;
+  room?: {
+    name: string;
+  } | null;
 }
 
 interface ClassStatusCardProps {
@@ -35,15 +43,16 @@ const ClassStatusCard: React.FC<ClassStatusCardProps> = ({
   onClassCheckOut,
   isLoading = false
 }) => {
-  const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('en-KE', {
+  const formatTime = (date: Date) => {
+    return new Date(date).toLocaleTimeString('en-KE', {
       timeZone: 'Africa/Nairobi',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      hour12: true
     });
   };
 
-  const calculateDuration = (checkInTime: string) => {
+  const calculateDuration = (checkInTime: Date) => {
     const checkIn = new Date(checkInTime);
     const now = new Date();
     const diffMs = now.getTime() - checkIn.getTime();
@@ -56,22 +65,15 @@ const ClassStatusCard: React.FC<ClassStatusCardProps> = ({
     return `${hours}h ${minutes}m`;
   };
 
-  const getRemainingTime = (checkInTime: string, durationHours: number) => {
-    const checkIn = new Date(checkInTime);
-    // Cap duration at 2 hours maximum
-    const effectiveDuration = Math.min(durationHours, 2);
-    const autoCheckoutTime = new Date(checkIn.getTime() + (effectiveDuration * 60 * 60 * 1000));
-    const now = new Date();
-    const remaining = autoCheckoutTime.getTime() - now.getTime();
-    
-    if (remaining <= 0) return 'Auto-checkout reached';
-    
-    const remainingMinutes = Math.floor(remaining / (1000 * 60));
-    const hours = Math.floor(remainingMinutes / 60);
-    const minutes = remainingMinutes % 60;
-    
-    if (hours === 0) return `${minutes}m remaining`;
-    return `${hours}h ${minutes}m remaining`;
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Present':
+        return 'bg-green-600';
+      case 'Late':
+        return 'bg-orange-500';
+      default:
+        return 'bg-gray-600';
+    }
   };
 
   if (activeClassSessions.length === 0) {
@@ -79,11 +81,16 @@ const ClassStatusCard: React.FC<ClassStatusCardProps> = ({
   }
 
   return (
-    <Card className="shadow-md">
-      <CardHeader className="bg-gradient-to-r from-green-50 via-green-100 to-green-200">
-        <CardTitle className="font-bold text-green-900 flex items-center space-x-2">
-          <GraduationCap className="w-5 h-5" />
-          <span>Active Classes</span>
+    <Card className="shadow-lg border-l-4 border-l-green-500">
+      <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+        <CardTitle className="text-green-800 flex items-center justify-between">
+          <span className="flex items-center space-x-2">
+            <GraduationCap className="w-5 h-5" />
+            <span>Active Classes</span>
+          </span>
+          <Badge className="bg-green-600">
+            {activeClassSessions.length} Active
+          </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="p-6 bg-white">
@@ -91,47 +98,68 @@ const ClassStatusCard: React.FC<ClassStatusCardProps> = ({
           {activeClassSessions.map((session) => (
             <div
               key={session.id}
-              className="border rounded-lg p-4 bg-green-50 border-green-200"
+              className="border rounded-lg p-4 bg-gradient-to-r from-green-50 to-emerald-50 border-green-200 hover:shadow-md transition-shadow"
             >
-              <div className="flex justify-between items-start mb-2">
+              {/* Subject and Class Info */}
+              <div className="flex justify-between items-start mb-3">
                 <div className="flex-1">
-                  <h3 className="font-medium text-gray-900">
-                    {session.class.name}
-                  </h3>
-                  <p className="text-sm text-gray-600">
-                    {session.class.code} • {session.class.department}
+                  <div className="flex items-center gap-2 mb-1">
+                    <BookOpen className="w-4 h-4 text-green-600" />
+                    <h3 className="font-semibold text-gray-900">
+                      {session.subject?.name || session.classes.name}
+                    </h3>
+                  </div>
+                  <p className="text-sm text-gray-600 ml-6">
+                    {session.classes.name} ({session.classes.code})
+                  </p>
+                  <p className="text-xs text-gray-500 ml-6">
+                    {session.classes.department}
                   </p>
                 </div>
-                <Badge variant="default" className="bg-green-600">
-                  Active
+                <Badge className={getStatusColor(session.status)}>
+                  {session.status}
                 </Badge>
               </div>
 
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4 text-sm text-gray-600">
-                  <span className="flex items-center space-x-1">
-                    <Clock className="w-3 h-3" />
-                    <span>Started {formatTime(session.check_in_time)}</span>
-                  </span>
-                  <span className="text-green-600 font-medium">
-                    {calculateDuration(session.check_in_time)}
-                  </span>
-                  {session.auto_checkout && (
-                    <span className="text-blue-600 text-xs">
-                      {getRemainingTime(session.check_in_time, session.class.duration_hours)}
+              {/* Time and Location Info */}
+              <div className="space-y-2 mb-3">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="flex items-center space-x-4 text-gray-600">
+                    <span className="flex items-center space-x-1">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>Started {formatTime(session.check_in_time)}</span>
                     </span>
-                  )}
+                    <span className="text-green-700 font-semibold">
+                      {calculateDuration(session.check_in_time)}
+                    </span>
+                  </div>
                 </div>
 
+                {/* Room and Location */}
+                {session.room && (
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <MapPin className="w-3.5 h-3.5 text-blue-600" />
+                    <span>{session.room.name}</span>
+                    {session.location_verified && (
+                      <Badge variant="outline" className="text-xs border-green-500 text-green-700">
+                        ✓ Verified
+                      </Badge>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Check Out Button */}
+              <div className="flex justify-end pt-2 border-t border-green-200">
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => onClassCheckOut(session.id)}
                   disabled={isLoading}
-                  className="text-red-600 border-red-300 hover:bg-red-50"
+                  className="text-red-600 border-red-300 hover:bg-red-50 hover:border-red-400"
                 >
-                  <LogOut className="w-3 h-3 mr-1" />
-                  Early Check Out
+                  <LogOut className="w-3.5 h-3.5 mr-1.5" />
+                  Check Out
                 </Button>
               </div>
             </div>
@@ -139,14 +167,19 @@ const ClassStatusCard: React.FC<ClassStatusCardProps> = ({
         </div>
 
         {/* Today's Class Hours Summary */}
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="text-center">
-            <p className="text-sm text-gray-600 mb-1">Today's Class Hours</p>
-            <div className="flex items-center justify-center space-x-2">
-              <GraduationCap className="w-5 h-5 text-green-600" />
-              <span className="text-2xl font-bold text-green-600">
-                {todayClassHours}
-              </span>
+        <div className="mt-6 pt-4 border-t border-gray-200">
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4">
+            <div className="text-center">
+              <p className="text-sm text-gray-700 font-medium mb-2">Today's Total Class Hours</p>
+              <div className="flex items-center justify-center space-x-2">
+                <GraduationCap className="w-6 h-6 text-green-600" />
+                <span className="text-3xl font-bold text-green-700">
+                  {todayClassHours}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                {activeClassSessions.length} {activeClassSessions.length === 1 ? 'session' : 'sessions'} in progress
+              </p>
             </div>
           </div>
         </div>

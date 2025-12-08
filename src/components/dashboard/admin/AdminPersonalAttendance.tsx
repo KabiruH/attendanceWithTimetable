@@ -6,10 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Timer, GraduationCap, User, MapPin, AlertTriangle, RefreshCw } from 'lucide-react';
-import ClassCheckInModal from '../employee/ClassCheckInModal';
-import ClassStatusCard from '../employee/ClassStatusCard';
-import { useClassAttendance } from '@/hooks/useClassAttendance';
+import { Timer, GraduationCap, User, MapPin, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
+import TimetableClassCheckInModal from '../employee/TimetableClassCheckInModal';
+import ActiveClassSessionCard from '../employee/ActiveClassSessionCard';
 import { checkLocationWithDistance } from '@/lib/geofence';
 
 interface LocationResult {
@@ -26,6 +25,26 @@ interface AdminPersonalAttendanceProps {
   isAdminTrainer?: boolean;
 }
 
+interface UpcomingClass {
+  id: string;
+  timetable_slot_id: string;
+  class: { name: string; code: string };
+  subject: { name: string; code: string };
+  room: { name: string };
+  startTimeFormatted: string;
+  endTimeFormatted: string;
+  isHappeningNow: boolean;
+  isToday: boolean;
+  hasCheckedIn: boolean;
+  hasCheckedOut: boolean;
+  checkInStatus: {
+    canCheckIn: boolean;
+    status: string;
+    message: string;
+  };
+  minutesUntilStart: number;
+}
+
 const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
   employee_id,
   userRole,
@@ -38,18 +57,16 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
   const [locationResult, setLocationResult] = useState<LocationResult | null>(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [locationError, setLocationError] = useState<string>('');
+  
+  // Timetable-based class attendance state
+  const [upcomingClasses, setUpcomingClasses] = useState<UpcomingClass[]>([]);
+  const [currentClass, setCurrentClass] = useState<UpcomingClass | null>(null);
+  const [nextClass, setNextClass] = useState<UpcomingClass | null>(null);
+  const [todayClassHours, setTodayClassHours] = useState('-');
+  const [isClassLoading, setIsClassLoading] = useState(false);
+  const [activeClassSessions, setActiveClassSessions] = useState<any[]>([]);
+  
   const { toast } = useToast();
-
-  // Class attendance functionality for admin-trainers
-  const {
-    isClassLoading,
-    activeClassSessions,
-    todayClassHours,
-    hasActiveSession,
-    activeSessionName,
-    handleClassCheckIn,
-    handleClassCheckOut
-  } = useClassAttendance(employee_id);
 
   // Check location function
   const checkUserLocation = async () => {
@@ -68,17 +85,60 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
     }
   };
 
+  // Fetch upcoming classes from timetable
+  const fetchUpcomingClasses = async () => {
+    if (!employee_id) return;
+
+    try {
+      const response = await fetch('/api/attendance/upcoming-classes', {
+        method: 'GET',
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setUpcomingClasses(data.upcoming || []);
+        setCurrentClass(data.current || null);
+        setNextClass(data.next || null);
+      }
+    } catch (error) {
+      console.error('Error fetching upcoming classes:', error);
+    }
+  };
+
+  // Fetch class attendance status
+  const fetchClassAttendanceStatus = async () => {
+    if (!employee_id) return;
+
+    try {
+      const response = await fetch('/api/attendance/class-status', {
+        method: 'GET',
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setActiveClassSessions(data.activeClassSessions || []);
+        
+        // Calculate today's class hours
+        if (data.stats?.hoursThisMonth) {
+          setTodayClassHours(data.stats.hoursThisMonth);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching class status:', error);
+    }
+  };
+
   const fetchPersonalAttendanceStatus = async () => {
     if (!employee_id) return;
 
     try {
-      // Try the status endpoint first (for admin compatibility)
       let response = await fetch('/api/attendance/status', {
         method: 'GET',
         credentials: 'include',
       });
 
-      // If status endpoint doesn't work, try the main attendance endpoint
       if (!response.ok) {
         response = await fetch('/api/attendance', {
           method: 'GET',
@@ -88,7 +148,6 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
 
       if (response.ok) {
         const data = await response.json();
-         
         setIsCheckedIn(data.isCheckedIn || false);
         
         // Calculate today's hours
@@ -138,7 +197,6 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
   };
 
   const handleAttendance = async (action: 'check-in' | 'check-out') => {
-    // Check location before allowing attendance
     if (!locationResult?.isWithinArea) {
       toast({
         title: 'Location Required',
@@ -161,7 +219,7 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
         body: JSON.stringify({ 
           action, 
           employee_id,
-          locationInfo: locationResult // Include location verification
+          locationInfo: locationResult
         }),
       });
 
@@ -191,7 +249,6 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
   };
 
   const handleClassCheckInClick = () => {
-    // Check location before allowing class check-in
     if (!locationResult?.isWithinArea) {
       toast({
         title: 'Location Required',
@@ -204,8 +261,7 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
     setShowClassModal(true);
   };
 
-  const handleClassCheckInSubmit = (classId: number) => {
-    // Double-check location before class check-in
+  const handleClassCheckIn = async (timetableSlotId: string) => {
     if (!locationResult?.isWithinArea) {
       toast({
         title: 'Location Required',
@@ -214,9 +270,91 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
       });
       return;
     }
-    
-    handleClassCheckIn(classId);
-    setShowClassModal(false);
+
+    setIsClassLoading(true);
+    try {
+      const response = await fetch('/api/attendance/class-checkin', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          timetable_slot_id: timetableSlotId,
+          action: 'check-in'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to check in to class');
+      }
+
+      const data = await response.json();
+      
+      toast({
+        title: 'Success',
+        description: data.message || 'Successfully checked in to class',
+      });
+
+      // Refresh data
+      await fetchUpcomingClasses();
+      await fetchClassAttendanceStatus();
+      setShowClassModal(false);
+
+    } catch (error) {
+      console.error('Error checking into class:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to check in to class',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsClassLoading(false);
+    }
+  };
+
+  const handleClassCheckOut = async (attendanceId: number) => {
+    setIsClassLoading(true);
+    try {
+      const response = await fetch('/api/attendance/class-checkin', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          attendance_id: attendanceId,
+          action: 'check-out'
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to check out of class');
+      }
+
+      const data = await response.json();
+      
+      toast({
+        title: 'Success',
+        description: data.message || 'Successfully checked out of class',
+      });
+
+      // Refresh data
+      await fetchUpcomingClasses();
+      await fetchClassAttendanceStatus();
+
+    } catch (error) {
+      console.error('Error checking out of class:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to check out of class',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsClassLoading(false);
+    }
   };
 
   const getLocationStatusIcon = () => {
@@ -246,18 +384,32 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
 
   const canMarkAttendance = locationResult?.isWithinArea && !locationLoading && !locationError;
 
+  // Get classes available for check-in
+  const availableClasses = upcomingClasses.filter(c => 
+    c.checkInStatus.canCheckIn && !c.hasCheckedIn
+  );
+
   useEffect(() => {
     fetchPersonalAttendanceStatus();
     checkUserLocation();
     
-    // Refresh every 5 minutes for personal attendance
+    if (isAdminTrainer) {
+      fetchUpcomingClasses();
+      fetchClassAttendanceStatus();
+    }
+    
+    // Refresh every 2 minutes
     const interval = setInterval(() => {
       fetchPersonalAttendanceStatus();
       checkUserLocation();
-    }, 300000);
+      if (isAdminTrainer) {
+        fetchUpcomingClasses();
+        fetchClassAttendanceStatus();
+      }
+    }, 120000);
     
     return () => clearInterval(interval);
-  }, [employee_id]);
+  }, [employee_id, isAdminTrainer]);
 
   return (
     <div className="space-y-4">
@@ -323,7 +475,6 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
                 </Button>
               </div>
               
-              {/* Location warning for attendance */}
               {!canMarkAttendance && (
                 <p className="text-xs text-gray-500 text-center mb-3">
                   {locationLoading ? 'Checking location...' : 'Must be on campus to mark attendance'}
@@ -355,9 +506,9 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
                   <Button
                     size="lg"
                     onClick={handleClassCheckInClick}
-                    disabled={!isCheckedIn || isClassLoading || !canMarkAttendance}
+                    disabled={!isCheckedIn || isClassLoading || !canMarkAttendance || availableClasses.length === 0}
                     className={`w-full transform hover:scale-105 transition-transform duration-200 ${
-                      !isCheckedIn || !canMarkAttendance
+                      !isCheckedIn || !canMarkAttendance || availableClasses.length === 0
                         ? 'bg-gray-400' 
                         : 'bg-green-600 hover:bg-green-700'
                     }`}
@@ -373,10 +524,35 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
                   </p>
                 )}
 
-                {!canMarkAttendance && isCheckedIn && (
+                {isCheckedIn && !canMarkAttendance && (
                   <p className="text-xs text-gray-500 text-center mb-3">
                     Must be on campus to check into classes
                   </p>
+                )}
+
+                {isCheckedIn && canMarkAttendance && availableClasses.length === 0 && (
+                  <p className="text-xs text-gray-500 text-center mb-3">
+                    No classes available for check-in right now
+                  </p>
+                )}
+
+                {/* Next Class Info */}
+                {nextClass && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+                    <div className="flex items-center text-xs text-blue-700 mb-1">
+                      <Clock className="w-3 h-3 mr-1" />
+                      <span className="font-medium">Next Class:</span>
+                    </div>
+                    <p className="text-sm font-semibold text-blue-900">
+                      {nextClass.subject.name}
+                    </p>
+                    <p className="text-xs text-blue-600">
+                      {nextClass.startTimeFormatted} • {nextClass.room.name}
+                    </p>
+                    <p className="text-xs text-blue-500 mt-1">
+                      {nextClass.checkInStatus.message}
+                    </p>
+                  </div>
                 )}
 
                 {/* Today's Class Hours */}
@@ -395,11 +571,10 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
         </CardContent>
       </Card>
 
-      {/* Active Class Sessions - Only show if admin has active sessions */}
+      {/* Active Class Sessions */}
       {isAdminTrainer && activeClassSessions.length > 0 && (
-        <ClassStatusCard
+        <ActiveClassSessionCard
           activeClassSessions={activeClassSessions}
-          todayClassHours={todayClassHours}
           onClassCheckOut={handleClassCheckOut}
           isLoading={isClassLoading}
         />
@@ -407,14 +582,13 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
 
       {/* Class Check-in Modal */}
       {isAdminTrainer && (
-        <ClassCheckInModal
+        <TimetableClassCheckInModal
           isOpen={showClassModal}
           onClose={() => setShowClassModal(false)}
-          onCheckIn={handleClassCheckInSubmit}
+          onCheckIn={handleClassCheckIn}
           isLoading={isClassLoading}
-          hasActiveSession={hasActiveSession}
-          activeSessionName={activeSessionName}
-          employeeId={employee_id} 
+          availableClasses={availableClasses}
+          currentClass={currentClass}
         />
       )}
     </div>

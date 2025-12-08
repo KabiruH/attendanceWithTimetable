@@ -23,39 +23,53 @@ import {
   UserCheck,
   Calendar,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  MapPin
 } from 'lucide-react';
 
 interface ActiveClassSession {
   id: number;
   trainer_id: number;
-  trainer_name: string;
   class_id: number;
-  class_name: string;
-  class_code: string;
-  department: string;
-  check_in_time: string;
-  check_out_time?: string;
-  auto_checkout: boolean;
-  duration_hours: number;
+  timetable_slot_id: string;
+  check_in_time: Date;
+  check_out_time?: Date;
+  status: string;
+  location_verified: boolean;
+  users: {
+    name: string;
+    department: string;
+  };
+  classes: {
+    name: string;
+    code: string;
+  };
+  subject?: {
+    name: string;
+    code: string;
+  } | null;
+  room?: {
+    name: string;
+  } | null;
 }
 
 interface ClassMetrics {
   totalActiveClasses: number;
   totalTrainersInClass: number;
-  totalClassHoursToday: number;
-  averageSessionLength: number;
-  classUtilizationRate: number;
+  totalClassHoursToday: string;
+  scheduledToday: number;
+  completedToday: number;
 }
 
-interface TrainerClassPerformance {
+interface TrainerSummary {
   trainer_id: number;
   trainer_name: string;
+  department: string;
   total_sessions: number;
-  total_hours: number;
-  classes_taught: string[];
-  last_session: string;
-  status: 'active' | 'inactive';
+  completed_sessions: number;
+  total_hours: string;
+  on_time_rate: number;
+  has_active_session: boolean;
 }
 
 const AdminClassOverview: React.FC = () => {
@@ -63,27 +77,109 @@ const AdminClassOverview: React.FC = () => {
   const [classMetrics, setClassMetrics] = useState<ClassMetrics>({
     totalActiveClasses: 0,
     totalTrainersInClass: 0,
-    totalClassHoursToday: 0,
-    averageSessionLength: 0,
-    classUtilizationRate: 0
+    totalClassHoursToday: '0',
+    scheduledToday: 0,
+    completedToday: 0
   });
-  const [trainerPerformance, setTrainerPerformance] = useState<TrainerClassPerformance[]>([]);
+  const [trainerSummary, setTrainerSummary] = useState<TrainerSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [timeRange, setTimeRange] = useState('today');
+  const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
 
   const fetchClassOverviewData = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/admin/class-overview', {
+      // Calculate date range
+      const endDate = new Date();
+      let startDate = new Date();
+      
+      switch (timeRange) {
+        case 'today':
+          startDate = new Date(endDate.toISOString().split('T')[0]);
+          break;
+        case 'week':
+          startDate.setDate(endDate.getDate() - 7);
+          break;
+        case 'month':
+          startDate.setMonth(endDate.getMonth() - 1);
+          break;
+      }
+
+      // Fetch attendance report for metrics
+      const reportResponse = await fetch(
+        `/api/attendance/class-attendance-report?` +
+        `start_date=${startDate.toISOString().split('T')[0]}&` +
+        `end_date=${endDate.toISOString().split('T')[0]}&` +
+        `group_by=trainer`,
+        {
+          method: 'GET',
+          credentials: 'include',
+        }
+      );
+
+      // Fetch today's class status for active sessions
+      const statusResponse = await fetch('/api/attendance/class-status', {
         method: 'GET',
         credentials: 'include',
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setActiveClassSessions(data.activeClassSessions || []);
-        setClassMetrics(data.metrics || {});
-        setTrainerPerformance(data.trainerPerformance || []);
+      if (reportResponse.ok && statusResponse.ok) {
+        const reportData = await reportResponse.json();
+        const statusData = await statusResponse.json();
+
+        // Set metrics
+        setClassMetrics({
+          totalActiveClasses: statusData.activeClassSessions?.length || 0,
+          totalTrainersInClass: new Set(statusData.activeClassSessions?.map((s: any) => s.trainer_id)).size || 0,
+          totalClassHoursToday: reportData.totals.totalHours || '0',
+          scheduledToday: statusData.todaySchedule?.length || 0,
+          completedToday: statusData.todayAttendance?.filter((a: any) => a.check_out_time).length || 0
+        });
+
+        // Process active sessions with enriched data
+        const enrichedSessions = await Promise.all(
+          (statusData.activeClassSessions || []).map(async (session: any) => {
+            let subject = null;
+            let room = null;
+
+            if (session.timetable_slot_id) {
+              try {
+                // Fetch timetable slot details
+                const slotResponse = await fetch(`/api/timetable/${session.timetable_slot_id}`);
+                if (slotResponse.ok) {
+                  const slotData = await slotResponse.json();
+                  subject = slotData.data?.subjects || null;
+                  room = slotData.data?.rooms || null;
+                }
+              } catch (error) {
+                console.error('Error fetching slot details:', error);
+              }
+            }
+
+            return {
+              ...session,
+              subject,
+              room
+            };
+          })
+        );
+
+        setActiveClassSessions(enrichedSessions);
+
+        // Process trainer summary
+        const trainerData = reportData.summary.map((item: any) => ({
+          trainer_id: item.trainer?.id || 0,
+          trainer_name: item.trainer?.name || item.label,
+          department: item.trainer?.department || 'N/A',
+          total_sessions: item.statistics.totalSessions,
+          completed_sessions: item.statistics.completedSessions,
+          total_hours: item.statistics.totalHours,
+          on_time_rate: item.statistics.onTimeRate,
+          has_active_session: item.statistics.inProgressSessions > 0
+        }));
+
+        // Sort by total sessions
+        trainerData.sort((a: any, b: any) => b.total_sessions - a.total_sessions);
+        setTrainerSummary(trainerData);
       }
     } catch (error) {
       console.error('Error fetching class overview:', error);
@@ -94,19 +190,20 @@ const AdminClassOverview: React.FC = () => {
 
   useEffect(() => {
     fetchClassOverviewData();
-    const interval = setInterval(fetchClassOverviewData, 600000);
+    const interval = setInterval(fetchClassOverviewData, 120000); // 2 minutes
     return () => clearInterval(interval);
   }, [timeRange]);
 
-  const formatTime = (dateString: string) => {
-    return new Date(dateString).toLocaleTimeString('en-KE', {
+  const formatTime = (date: Date) => {
+    return new Date(date).toLocaleTimeString('en-KE', {
       timeZone: 'Africa/Nairobi',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      hour12: true
     });
   };
 
-  const calculateDuration = (checkInTime: string) => {
+  const calculateDuration = (checkInTime: Date) => {
     const checkIn = new Date(checkInTime);
     const now = new Date();
     const diffMs = now.getTime() - checkIn.getTime();
@@ -119,21 +216,15 @@ const AdminClassOverview: React.FC = () => {
     return `${hours}h ${minutes}m`;
   };
 
-  const getRemainingTime = (checkInTime: string, durationHours: number) => {
-    const checkIn = new Date(checkInTime);
-    const effectiveDuration = Math.min(durationHours, 2); // 2-hour max
-    const autoCheckoutTime = new Date(checkIn.getTime() + (effectiveDuration * 60 * 60 * 1000));
-    const now = new Date();
-    const remaining = autoCheckoutTime.getTime() - now.getTime();
-    
-    if (remaining <= 0) return 'Auto-checkout reached';
-    
-    const remainingMinutes = Math.floor(remaining / (1000 * 60));
-    const hours = Math.floor(remainingMinutes / 60);
-    const minutes = remainingMinutes % 60;
-    
-    if (hours === 0) return `${minutes}m left`;
-    return `${hours}h ${minutes}m left`;
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Present':
+        return 'bg-green-500 hover:bg-green-600';
+      case 'Late':
+        return 'bg-orange-500 hover:bg-orange-600';
+      default:
+        return 'bg-gray-500 hover:bg-gray-600';
+    }
   };
 
   if (isLoading) {
@@ -153,8 +244,9 @@ const AdminClassOverview: React.FC = () => {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-green-500 to-green-600 rounded-lg text-white">
               <div>
-                <p className="text-sm font-medium opacity-90">Active Classes</p>
+                <p className="text-sm font-medium opacity-90">Active Sessions</p>
                 <p className="text-3xl font-bold">{classMetrics.totalActiveClasses}</p>
+                <p className="text-xs opacity-75">In progress now</p>
               </div>
               <BookOpen className="w-12 h-12 opacity-80" />
             </div>
@@ -165,8 +257,9 @@ const AdminClassOverview: React.FC = () => {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg text-white">
               <div>
-                <p className="text-sm font-medium opacity-90">Trainers in Class</p>
+                <p className="text-sm font-medium opacity-90">Active Trainers</p>
                 <p className="text-3xl font-bold">{classMetrics.totalTrainersInClass}</p>
+                <p className="text-xs opacity-75">Currently teaching</p>
               </div>
               <UserCheck className="w-12 h-12 opacity-80" />
             </div>
@@ -177,8 +270,9 @@ const AdminClassOverview: React.FC = () => {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg text-white">
               <div>
-                <p className="text-sm font-medium opacity-90">Class Hours Today</p>
-                <p className="text-3xl font-bold">{classMetrics.totalClassHoursToday.toFixed(1)}h</p>
+                <p className="text-sm font-medium opacity-90">Hours Today</p>
+                <p className="text-3xl font-bold">{classMetrics.totalClassHoursToday}</p>
+                <p className="text-xs opacity-75">Total class time</p>
               </div>
               <Clock className="w-12 h-12 opacity-80" />
             </div>
@@ -189,10 +283,11 @@ const AdminClassOverview: React.FC = () => {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-orange-500 to-orange-600 rounded-lg text-white">
               <div>
-                <p className="text-sm font-medium opacity-90">Avg Session</p>
-                <p className="text-3xl font-bold">{classMetrics.averageSessionLength.toFixed(1)}h</p>
+                <p className="text-sm font-medium opacity-90">Scheduled Today</p>
+                <p className="text-3xl font-bold">{classMetrics.scheduledToday}</p>
+                <p className="text-xs opacity-75">Classes planned</p>
               </div>
-              <TrendingUp className="w-12 h-12 opacity-80" />
+              <Calendar className="w-12 h-12 opacity-80" />
             </div>
           </CardContent>
         </Card>
@@ -201,10 +296,15 @@ const AdminClassOverview: React.FC = () => {
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-pink-500 to-pink-600 rounded-lg text-white">
               <div>
-                <p className="text-sm font-medium opacity-90">Utilization</p>
-                <p className="text-3xl font-bold">{classMetrics.classUtilizationRate.toFixed(0)}%</p>
+                <p className="text-sm font-medium opacity-90">Completed</p>
+                <p className="text-3xl font-bold">{classMetrics.completedToday}</p>
+                <p className="text-xs opacity-75">
+                  {classMetrics.scheduledToday > 0 
+                    ? `${Math.round((classMetrics.completedToday / classMetrics.scheduledToday) * 100)}% done`
+                    : 'No data'}
+                </p>
               </div>
-              <Calendar className="w-12 h-12 opacity-80" />
+              <TrendingUp className="w-12 h-12 opacity-80" />
             </div>
           </CardContent>
         </Card>
@@ -228,11 +328,11 @@ const AdminClassOverview: React.FC = () => {
             </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           {activeClassSessions.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               <AlertCircle className="w-12 h-12 mx-auto mb-2 text-gray-300" />
-              <p>No active class sessions at the moment</p>
+              <p className="font-medium">No active class sessions at the moment</p>
               <p className="text-sm">Trainers will appear here when they check into classes</p>
             </div>
           ) : (
@@ -241,8 +341,9 @@ const AdminClassOverview: React.FC = () => {
                 <TableHeader>
                   <TableRow className="bg-gray-50">
                     <TableHead className="font-semibold">Trainer</TableHead>
+                    <TableHead className="font-semibold">Subject</TableHead>
                     <TableHead className="font-semibold">Class</TableHead>
-                    <TableHead className="font-semibold">Department</TableHead>
+                    <TableHead className="font-semibold">Room</TableHead>
                     <TableHead className="font-semibold">Started</TableHead>
                     <TableHead className="font-semibold">Duration</TableHead>
                     <TableHead className="font-semibold">Status</TableHead>
@@ -251,34 +352,45 @@ const AdminClassOverview: React.FC = () => {
                 <TableBody>
                   {activeClassSessions.map((session) => (
                     <TableRow key={session.id} className="hover:bg-gray-50 transition-colors duration-200">
-                      <TableCell className="font-medium">{session.trainer_name}</TableCell>
                       <TableCell>
                         <div>
-                          <div className="font-medium">{session.class_name}</div>
-                          <div className="text-sm text-gray-500">{session.class_code}</div>
+                          <div className="font-medium">{session.users.name}</div>
+                          <div className="text-xs text-gray-500">{session.users.department}</div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{session.department}</Badge>
-                      </TableCell>
-                      <TableCell>{formatTime(session.check_in_time)}</TableCell>
-                      <TableCell>
-                        <div className="text-sm">
-                          <div className="font-medium text-blue-600">
-                            {calculateDuration(session.check_in_time)}
-                          </div>
-                          {session.auto_checkout && (
-                            <div className="text-xs text-gray-500">
-                              {getRemainingTime(session.check_in_time, session.duration_hours)}
-                            </div>
+                        <div>
+                          <div className="font-medium">{session.subject?.name || 'N/A'}</div>
+                          {session.subject?.code && (
+                            <div className="text-xs text-gray-500">{session.subject.code}</div>
                           )}
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge className="bg-green-500 hover:bg-green-600">
+                        <div>
+                          <div className="font-medium">{session.classes.name}</div>
+                          <div className="text-xs text-gray-500">{session.classes.code}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          {session.location_verified && (
+                            <MapPin className="w-3 h-3 text-green-600" />
+                          )}
+                          <span className="text-sm">{session.room?.name || 'N/A'}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm">{formatTime(session.check_in_time)}</TableCell>
+                      <TableCell>
+                        <div className="font-medium text-blue-600">
+                          {calculateDuration(session.check_in_time)}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={getStatusColor(session.status)}>
                           <div className="flex items-center space-x-1">
                             <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                            <span>Active</span>
+                            <span>{session.status}</span>
                           </div>
                         </Badge>
                       </TableCell>
@@ -297,10 +409,10 @@ const AdminClassOverview: React.FC = () => {
           <CardTitle className="text-white flex items-center justify-between">
             <span className="flex items-center">
               <Users className="w-5 h-5 mr-2" />
-              Trainer Performance (This Week)
+              Trainer Performance
             </span>
             <div className="flex gap-1">
-              {['today', 'week', 'month'].map((range) => (
+              {(['today', 'week', 'month'] as const).map((range) => (
                 <Button
                   key={range}
                   variant={timeRange === range ? "secondary" : "ghost"}
@@ -314,55 +426,67 @@ const AdminClassOverview: React.FC = () => {
             </div>
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {trainerPerformance.length === 0 ? (
+        <CardContent className="pt-6">
+          {trainerSummary.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
-              <p>No trainer performance data available</p>
+              <p>No trainer performance data available for this period</p>
             </div>
           ) : (
             <div className="overflow-hidden rounded-lg border border-gray-200 max-h-96 overflow-y-auto">
               <Table>
-                <TableHeader>
-                  <TableRow className="bg-gray-50">
+                <TableHeader className="sticky top-0 bg-gray-50 z-10">
+                  <TableRow>
                     <TableHead className="font-semibold">Trainer</TableHead>
-                    <TableHead className="font-semibold">Sessions</TableHead>
-                    <TableHead className="font-semibold">Total Hours</TableHead>
-                    <TableHead className="font-semibold">Classes</TableHead>
-                    <TableHead className="font-semibold">Last Session</TableHead>
-                    <TableHead className="font-semibold">Status</TableHead>
+                    <TableHead className="font-semibold text-center">Sessions</TableHead>
+                    <TableHead className="font-semibold text-center">Completed</TableHead>
+                    <TableHead className="font-semibold text-center">Total Hours</TableHead>
+                    <TableHead className="font-semibold text-center">On-Time Rate</TableHead>
+                    <TableHead className="font-semibold text-center">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {trainerPerformance.map((trainer) => (
+                  {trainerSummary.map((trainer) => (
                     <TableRow key={trainer.trainer_id} className="hover:bg-gray-50 transition-colors duration-200">
-                      <TableCell className="font-medium">{trainer.trainer_name}</TableCell>
-                      <TableCell className="text-center">{trainer.total_sessions}</TableCell>
-                      <TableCell className="font-mono">{trainer.total_hours.toFixed(1)}h</TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {trainer.classes_taught.slice(0, 2).map((className, index) => (
-                            <Badge key={index} variant="outline" className="text-xs">
-                              {className}
-                            </Badge>
-                          ))}
-                          {trainer.classes_taught.length > 2 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{trainer.classes_taught.length - 2}
-                            </Badge>
-                          )}
+                        <div>
+                          <div className="font-medium">{trainer.trainer_name}</div>
+                          <div className="text-xs text-gray-500">{trainer.department}</div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm text-gray-600">
-                        {trainer.last_session ? new Date(trainer.last_session).toLocaleDateString() : 'N/A'}
+                      <TableCell className="text-center font-semibold">{trainer.total_sessions}</TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex flex-col items-center">
+                          <span className="font-semibold text-green-600">{trainer.completed_sessions}</span>
+                          <span className="text-xs text-gray-500">
+                            {trainer.total_sessions > 0 
+                              ? `(${Math.round((trainer.completed_sessions / trainer.total_sessions) * 100)}%)`
+                              : '(0%)'}
+                          </span>
+                        </div>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="text-center font-mono font-semibold text-purple-600">
+                        {trainer.total_hours}
+                      </TableCell>
+                      <TableCell className="text-center">
                         <Badge className={
-                          trainer.status === 'active' 
-                            ? 'bg-green-500 hover:bg-green-600' 
-                            : 'bg-gray-500 hover:bg-gray-600'
+                          trainer.on_time_rate >= 90 ? 'bg-green-500' :
+                          trainer.on_time_rate >= 75 ? 'bg-yellow-500' :
+                          trainer.on_time_rate >= 60 ? 'bg-orange-500' : 'bg-red-500'
                         }>
-                          {trainer.status}
+                          {trainer.on_time_rate}%
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {trainer.has_active_session ? (
+                          <Badge className="bg-green-500 hover:bg-green-600">
+                            <div className="flex items-center space-x-1">
+                              <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                              <span>Active</span>
+                            </div>
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">Idle</Badge>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

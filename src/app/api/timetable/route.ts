@@ -23,10 +23,17 @@ async function verifyAuth() {
     const role = payload.role as string;
     const name = payload.name as string;
 
-    // Verify user is still active
+    // Verify user is still active and fetch has_timetable_admin
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
+      select: { 
+        id: true, 
+        name: true, 
+        role: true, 
+        department: true, 
+        is_active: true,
+        has_timetable_admin: true  // ✅ Include this field
+      }
     });
 
     if (!user || !user.is_active) {
@@ -97,7 +104,7 @@ export async function GET(request: NextRequest) {
       whereConditions.subject_id = parseInt(subjectId);
     }
 
-   // Room filter 
+    // Room filter 
     const roomId = searchParams.get('room_id');
     if (roomId) {
       whereConditions.room_id = parseInt(roomId);
@@ -111,8 +118,11 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    // If not admin, only show their own slots
-    if (user.role !== 'admin') {
+    // ✅ FIXED: Check both admin role AND has_timetable_admin flag
+    const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
+    
+    // If user doesn't have timetable access, only show their own slots
+    if (!hasTimetableAccess) {
       whereConditions.employee_id = user.id;
     }
 
@@ -201,7 +211,7 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/timetable
- * Create a new timetable slot (Admin only)
+ * Create a new timetable slot (Admin or Timetable Admin only)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -216,10 +226,12 @@ export async function POST(request: NextRequest) {
 
     const { user } = authResult;
 
-    // Check if user is admin
-    if (user.role !== 'admin') {
+    // ✅ FIXED: Check both admin role AND has_timetable_admin flag
+    const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
+    
+    if (!hasTimetableAccess) {
       return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { error: 'Unauthorized. Admin or Timetable Admin access required.' },
         { status: 403 }
       );
     }
