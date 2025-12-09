@@ -13,11 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { 
-  GraduationCap, 
-  Users, 
-  Clock, 
-  TrendingUp, 
+import {
+  GraduationCap,
+  Users,
+  Clock,
+  TrendingUp,
   AlertCircle,
   BookOpen,
   UserCheck,
@@ -91,7 +91,7 @@ const AdminClassOverview: React.FC = () => {
       // Calculate date range
       const endDate = new Date();
       let startDate = new Date();
-      
+
       switch (timeRange) {
         case 'today':
           startDate = new Date(endDate.toISOString().split('T')[0]);
@@ -117,7 +117,7 @@ const AdminClassOverview: React.FC = () => {
       );
 
       // Fetch today's class status for active sessions
-      const statusResponse = await fetch('/api/attendance/class-status', {
+      const statusResponse = await fetch('/api/attendance/admin-class-status', {
         method: 'GET',
         credentials: 'include',
       });
@@ -125,6 +125,10 @@ const AdminClassOverview: React.FC = () => {
       if (reportResponse.ok && statusResponse.ok) {
         const reportData = await reportResponse.json();
         const statusData = await statusResponse.json();
+
+  console.log('Status Data:', statusData);
+  console.log('Today Attendance:', statusData.todayAttendance);
+  console.log('Active Class Sessions:', statusData.activeClassSessions);
 
         // Set metrics
         setClassMetrics({
@@ -208,10 +212,10 @@ const AdminClassOverview: React.FC = () => {
     const now = new Date();
     const diffMs = now.getTime() - checkIn.getTime();
     const diffMinutes = Math.floor(diffMs / (1000 * 60));
-    
+
     const hours = Math.floor(diffMinutes / 60);
     const minutes = diffMinutes % 60;
-    
+
     if (hours === 0) return `${minutes}m`;
     return `${hours}h ${minutes}m`;
   };
@@ -252,7 +256,7 @@ const AdminClassOverview: React.FC = () => {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card className="transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-xl">
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg text-white">
@@ -265,7 +269,7 @@ const AdminClassOverview: React.FC = () => {
             </div>
           </CardContent>
         </Card>
-        
+
         <Card className="transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-xl">
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-500 to-purple-600 rounded-lg text-white">
@@ -299,7 +303,7 @@ const AdminClassOverview: React.FC = () => {
                 <p className="text-sm font-medium opacity-90">Completed</p>
                 <p className="text-3xl font-bold">{classMetrics.completedToday}</p>
                 <p className="text-xs opacity-75">
-                  {classMetrics.scheduledToday > 0 
+                  {classMetrics.scheduledToday > 0
                     ? `${Math.round((classMetrics.completedToday / classMetrics.scheduledToday) * 100)}% done`
                     : 'No data'}
                 </p>
@@ -458,7 +462,7 @@ const AdminClassOverview: React.FC = () => {
                         <div className="flex flex-col items-center">
                           <span className="font-semibold text-green-600">{trainer.completed_sessions}</span>
                           <span className="text-xs text-gray-500">
-                            {trainer.total_sessions > 0 
+                            {trainer.total_sessions > 0
                               ? `(${Math.round((trainer.completed_sessions / trainer.total_sessions) * 100)}%)`
                               : '(0%)'}
                           </span>
@@ -470,8 +474,8 @@ const AdminClassOverview: React.FC = () => {
                       <TableCell className="text-center">
                         <Badge className={
                           trainer.on_time_rate >= 90 ? 'bg-green-500' :
-                          trainer.on_time_rate >= 75 ? 'bg-yellow-500' :
-                          trainer.on_time_rate >= 60 ? 'bg-orange-500' : 'bg-red-500'
+                            trainer.on_time_rate >= 75 ? 'bg-yellow-500' :
+                              trainer.on_time_rate >= 60 ? 'bg-orange-500' : 'bg-red-500'
                         }>
                           {trainer.on_time_rate}%
                         </Badge>
