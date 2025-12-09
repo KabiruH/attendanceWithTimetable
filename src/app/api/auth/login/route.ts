@@ -173,7 +173,8 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
           id: true,
           is_active: true,
           role: true,
-          id_number: true
+          id_number: true,
+          has_timetable_admin: true
         }
       }
     },
@@ -260,13 +261,14 @@ async function createAuthResponse(employee: any) {
   
   // Create JWT token with BOTH Employee ID and User ID
   const token = await new SignJWT({
-    id: employee.users.id,            // ✅ Add this line
+    id: employee.users.id,           
     employee_id: employee.users.id, 
     email: employee.email,
     role: employee.users.role,
     name: employee.name,
     userId: employee.users.id,
-    id_number: employee.users.id_number
+    id_number: employee.users.id_number,
+    has_timetable_admin: employee.users.has_timetable_admin || false
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime('24h')
@@ -279,7 +281,8 @@ async function createAuthResponse(employee: any) {
       email: employee.email,
       name: employee.name,
       role: employee.users.role,
-      userId: employee.users.id
+      userId: employee.users.id,
+      has_timetable_admin: employee.users.has_timetable_admin || false  
     },
     message: "Logged in successfully",
   }, {

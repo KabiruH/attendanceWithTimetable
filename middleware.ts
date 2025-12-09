@@ -11,7 +11,6 @@ const protectedPaths = [
   '/attendance', 
   '/reports', 
   '/profile', 
-  '/classes'
 ];
 
 const adminOnlyPaths = [
@@ -20,14 +19,13 @@ const adminOnlyPaths = [
   '/login-logs',
 ];
 
-// Paths accessible by admin OR timetable admins
-const timetableAdminPaths = [
-  '/timetable',
+// Paths accessible by admin OR timetable admins (for SETUP/MANAGEMENT)
+const timetableSetupPaths = [
   '/rooms',
   '/term',
   '/subjects',
   '/lesson-periods',
-  '/classes',
+  '/classes', // This is for class management, not viewing
 ];
 
 // Paths only accessible by full admin (not timetable admins)
@@ -47,13 +45,16 @@ export async function middleware(request: NextRequest) {
   // Check path types
   const isPublicPath = publicPaths.some(path => pathname === path);
   const isAdminPath = adminOnlyPaths.some(path => pathname.startsWith(path));
-  const isTimetableAdminPath = timetableAdminPaths.some(path => pathname.startsWith(path));
+  const isTimetableSetupPath = timetableSetupPaths.some(path => pathname.startsWith(path));
   const isFullAdminOnlyPath = fullAdminOnlyPaths.some(path => pathname.startsWith(path));
   const isBlockedUserRestrictedPath = blockedUserRestrictedPaths.some(path => pathname.startsWith(path));
+  const isTimetableViewPath = pathname.startsWith('/timetable') && !isFullAdminOnlyPath;
+  
   const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path)) || 
                           isAdminPath || 
-                          isTimetableAdminPath ||
-                          isFullAdminOnlyPath;
+                          isTimetableSetupPath ||
+                          isFullAdminOnlyPath ||
+                          isTimetableViewPath;
 
   try {
     // Get token from cookies
@@ -87,8 +88,16 @@ export async function middleware(request: NextRequest) {
         }
 
         const userRole = payload.role as string;
-        const hasTimetableAdmin = payload.has_timetable_admin as boolean;
+        const hasTimetableAdmin = payload.has_timetable_admin === true; // ✅ Explicit boolean check
         const isBlocked = payload.is_blocked as boolean;
+
+        console.log('Middleware check:', {
+          pathname,
+          userRole,
+          hasTimetableAdmin,
+          isTimetableSetupPath,
+          isTimetableViewPath
+        });
 
         // Check if user is blocked and trying to access restricted paths
         if (isBlocked && isBlockedUserRestrictedPath) {
@@ -99,22 +108,30 @@ export async function middleware(request: NextRequest) {
 
         // Full admin-only path check (like timetable settings)
         if (isFullAdminOnlyPath && userRole !== 'admin') {
+          console.log('Blocked: Full admin only path');
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 
-        // Timetable admin path check - accessible by admin OR timetable admins
-        if (isTimetableAdminPath) {
-          const canAccessTimetable = 
-            userRole === 'admin' || 
-            hasTimetableAdmin;
-
-          if (!canAccessTimetable) {
+        // Timetable SETUP paths - only admin OR timetable admins
+        if (isTimetableSetupPath) {
+          const canAccessSetup = userRole === 'admin' || hasTimetableAdmin === true;
+          
+          if (!canAccessSetup) {
+            console.log('Blocked: No timetable setup access');
             return NextResponse.redirect(new URL('/dashboard', request.url));
           }
         }
 
+        // Timetable VIEW path - all authenticated employees can view their own timetable
+        if (isTimetableViewPath && !isTimetableSetupPath && !isFullAdminOnlyPath) {
+          // Everyone who is authenticated can view their timetable
+          // This includes admin, timetable admins, and regular employees
+          // No additional check needed - just being authenticated is enough
+        }
+
         // Regular admin-only path check
         if (isAdminPath && userRole !== 'admin') {
+          console.log('Blocked: Admin only path');
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 
