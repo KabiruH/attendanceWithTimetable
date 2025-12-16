@@ -68,8 +68,8 @@ export async function middleware(request: NextRequest) {
     }
 
     // Has token and trying to access public routes - redirect to dashboard
-    if (token && isPublicPath && pathname !== '/') {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
+if (token && isPublicPath) {      
+  return NextResponse.redirect(new URL('/dashboard', request.url));
     }
 
     // Token exists and accessing protected routes
