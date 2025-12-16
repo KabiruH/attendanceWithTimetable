@@ -11,6 +11,7 @@ const protectedPaths = [
   '/attendance', 
   '/reports', 
   '/profile', 
+  '/classes',
 ];
 
 const adminOnlyPaths = [
@@ -25,7 +26,6 @@ const timetableSetupPaths = [
   '/term',
   '/subjects',
   '/lesson-periods',
-  '/classes', // This is for class management, not viewing
 ];
 
 // Paths only accessible by full admin (not timetable admins)
