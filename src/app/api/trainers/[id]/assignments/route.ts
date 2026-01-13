@@ -30,7 +30,8 @@ async function verifyAuth() {
         role: true, 
         department: true, 
         is_active: true,
-        is_blocked: true // ADD THIS
+        is_blocked: true,
+        has_timetable_admin: true
       }
     });
 
@@ -57,13 +58,8 @@ export async function GET(
 ) {
   try {
     const authResult = await verifyAuth();
-    if (authResult.error) {
-      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
-    }
-
-    // ADD THIS CHECK
-    if (!authResult.user) {
-      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });
     }
 
     const { user } = authResult;
@@ -74,24 +70,25 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
     }
 
-    if (user.role !== 'admin' && user.id !== trainerUserId) {
+    // ✅ UPDATED PERMISSION LOGIC
+    const isSelf = user.id === trainerUserId;
+    const isPrivileged = user.role === 'admin' || user.has_timetable_admin === true;
+
+    if (!isPrivileged && !isSelf) {
       return NextResponse.json(
-        { error: 'Unauthorized. You can only view your own assignments.' },
+        { error: 'Unauthorized. You do not have permission to view these assignments.' },
         { status: 403 }
       );
     }
 
-    // Get term_id from query params
     const { searchParams } = new URL(request.url);
     const termId = searchParams.get('term_id');
 
-    // Build where clause
     const whereClause: any = { 
       trainer_id: trainerUserId, 
       is_active: true 
     };
 
-    // Filter by term if provided
     if (termId) {
       whereClause.term_id = parseInt(termId);
     }
@@ -107,50 +104,45 @@ export async function GET(
     return NextResponse.json({ error: 'Failed to fetch assignments' }, { status: 500 });
   }
 }
-
 // POST /api/trainers/[id]/assignments
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
+try {
     const authResult = await verifyAuth();
-    if (authResult.error) {
-      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
-    }
-
-    if (!authResult.user) {
-      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });
     }
 
     const { user } = authResult;
     const resolvedParams = await params;
     const trainerUserId = parseInt(resolvedParams.id);
 
-    if (isNaN(trainerUserId)) {
-      return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
-    }
+    // ✅ UPDATED PERMISSION LOGIC
+    const isSelf = user.id === trainerUserId;
+    const isPrivileged = user.role === 'admin' || user.has_timetable_admin === true;
 
-    if (user.role !== 'admin' && user.id !== trainerUserId) {
+    if (!isPrivileged && !isSelf) {
       return NextResponse.json(
-        { error: 'Unauthorized. You can only update your own assignments.' },
+        { error: 'Unauthorized. You do not have permission to modify these assignments.' },
         { status: 403 }
       );
     }
 
     // ✅ CHECK GLOBAL BLOCK (ADD THIS)
-    const isGloballyBlocked = await isSubjectSelectionBlocked();
-    if (isGloballyBlocked && user.role !== 'admin') {
+const isGloballyBlocked = await isSubjectSelectionBlocked();
+    if (isGloballyBlocked && !isPrivileged) {
       return NextResponse.json(
-        { error: 'Class selection is currently disabled by administrator. Please contact admin for assistance.' },
+        { error: 'Class selection is currently disabled by administrator.' },
         { status: 403 }
       );
     }
 
-    // ✅ CHECK INDIVIDUAL BLOCK (ADD THIS)
-    if (user.is_blocked && user.role !== 'admin') {
+    // ✅ CHECK INDIVIDUAL BLOCK (Privileged users bypass this)
+    if (user.is_blocked && !isPrivileged) {
       return NextResponse.json(
-        { error: 'Your account is blocked from selecting classes. Please contact admin.' },
+        { error: 'Your account is blocked from selecting classes.' },
         { status: 403 }
       );
     }

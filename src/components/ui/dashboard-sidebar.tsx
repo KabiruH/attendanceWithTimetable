@@ -210,6 +210,11 @@ export function DashboardSidebar() {
       icon: <CalendarDays size={18} />,
       href: '/timetable'
     },
+     {
+      label: 'Class/Subject Assignment',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable/adminAssignment'
+    },
   ];
 
   // Admin-only menu items

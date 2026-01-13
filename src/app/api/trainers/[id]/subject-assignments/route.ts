@@ -26,7 +26,8 @@ async function verifyAuth() {
         name: true, 
         role: true, 
         is_active: true,
-        is_blocked: true // ADD THIS
+        is_blocked: true,
+        has_timetable_admin: true
       }
     });
 
@@ -40,7 +41,6 @@ async function verifyAuth() {
   }
 }
 
-// ADD THIS HELPER FUNCTION
 async function isSubjectSelectionBlocked(): Promise<boolean> {
   const settings = await db.timetablesettings.findFirst();
   return settings?.block_all_subject_selection || false;
@@ -53,8 +53,8 @@ export async function POST(
   try {
     const authResult = await verifyAuth();
     if (authResult.error) {
-      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
-    }
+return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });    
+}
 
     if (!authResult.user) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
@@ -69,26 +69,29 @@ export async function POST(
     }
 
     // Only allow trainers to update their own assignments (or admin)
-    if (user.role !== 'admin' && user.id !== trainerUserId) {
+   const isSelf = user.id === trainerUserId;
+    const isPrivileged = user.role === 'admin' || user.has_timetable_admin === true;
+
+    if (!isPrivileged && !isSelf) {
       return NextResponse.json(
-        { error: 'Unauthorized. You can only update your own subject assignments.' },
+        { error: 'Unauthorized. You do not have permission to update these subject assignments.' },
         { status: 403 }
       );
     }
 
     // ✅ CHECK GLOBAL BLOCK (ADD THIS)
-    const isGloballyBlocked = await isSubjectSelectionBlocked();
-    if (isGloballyBlocked && user.role !== 'admin') {
+  const isGloballyBlocked = await isSubjectSelectionBlocked();
+    if (isGloballyBlocked && !isPrivileged) {
       return NextResponse.json(
-        { error: 'Subject selection is currently disabled by administrator. Please contact admin for assistance.' },
+        { error: 'Subject selection is currently disabled by administrator.' },
         { status: 403 }
       );
     }
 
     // ✅ CHECK INDIVIDUAL BLOCK (ADD THIS)
-    if (user.is_blocked && user.role !== 'admin') {
+    if (user.is_blocked && !isPrivileged) {
       return NextResponse.json(
-        { error: 'Your account is blocked from selecting subjects. Please contact admin.' },
+        { error: 'Your account is blocked from selecting subjects.' },
         { status: 403 }
       );
     }

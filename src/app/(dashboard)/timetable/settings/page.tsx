@@ -9,7 +9,6 @@ import { useToast } from "@/components/ui/use-toast";
 import TimetableAdminsSection from '@/components/timetable/settings/TimetableAdminsSection';
 import UserAccessControlSection from '@/components/timetable/settings/UserAccessControlSection';
 import TimetableGenerationDeadlineSection from '@/components/timetable/settings/SubjectDeadlineSection';
-import TimetableAdminAssignmentSection from '@/components/timetable/settings/AdminAssignmentSection';
 
 export default function TimetableSettingsPage() {
   const { toast } = useToast();
@@ -81,10 +80,6 @@ export default function TimetableSettingsPage() {
             <Calendar className="h-4 w-4" />
             Deadlines
           </TabsTrigger>
-          <TabsTrigger value="assignment" className="flex items-center gap-2">
-            <UserCog className="h-4 w-4" />
-            Admin Class Assignment
-          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="admins" className="space-y-4">
@@ -137,9 +132,7 @@ export default function TimetableSettingsPage() {
                 Assign classes and subjects on behalf of trainers
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <TimetableAdminAssignmentSection />
-            </CardContent>
+           
           </Card>
         </TabsContent>
       </Tabs>
