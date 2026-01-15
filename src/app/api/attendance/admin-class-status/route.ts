@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import jwt from 'jsonwebtoken';
 
-// Helper function to verify JWT and get user - MATCHING YOUR ORIGINAL
+// Helper function to verify JWT and get user 
 async function getAuthenticatedUser(req: NextRequest) {
   const token = req.cookies.get('token')?.value;
   

@@ -1,41 +1,7 @@
 // app/api/class-subjects/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { jwtVerify } from 'jose';
+import { verifyAuth } from '@/lib/auth-helper';
 import { db } from '@/lib/db/db';
-
-async function verifyAuth() {
-  try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('token');
-   
-    if (!token) {
-      return { error: 'No token found', status: 401 };
-    }
-
-    const { payload } = await jwtVerify(
-      token.value,
-      new TextEncoder().encode(process.env.JWT_SECRET)
-    );
-
-    const userId = Number(payload.id);
-    const role = payload.role as string;
-    const name = payload.name as string;
-
-    const user = await db.users.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, role: true, department: true, is_active: true }
-    });
-
-    if (!user || !user.is_active) {
-      return { error: 'User not found or inactive', status: 401 };
-    }
-
-    return { user: { ...user, id: userId, role, name } };
-  } catch (error) {
-    return { error: 'Invalid token', status: 401 };
-  }
-}
 
 // GET /api/class-subjects/[id]?term_id=X&trainer_id=Y
 export async function GET(
@@ -43,13 +9,13 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authResult = await verifyAuth();
-    if (authResult.error) {
-      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
-    }
-
-    if (!authResult.user) {
-      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
+    const authResult = await verifyAuth(request);
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json(
+        { success: false, error: authResult.error || 'Authentication failed' },
+        { status: authResult.status || 401 }
+      );
     }
 
     const { user } = authResult;
@@ -57,7 +23,10 @@ export async function GET(
     const classId = parseInt(params.id);
 
     if (isNaN(classId)) {
-      return NextResponse.json({ error: 'Invalid class ID' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'Invalid class ID' },
+        { status: 400 }
+      );
     }
 
     const { searchParams } = new URL(request.url);
@@ -78,7 +47,7 @@ export async function GET(
     // Determine trainer ID - use provided or fall back to current user
     const trainerId = trainerIdParam ? parseInt(trainerIdParam) : user.id;
 
-    console.log('🔍 Fetching subjects:', { classId, termId, trainerId });
+    console.log('🔍 Fetching subjects:', { classId, termId, trainerId, userId: user.id });
 
     // Fetch class subjects
     const classSubjects = await db.classsubjects.findMany({
@@ -107,7 +76,7 @@ export async function GET(
       ]
     });
 
-    console.log('🔍 Found classSubjects:', classSubjects.length);
+    console.log('✅ Found classSubjects:', classSubjects.length);
 
     if (classSubjects.length === 0) {
       return NextResponse.json({
@@ -134,7 +103,7 @@ export async function GET(
       });
     }
 
-    console.log('🔍 Found trainerAssignments:', trainerAssignments);
+    console.log('✅ Found trainerAssignments:', trainerAssignments.length);
 
     // Create lookup maps
     const assignedSubjectIds = new Set(trainerAssignments.map(a => a.subject_id));
@@ -147,9 +116,7 @@ export async function GET(
       const isAssignedToAnyClass = assignedSubjectIds.has(cs.subject_id);
       const assignedToClassSubjectId = assignmentBySubject.get(cs.subject_id);
       
-      // Check if assigned to THIS class's class_subject_id
       const isAssignedToThisClass = isAssignedToAnyClass && assignedToClassSubjectId === cs.id;
-      // Check if assigned to a DIFFERENT class
       const isAssignedElsewhere = isAssignedToAnyClass && assignedToClassSubjectId !== cs.id;
 
       return {
@@ -164,12 +131,6 @@ export async function GET(
       };
     });
 
-    console.log('🔍 Formatted subjects:', formattedSubjects.map(s => ({ 
-      code: s.code, 
-      is_assigned: s.is_assigned,
-      is_assigned_elsewhere: s.is_assigned_elsewhere 
-    })));
-
     return NextResponse.json({
       success: true,
       data: formattedSubjects,
@@ -177,9 +138,10 @@ export async function GET(
     });
 
   } catch (error) {
-    console.error('Error fetching class subjects:', error);
+    console.error('❌ Error fetching class subjects:', error);
     return NextResponse.json(
       { 
+        success: false,
         error: 'Failed to fetch class subjects',
         details: error instanceof Error ? error.message : String(error)
       },
@@ -194,20 +156,20 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const authResult = await verifyAuth();
-    if (authResult.error) {
-      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
-    }
-
-    if (!authResult.user) {
-      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
+    const authResult = await verifyAuth(request);
+    if (authResult.error || !authResult.user) {
+      return NextResponse.json(
+        { success: false, error: authResult.error || 'Authentication failed' },
+        { status: authResult.status || 401 }
+      );
     }
 
     const { user } = authResult;
 
     if (user.role !== 'admin') {
       return NextResponse.json(
-        { error: 'Unauthorized. Admin access required.' },
+        { success: false, error: 'Unauthorized. Admin access required.' },
         { status: 403 }
       );
     }
@@ -216,7 +178,10 @@ export async function DELETE(
     const classSubjectId = parseInt(params.id);
 
     if (isNaN(classSubjectId)) {
-      return NextResponse.json({ error: 'Invalid class subject ID' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'Invalid class subject ID' },
+        { status: 400 }
+      );
     }
 
     const classSubject = await db.classsubjects.findUnique({
@@ -224,7 +189,10 @@ export async function DELETE(
     });
 
     if (!classSubject) {
-      return NextResponse.json({ error: 'Class subject assignment not found' }, { status: 404 });
+      return NextResponse.json(
+        { success: false, error: 'Class subject assignment not found' },
+        { status: 404 }
+      );
     }
 
     if (classSubject.is_active && classSubject.term_id) {
@@ -235,9 +203,7 @@ export async function DELETE(
 
       await db.classsubjects.update({
         where: { id: classSubjectId },
-        data: { 
-          is_active: false
-        }
+        data: { is_active: false }
       });
     }
 
@@ -245,10 +211,16 @@ export async function DELETE(
       where: { id: classSubjectId },
     });
 
-    return NextResponse.json({ message: 'Subject removed successfully from class' });
+    return NextResponse.json({
+      success: true,
+      message: 'Subject removed successfully from class'
+    });
 
   } catch (error) {
-    console.error('Error removing subject:', error);
-    return NextResponse.json({ error: 'Failed to remove subject' }, { status: 500 });
+    console.error('❌ Error removing subject:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to remove subject' },
+      { status: 500 }
+    );
   }
 }

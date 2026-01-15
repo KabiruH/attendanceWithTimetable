@@ -205,16 +205,17 @@ export function DashboardSidebar() {
       icon: <GraduationCap size={18} />,
       href: '/classes'
     },
+    {
+      label: 'Class/Subject Assignment',
+      icon: <CalendarDays size={18} />,
+      href: '/timetable/adminAssignment'
+    },
      {
       label: 'Timetable',
       icon: <CalendarDays size={18} />,
       href: '/timetable'
     },
-     {
-      label: 'Class/Subject Assignment',
-      icon: <CalendarDays size={18} />,
-      href: '/timetable/adminAssignment'
-    },
+     
   ];
 
   // Admin-only menu items

@@ -1,9 +1,7 @@
 // app/api/terms/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-import { verifyJwtToken } from '@/lib/auth/jwt';
-
-const prisma = new PrismaClient();
+import { verifyAuth } from '@/lib/auth-helper';
+import { db } from '@/lib/db/db';
 
 /**
  * POST /api/terms
@@ -11,35 +9,19 @@ const prisma = new PrismaClient();
  */
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
-    const cookieHeader = request.headers.get('cookie');
-    const token = cookieHeader?.split(';')
-      .find(cookie => cookie.trim().startsWith('token='))
-      ?.split('=')[1];
-
-    if (!token) {
+    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
+    const authResult = await verifyAuth(request);
+    if (authResult.error || !authResult.user) {
       return NextResponse.json(
-        { error: "Unauthorized: No token provided" },
-        { status: 401 }
+        { error: authResult.error || "Unauthorized" },
+        { status: authResult.status || 401 }
       );
     }
 
-    // Verify token
-    const decodedToken = await verifyJwtToken(token);
-    if (!decodedToken) {
-      return NextResponse.json(
-        { error: "Unauthorized: Invalid token" },
-        { status: 401 }
-      );
-    }
+    const { user } = authResult;
 
     // Check if user is admin or timetable admin
-    const user = await prisma.users.findUnique({
-      where: { id: decodedToken.id as number },
-      select: { role: true, has_timetable_admin: true }
-    });
-
-    if (!user || (user.role !== 'admin' && !user.has_timetable_admin)) {
+    if (user.role !== 'admin' && !user.has_timetable_admin) {
       return NextResponse.json(
         { error: "Unauthorized: Only admins and timetable admins can create terms" },
         { status: 403 }
@@ -69,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check for overlapping terms
-    const overlappingTerm = await prisma.terms.findFirst({
+    const overlappingTerm = await db.terms.findFirst({
       where: {
         OR: [
           {
@@ -95,7 +77,7 @@ export async function POST(request: NextRequest) {
 
     // Create the term
     const now = new Date();
-    const term = await prisma.terms.create({
+    const term = await db.terms.create({
       data: {
         name,
         start_date: startDate,
@@ -133,25 +115,12 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
-    // Verify authentication
-    const cookieHeader = request.headers.get('cookie');
-    const token = cookieHeader?.split(';')
-      .find(cookie => cookie.trim().startsWith('token='))
-      ?.split('=')[1];
-
-    if (!token) {
+    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
+    const authResult = await verifyAuth(request);
+    if (authResult.error || !authResult.user) {
       return NextResponse.json(
-        { error: "Unauthorized: No token provided" },
-        { status: 401 }
-      );
-    }
-
-    // Verify token
-    const decodedToken = await verifyJwtToken(token);
-    if (!decodedToken) {
-      return NextResponse.json(
-        { error: "Unauthorized: Invalid token" },
-        { status: 401 }
+        { error: authResult.error || "Unauthorized" },
+        { status: authResult.status || 401 }
       );
     }
 
@@ -171,7 +140,7 @@ export async function GET(request: NextRequest) {
       whereClause.is_active = true;
     }
 
-    const terms = await prisma.terms.findMany({
+    const terms = await db.terms.findMany({
       where: whereClause,
       orderBy: [
         { is_active: 'desc' },

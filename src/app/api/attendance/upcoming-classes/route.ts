@@ -6,7 +6,15 @@ import jwt from 'jsonwebtoken';
 
 // Helper function to verify JWT and get user
 async function getAuthenticatedUser(req: NextRequest) {
-  const token = req.cookies.get('token')?.value;
+  // Try to get token from cookie (web) or Authorization header (mobile)
+  let token = req.cookies.get('token')?.value;
+  
+  if (!token) {
+    const authHeader = req.headers.get('authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+  }
   
   if (!token) {
     throw new Error('No authentication token found');
@@ -31,7 +39,7 @@ async function getAuthenticatedUser(req: NextRequest) {
 
 // Helper to check if can check in
 function getCheckInStatus(lessonStartTime: Date, currentTime: Date, settings: any) {
-  const checkInWindow = settings?.attendance_check_in_window || 15;
+  const checkInWindow = settings?.attendance_check_in_window || 13;
   const lateThreshold = settings?.attendance_late_threshold || 10;
   
   const earliestCheckIn = new Date(lessonStartTime.getTime() - (checkInWindow * 60 * 1000));

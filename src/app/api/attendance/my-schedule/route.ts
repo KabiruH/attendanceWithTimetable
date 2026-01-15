@@ -6,22 +6,38 @@ import jwt from 'jsonwebtoken';
 
 // Helper function to verify JWT and get user
 async function getAuthenticatedUser(req: NextRequest) {
-  const token = req.cookies.get('token')?.value;
+  // Try to get token from cookie (web) or Authorization header (mobile)
+  let token = req.cookies.get('token')?.value;
+  
+  if (!token) {
+    const authHeader = req.headers.get('authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+  }
   
   if (!token) {
     throw new Error('No authentication token found');
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+    const userId = decoded.userId || decoded.id || decoded.employeeId;
+   if (!userId) {
+      console.error('JWT payload:', decoded);
+      throw new Error('User ID not found in token');
+    }
+    
     const user = await db.users.findUnique({
-      where: { id: decoded.userId },
+      where: { id: userId },
       select: { id: true, name: true, role: true, is_active: true }
     });
 
     if (!user || !user.is_active) {
       throw new Error('User not found or inactive');
     }
+
+    console.log('✅ Authenticated user:', user.id, user.name);
 
     return user;
   } catch (error) {
