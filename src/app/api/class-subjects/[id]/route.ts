@@ -9,7 +9,6 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
     const authResult = await verifyAuth(request);
     if (authResult.error || !authResult.user) {
       return NextResponse.json(
@@ -105,19 +104,27 @@ export async function GET(
 
     console.log('✅ Found trainerAssignments:', trainerAssignments.length);
 
-    // Create lookup maps
-    const assignedSubjectIds = new Set(trainerAssignments.map(a => a.subject_id));
-    const assignmentBySubject = new Map(
-      trainerAssignments.map(a => [a.subject_id, a.class_subject_id])
+    // ✅ FIXED: Create a Set of assigned class_subject_ids (not just subject_ids)
+    // This allows the same subject to be assigned to multiple classes
+    const assignedClassSubjectIds = new Set(
+      trainerAssignments.map(a => a.class_subject_id)
     );
+
+    // ✅ FIXED: Group assignments by subject_id to check if subject is assigned elsewhere
+    const assignmentsBySubjectId = new Map<number, number[]>();
+    trainerAssignments.forEach(assignment => {
+      const existing = assignmentsBySubjectId.get(assignment.subject_id) || [];
+      assignmentsBySubjectId.set(assignment.subject_id, [...existing, assignment.class_subject_id]);
+    });
 
     // Transform data with trainer's assignment status
     const formattedSubjects = classSubjects.map(cs => {
-      const isAssignedToAnyClass = assignedSubjectIds.has(cs.subject_id);
-      const assignedToClassSubjectId = assignmentBySubject.get(cs.subject_id);
+      // ✅ FIXED: Check if THIS SPECIFIC class_subject assignment is active
+      const isAssignedToThisClass = assignedClassSubjectIds.has(cs.id);
       
-      const isAssignedToThisClass = isAssignedToAnyClass && assignedToClassSubjectId === cs.id;
-      const isAssignedElsewhere = isAssignedToAnyClass && assignedToClassSubjectId !== cs.id;
+      // ✅ FIXED: Check if this subject is assigned to OTHER class_subject combinations
+      const allAssignmentsForSubject = assignmentsBySubjectId.get(cs.subject_id) || [];
+      const isAssignedElsewhere = allAssignmentsForSubject.length > 0 && !isAssignedToThisClass;
 
       return {
         id: cs.subjects.id,
@@ -156,7 +163,6 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
     const authResult = await verifyAuth(request);
     if (authResult.error || !authResult.user) {
       return NextResponse.json(

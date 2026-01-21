@@ -100,16 +100,19 @@ useEffect(() => {
   if (!authUser) return;
   if (authUser.is_blocked) return;
 
-  const hasAccess =
-    authUser.role === "admin" || authUser.has_timetable_admin === true;
+  const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
 
-  if (!hasAccess) return;
+  if (!hasAccess) 
+    return;
 
   fetchTrainers();
+   fetchClasses();  
+  fetchTerms(); 
 }, [authUser, authLoading]);
 
 // Update this function in app/timetable/page.tsx
 const fetchTrainers = async () => {
+  setIsLoadingTrainers(true)
   try {
     // Point to the new endpoint we just created
     const response = await fetch('/api/trainers'); 
@@ -120,19 +123,21 @@ const fetchTrainers = async () => {
     // result.data will now be an array of { id, name, department }
     const trainerList = result.data.map((trainer: any) => ({
       id: trainer.id,
-      name: trainer.name
+      name: trainer.name,
+      department: trainer.department
     }));
-    
-    setTrainers(trainerList);
+     setTrainers(trainerList);
   } catch (error) {
     console.error('Error fetching trainers:', error);
+    toast({
+      title: "Error",
+      description: "Failed to load trainers",
+      variant: "destructive",
+    });
+  } finally {
+    setIsLoadingTrainers(false); // ✅ ADD THIS
   }
 };
-
-  useEffect(() => {
-    fetchClasses();
-    fetchTerms();
-  }, []);
 
   useEffect(() => {
     if (selectedTrainer && selectedTerm) {
@@ -481,16 +486,40 @@ const fetchTrainers = async () => {
     }
   };
 
-  if (!authLoading && !authUser?.has_timetable_admin) {
+ // WITH THIS:
+if (authLoading) {
+  return (
+    <div className="flex justify-center py-8">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+    </div>
+  );
+}
+
+if (!authUser) {
+  return (
+    <Alert variant="destructive">
+      <AlertTriangle className="h-4 w-4" />
+      <AlertDescription>
+        Please log in to access this page.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
+
+if (!hasAccess) {
   return (
     <Alert variant="destructive">
       <AlertTriangle className="h-4 w-4" />
       <AlertDescription>
         You do not have permission to access timetable administration.
+        Only admins and timetable admins can assign classes and subjects.
       </AlertDescription>
     </Alert>
   );
 }
+
 
   return (
     <div className="space-y-6 mt-11">

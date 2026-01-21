@@ -25,6 +25,7 @@ import {
   ClockIcon,
   CalendarDays,
   BookOpen,
+  Laptop,
 } from "lucide-react";
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -204,6 +205,11 @@ export function DashboardSidebar() {
       label: 'Classes',
       icon: <GraduationCap size={18} />,
       href: '/classes'
+    },
+     {
+      label: 'Online Classes', 
+      icon: <Laptop size={18} />,
+      href: '/timetable/online-classes'
     },
     {
       label: 'Class/Subject Assignment',

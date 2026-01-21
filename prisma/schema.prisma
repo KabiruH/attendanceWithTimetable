@@ -76,6 +76,7 @@ model classattendance {
   auto_checkout       Boolean          @default(false)
   work_attendance_id  Int?
   timetable_slot_id   String?          // ✅ NEW: Link to timetable slot
+  is_online_attendance  Boolean          @default(false) 
   location_verified   Boolean          @default(false) // ✅ NEW: Was location check passed?
   check_in_latitude   Decimal?         @db.Decimal(10, 8) // ✅ NEW: Check-in GPS coordinates
   check_in_longitude  Decimal?         @db.Decimal(11, 8) // ✅ NEW: Check-in GPS coordinates
@@ -96,6 +97,7 @@ model classattendance {
   @@index([trainer_id], map: "ClassAttendance_trainer_id_idx")
   @@index([timetable_slot_id], map: "ClassAttendance_timetable_slot_id_idx") // ✅ NEW: Index for timetable lookup
   @@index([location_verified], map: "ClassAttendance_location_verified_idx") // ✅ NEW: Index for location queries
+  @@index([is_online_attendance], map: "ClassAttendance_is_online_attendance_idx")
 }
 
 model classes {
@@ -243,12 +245,13 @@ model subjects {
   description               String?                     @db.Text
   is_active                 Boolean                     @default(true)
   created_at                DateTime                    @default(now())
-  updated_at                DateTime
+  updated_at                DateTime                    @default(now())
   created_by                String                      @db.VarChar(100)
   classsubjects             classsubjects[]
   timetableslots            timetableslots[]
   trainersubjectassignments trainersubjectassignments[]
   subjectassignmentlog      subjectassignmentlog[]      // ADD THIS
+  can_be_online             Boolean                     @default(true)
 
   @@index([code], map: "Subjects_code_idx")
   @@index([department], map: "Subjects_department_idx")
@@ -298,6 +301,7 @@ model timetableslots {
   status           String        @default("scheduled") @db.VarChar(20)
   created_at       DateTime      @default(now())
   updated_at       DateTime      @default(now())
+  is_online_session Boolean          @default(false) 
   classes          classes       @relation(fields: [class_id], references: [id], map: "TimetableSlots_class_id_fkey")
   users            users         @relation(fields: [employee_id], references: [id], map: "TimetableSlots_employee_id_fkey")
   lessonperiods    lessonperiods @relation(fields: [lesson_period_id], references: [id], map: "TimetableSlots_lesson_period_id_fkey")
@@ -314,7 +318,8 @@ model timetableslots {
   @@index([room_id], map: "TimetableSlots_room_id_fkey")
   @@index([subject_id], map: "TimetableSlots_subject_id_idx")
   @@index([term_id], map: "TimetableSlots_term_id_idx")
-  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // ✅ NEW: Index for day queries
+  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // Index for day queries
+  @@index([is_online_session], map: "TimetableSlots_is_online_session_idx") // Index for online session queries
 
 }
 
@@ -411,20 +416,20 @@ model webauthncredentialchallenge {
   users     users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentialChallenge_userId_fkey")
 }
 
-    model webauthncredentials {
-      id           String   @id
-      userId       Int
-      email        String?  @db.VarChar(100)
-      credentialId String   @unique(map: "WebAuthnCredentials_credentialId_key")
-      publicKey    String   @db.Text
-      counter      Int
-      transports   String?
-      created_at   DateTime @default(now())
-      updated_at   DateTime @default(now())
-      users        users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentials_userId_fkey")
+model webauthncredentials {
+  id           String   @id
+  userId       Int
+  email        String?  @db.VarChar(100)
+  credentialId String   @unique(map: "WebAuthnCredentials_credentialId_key")
+  publicKey    String   @db.Text
+  counter      Int
+  transports   String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now())
+  users        users    @relation(fields: [userId], references: [id], onDelete: Cascade, map: "WebAuthnCredentials_userId_fkey")
 
-      @@index([userId], map: "WebAuthnCredentials_userId_fkey")
-    }
+  @@index([userId], map: "WebAuthnCredentials_userId_fkey")
+}
 
  model userblocklog {
   id              Int       @id @default(autoincrement())

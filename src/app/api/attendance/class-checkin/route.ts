@@ -1,4 +1,4 @@
-// app/api/attendance/class-checkin/route.ts - Timetable-integrated version
+// app/api/attendance/class-checkin/route.ts - Online class support
 import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
@@ -9,9 +9,10 @@ import { z } from 'zod';
 // Type definitions
 type TimetableSlotWithRelations = any & {
   classes?: { name: string; code?: string; duration_hours?: number } | null;
-  subjects?: { name: string; code?: string } | null;
+  subjects?: { name: string; code?: string; can_be_online?: boolean } | null;
   rooms?: { name: string } | null;
   lessonperiods?: { start_time: Date; end_time: Date; name: string } | null;
+  is_online_session?: boolean; // ✅ NEW
 };
 
 // Mobile request validation schema
@@ -22,9 +23,9 @@ const mobileClassAttendanceSchema = z.object({
     longitude: z.number(),
     accuracy: z.number(),
     timestamp: z.number(),
-  }),
+  }).optional(), // ✅ CHANGED: Optional for online classes
   biometric_verified: z.boolean(),
-  timetable_slot_id: z.string(), // Changed from class_id
+  timetable_slot_id: z.string(),
 });
 
 // Geofence configuration
@@ -137,7 +138,8 @@ async function getTodaySchedule(trainerId: number, currentDate: Date) {
           id: true,
           name: true,
           code: true,
-          department: true
+          department: true,
+          can_be_online: true // ✅ NEW: Include can_be_online flag
         }
       },
       rooms: {
@@ -250,7 +252,8 @@ export async function GET(request: NextRequest) {
         check_out_time: true,
         status: true,
         auto_checkout: true,
-        location_verified: true
+        location_verified: true,
+        is_online_attendance: true // ✅ NEW: Include online attendance flag
       }
     });
 
@@ -266,7 +269,8 @@ export async function GET(request: NextRequest) {
         checkInReason: checkInStatus.reason,
         isLate: checkInStatus.isLate || false,
         hasCheckedIn: !!attendance?.check_in_time,
-        hasCheckedOut: !!attendance?.check_out_time
+        hasCheckedOut: !!attendance?.check_out_time,
+        isOnlineSession: slot.is_online_session || false // ✅ NEW: Include online flag
       };
     });
 
@@ -299,51 +303,6 @@ export async function POST(request: NextRequest) {
     const isMobileRequest = body?.type?.startsWith('class_') || !!body?.location;
     const user = await getAuthenticatedUser(request);
 
-    // Mobile request validation
-    if (isMobileRequest) {
-      try {
-        mobileClassAttendanceSchema.parse(body);
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          return NextResponse.json(
-            { success: false, error: error.issues[0].message },
-            { status: 400 }
-          );
-        }
-      }
-
-      // Verify location
-      if (body.location) {
-        const isWithinGeofence = verifyGeofence(
-          body.location.latitude,
-          body.location.longitude
-        );
-        
-        if (!isWithinGeofence) {
-          const distance = calculateDistance(
-            body.location.latitude,
-            body.location.longitude,
-            GEOFENCE.latitude,
-            GEOFENCE.longitude
-          );
-          
-          return NextResponse.json({
-            success: false,
-            error: 'You must be within the school premises to record attendance',
-            distance: Math.round(distance)
-          }, { status: 400 });
-        }
-      }
-
-      // Verify biometric
-      if (!body.biometric_verified) {
-        return NextResponse.json({
-          success: false,
-          error: 'Biometric verification is required for attendance'
-        }, { status: 400 });
-      }
-    }
-
     const { timetable_slot_id, action, type } = body;
     
     // Normalize action
@@ -362,7 +321,7 @@ export async function POST(request: NextRequest) {
     const currentTime = nowInKenya.toJSDate();
     const currentDate = new Date(currentTime.toISOString().split('T')[0]);
 
-    // Get timetable slot with all details
+    // Get timetable slot with all details INCLUDING is_online_session
     const slot = await db.timetableslots.findUnique({
       where: { id: timetable_slot_id },
       include: {
@@ -378,7 +337,8 @@ export async function POST(request: NextRequest) {
           select: {
             id: true,
             name: true,
-            code: true
+            code: true,
+            can_be_online: true // ✅ NEW
           }
         },
         rooms: {
@@ -412,6 +372,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ✅ NEW: Check if this is an online session
+    const isOnlineSession = slot.is_online_session === true;
+
     // Verify this slot belongs to the trainer
     if (slot.employee_id !== user.id) {
       return NextResponse.json(
@@ -429,33 +392,92 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ✅ NEW: Validate based on session type
+    if (isMobileRequest) {
+      if (isOnlineSession) {
+        // Online session: Only biometric required, location optional
+        if (!body.biometric_verified) {
+          return NextResponse.json({
+            success: false,
+            error: 'Biometric verification is required for attendance'
+          }, { status: 400 });
+        }
+      } else {
+        // Physical session: Both location and biometric required
+        try {
+          mobileClassAttendanceSchema.parse(body);
+        } catch (error) {
+          if (error instanceof z.ZodError) {
+            return NextResponse.json(
+              { success: false, error: error.issues[0].message },
+              { status: 400 }
+            );
+          }
+        }
+
+        // Verify location for physical classes
+        if (body.location) {
+          const isWithinGeofence = verifyGeofence(
+            body.location.latitude,
+            body.location.longitude
+          );
+          
+          if (!isWithinGeofence) {
+            const distance = calculateDistance(
+              body.location.latitude,
+              body.location.longitude,
+              GEOFENCE.latitude,
+              GEOFENCE.longitude
+            );
+            
+            return NextResponse.json({
+              success: false,
+              error: 'You must be within the school premises to record attendance',
+              distance: Math.round(distance)
+            }, { status: 400 });
+          }
+        }
+
+        // Verify biometric
+        if (!body.biometric_verified) {
+          return NextResponse.json({
+            success: false,
+            error: 'Biometric verification is required for attendance'
+          }, { status: 400 });
+        }
+      }
+    }
+
     // Get settings
     const settings = await db.timetablesettings.findFirst();
 
-    // Check if trainer has checked into work today
-    const employee = await db.employees.findFirst({
-      where: { employee_id: user.id }
-    });
+    // ✅ NEW: Work attendance check ONLY for physical classes
+    let workAttendance = null;
+    if (!isOnlineSession) {
+      const employee = await db.employees.findFirst({
+        where: { employee_id: user.id }
+      });
 
-    if (!employee) {
-      return NextResponse.json(
-        { success: false, error: 'Employee record not found' },
-        { status: 404 }
-      );
-    }
-
-    const workAttendance = await db.attendance.findFirst({
-      where: {
-        employee_id: employee.id,
-        date: currentDate
+      if (!employee) {
+        return NextResponse.json(
+          { success: false, error: 'Employee record not found' },
+          { status: 404 }
+        );
       }
-    });
 
-    if (!workAttendance?.check_in_time || workAttendance.check_out_time) {
-      return NextResponse.json(
-        { success: false, error: 'You must be checked into work to mark class attendance' },
-        { status: 400 }
-      );
+      workAttendance = await db.attendance.findFirst({
+        where: {
+          employee_id: employee.id,
+          date: currentDate
+        }
+      });
+
+      if (!workAttendance?.check_in_time || workAttendance.check_out_time) {
+        return NextResponse.json(
+          { success: false, error: 'You must be checked into work to mark class attendance' },
+          { status: 400 }
+        );
+      }
     }
 
     // Check existing attendance
@@ -527,7 +549,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Create attendance record
+      // ✅ NEW: Create attendance record with online flag
       const attendance = await db.classattendance.create({
         data: {
           trainer_id: user.id,
@@ -536,17 +558,19 @@ export async function POST(request: NextRequest) {
           check_in_time: currentTime,
           timetable_slot_id: timetable_slot_id,
           status: checkInStatus.isLate ? 'Late' : 'Present',
-          location_verified: isMobileRequest ? true : false,
-          check_in_latitude: body.location?.latitude,
-          check_in_longitude: body.location?.longitude,
-          work_attendance_id: workAttendance.id
+          location_verified: isOnlineSession ? false : (isMobileRequest ? true : false), // ✅ NEW
+          is_online_attendance: isOnlineSession, // ✅ NEW: Mark as online attendance
+          check_in_latitude: isOnlineSession ? null : body.location?.latitude, // ✅ NEW: No GPS for online
+          check_in_longitude: isOnlineSession ? null : body.location?.longitude, // ✅ NEW: No GPS for online
+          work_attendance_id: workAttendance?.id || null // ✅ NEW: Can be null for online
         }
       });
 
       const subjectName = slot.subjects?.name || slot.classes?.name;
+      const sessionType = isOnlineSession ? ' (Online)' : '';
       const responseMessage = checkInStatus.isLate 
-        ? `Checked in late to ${subjectName}`
-        : `Checked in to ${subjectName}`;
+        ? `Checked in late to ${subjectName}${sessionType}`
+        : `Checked in to ${subjectName}${sessionType}`;
 
       if (isMobileRequest) {
         return NextResponse.json({
@@ -559,7 +583,8 @@ export async function POST(request: NextRequest) {
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
             room_name: slot.rooms?.name,
-            location_verified: true,
+            location_verified: !isOnlineSession && isMobileRequest, // ✅ NEW
+            is_online_session: isOnlineSession, // ✅ NEW
             is_late: checkInStatus.isLate,
             check_in_time: currentTime
           }
@@ -574,7 +599,8 @@ export async function POST(request: NextRequest) {
             subject: slot.subjects,
             room: slot.rooms,
             check_in_time: currentTime.toISOString(),
-            is_late: checkInStatus.isLate
+            is_late: checkInStatus.isLate,
+            is_online_session: isOnlineSession // ✅ NEW
           }
         });
       }
@@ -600,30 +626,33 @@ export async function POST(request: NextRequest) {
       const hoursDiff = Math.floor(minutesDiff / 60);
       const remainingMinutes = minutesDiff % 60;
 
+      // ✅ NEW: Update with online-aware GPS data
       await db.classattendance.update({
         where: { id: existingAttendance.id },
         data: {
           check_out_time: currentTime,
           auto_checkout: false,
-          check_out_latitude: body.location?.latitude,
-          check_out_longitude: body.location?.longitude
+          check_out_latitude: isOnlineSession ? null : body.location?.latitude, // ✅ NEW
+          check_out_longitude: isOnlineSession ? null : body.location?.longitude // ✅ NEW
         }
       });
 
       const duration = `${hoursDiff}h ${remainingMinutes}m`;
       const subjectName = slot.subjects?.name || slot.classes?.name;
+      const sessionType = isOnlineSession ? ' (Online)' : '';
 
       if (isMobileRequest) {
         return NextResponse.json({
           success: true,
-          message: `Checked out from ${subjectName}`,
+          message: `Checked out from ${subjectName}${sessionType}`,
           data: {
             timestamp: currentTime,
             type: body.type,
             timetable_slot_id,
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
-            location_verified: true,
+            location_verified: !isOnlineSession && isMobileRequest, // ✅ NEW
+            is_online_session: isOnlineSession, // ✅ NEW
             check_out_time: currentTime,
             duration
           }
@@ -631,8 +660,9 @@ export async function POST(request: NextRequest) {
       } else {
         return NextResponse.json({
           success: true,
-          message: `Successfully checked out from ${subjectName}`,
-          duration
+          message: `Successfully checked out from ${subjectName}${sessionType}`,
+          duration,
+          is_online_session: isOnlineSession // ✅ NEW
         });
       }
     } else {
@@ -703,8 +733,9 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // If there's a timetable_slot_id, fetch the subject name separately
+    // If there's a timetable_slot_id, fetch the subject name and online status
     let subjectName = null;
+    let isOnlineSession = false;
     if (attendance.timetable_slot_id) {
       const slot = await db.timetableslots.findUnique({
         where: { id: attendance.timetable_slot_id },
@@ -717,6 +748,7 @@ export async function PATCH(request: NextRequest) {
         }
       });
       subjectName = slot?.subjects?.name;
+      isOnlineSession = slot?.is_online_session || false; // ✅ NEW
     }
 
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
@@ -731,10 +763,11 @@ export async function PATCH(request: NextRequest) {
     });
 
     const displayName = subjectName || attendance.classes.name;
+    const sessionType = isOnlineSession ? ' (Online)' : ''; // ✅ NEW
 
     return NextResponse.json({
       success: true,
-      message: `Successfully checked out of ${displayName}`
+      message: `Successfully checked out of ${displayName}${sessionType}`
     });
 
   } catch (error) {

@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, code, department, credit_hours, description } = body;
+    const { name, code, department, credit_hours, description, can_be_online } = body; // ✅ Added can_be_online
 
     // Validation
     if (!name || !code || !department) {
@@ -114,7 +114,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const now = new Date()
+    
+    const now = new Date();
     const subject = await db.subjects.create({
       data: {
         name,
@@ -123,6 +124,7 @@ export async function POST(request: NextRequest) {
         credit_hours: credit_hours ? parseInt(credit_hours) : null,
         description: description || null,
         is_active: true,
+        can_be_online: can_be_online !== undefined ? can_be_online : true, // ✅ Default to true
         created_by: user.email || user.name,
         updated_at: now
       },
@@ -161,7 +163,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { id, name, code, department, credit_hours, description, is_active } = body;
+    const { id, name, code, department, credit_hours, description, is_active, can_be_online } = body; // ✅ Added can_be_online
 
     // Validation
     if (!id) {
@@ -213,6 +215,7 @@ export async function PUT(request: NextRequest) {
         credit_hours: credit_hours ? parseInt(credit_hours) : null,
         description: description || null,
         is_active: is_active !== undefined ? is_active : existingSubject.is_active,
+        can_be_online: can_be_online !== undefined ? can_be_online : existingSubject.can_be_online, // ✅ Update can_be_online
         updated_at: new Date(),
       },
     });

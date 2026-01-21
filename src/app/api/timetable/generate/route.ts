@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
 
     const classSubjectIds = allClassSubjects.map(cs => cs.id);
 
-    // ✅ FIXED: Get trainer assignments - only filter by trainersubjectassignments.is_active
+    // Get trainer assignments - only filter by trainersubjectassignments.is_active
     const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
         term_id: term_id,
@@ -254,6 +254,9 @@ export async function POST(request: NextRequest) {
       lesson_period_id: number;
       day_of_week: number;
       status: string;
+      is_online_session: boolean; // ✅ NEW: Add online flag
+      created_at: Date;
+      updated_at: Date;
     }> = [];
 
     const skippedAssignments: Array<{
@@ -270,7 +273,7 @@ export async function POST(request: NextRequest) {
     // Track conflicts:
     // - Room: Only one session per room per day-period
     // - Trainer: Only one session per trainer per day-period
-    // - Class: Only one session per class per day-period (NEW!)
+    // - Class: Only one session per class per day-period
     const scheduledSlots = new Map<string, boolean>();
 
     const isSlotAvailable = (
@@ -358,6 +361,7 @@ export async function POST(request: NextRequest) {
 
         const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
+        const now = new Date();
         slotsToCreate.push({
           id: randomUUID(),
           term_id: term_id,
@@ -367,7 +371,10 @@ export async function POST(request: NextRequest) {
           room_id: selectedRoom.id,
           lesson_period_id: slot.periodId,
           day_of_week: slot.day,
-          status: 'scheduled'
+          status: 'scheduled',
+          is_online_session: false, // ✅ NEW: Default all generated slots to physical
+          created_at: now,
+          updated_at: now
         });
 
         markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
@@ -391,6 +398,7 @@ export async function POST(request: NextRequest) {
 
           const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
 
+          const now = new Date();
           slotsToCreate.push({
             id: randomUUID(),
             term_id: term_id,
@@ -400,7 +408,10 @@ export async function POST(request: NextRequest) {
             room_id: selectedRoom.id,
             lesson_period_id: slot.periodId,
             day_of_week: slot.day,
-            status: 'scheduled'
+            status: 'scheduled',
+            is_online_session: false, // ✅ NEW: Default all generated slots to physical
+            created_at: now,
+            updated_at: now
           });
 
           markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
@@ -442,7 +453,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Successfully generated timetable for ${term.name}`,
+      message: `Successfully generated timetable for ${term.name}. All slots created as physical classes - admins can toggle specific slots to online as needed.`,
       stats: {
         slots_created: slotsToCreate.length,
         trainer_assignments_processed: trainerAssignments.length,

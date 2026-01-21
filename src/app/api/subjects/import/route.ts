@@ -44,6 +44,17 @@ function hasTimetableAdminAccess(user: any): boolean {
   return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
+// Helper to parse boolean values from Excel
+function parseBoolean(value: any): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase().trim();
+    return lower === 'true' || lower === 'yes' || lower === '1';
+  }
+  if (typeof value === 'number') return value === 1;
+  return true; // ✅ Default to true if not specified
+}
+
 // POST /api/subjects/import - Import subjects from Excel
 export async function POST(request: NextRequest) {
   try {
@@ -105,6 +116,7 @@ export async function POST(request: NextRequest) {
         department: row['department'] || row['Department'],
         credit_hours: row['credit_hours'] || row['Credit Hours'] || row['credit hours'] || null,
         description: row['description'] || row['Description'] || null,
+        can_be_online: parseBoolean(row['can_be_online'] || row['Can Be Online'] || row['online'] || true), // ✅ New field
       };
 
       // Validate required fields
@@ -133,13 +145,13 @@ export async function POST(request: NextRequest) {
               department: subjectData.department,
               credit_hours: subjectData.credit_hours ? parseInt(subjectData.credit_hours.toString()) : null,
               description: subjectData.description,
+              can_be_online: subjectData.can_be_online, // ✅ Update can_be_online
               updated_at: new Date(),
             },
           });
           updated++;
         } else {
           // Create new subject
-
           const now = new Date();
           await db.subjects.create({
             data: {
@@ -149,6 +161,7 @@ export async function POST(request: NextRequest) {
               credit_hours: subjectData.credit_hours ? parseInt(subjectData.credit_hours.toString()) : null,
               description: subjectData.description,
               is_active: true,
+              can_be_online: subjectData.can_be_online, // ✅ Set can_be_online
               created_by: user.email || user.name,
               updated_at: now
             },

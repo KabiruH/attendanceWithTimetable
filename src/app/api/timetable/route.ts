@@ -32,7 +32,7 @@ async function verifyAuth() {
         role: true, 
         department: true, 
         is_active: true,
-        has_timetable_admin: true  // ✅ Include this field
+        has_timetable_admin: true
       }
     });
 
@@ -56,6 +56,7 @@ async function verifyAuth() {
  * - day_of_week: Filter by specific day (0-6)
  * - class_id: Filter by specific class
  * - subject_id: Filter by specific subject
+ * - is_online_session: Filter by online/physical sessions (true/false)
  */
 export async function GET(request: NextRequest) {
   try {
@@ -110,6 +111,12 @@ export async function GET(request: NextRequest) {
       whereConditions.room_id = parseInt(roomId);
     }
 
+    // ✅ NEW: Online session filter
+    const isOnlineSession = searchParams.get('is_online_session');
+    if (isOnlineSession !== null) {
+      whereConditions.is_online_session = isOnlineSession === 'true';
+    }
+
     // Department filter (filter by class department)
     const department = searchParams.get('department');
     if (department) {
@@ -118,7 +125,6 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    // ✅ FIXED: Check both admin role AND has_timetable_admin flag
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
     
     // If user doesn't have timetable access, only show their own slots
@@ -147,7 +153,8 @@ export async function GET(request: NextRequest) {
             code: true,
             department: true,
             credit_hours: true,
-            description: true
+            description: true,
+            can_be_online: true // ✅ NEW: Include can_be_online flag
           }
         },
         rooms: {
@@ -226,7 +233,6 @@ export async function POST(request: NextRequest) {
 
     const { user } = authResult;
 
-    // ✅ FIXED: Check both admin role AND has_timetable_admin flag
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
     
     if (!hasTimetableAccess) {
@@ -245,7 +251,8 @@ export async function POST(request: NextRequest) {
       room_id,
       lesson_period_id,
       day_of_week,
-      status = 'scheduled'
+      status = 'scheduled',
+      is_online_session = false // ✅ NEW: Default to false (physical class)
     } = body;
 
     // Validation
@@ -293,7 +300,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Lesson period not found' }, { status: 404 });
     }
 
-    // ✅ Check if the class is assigned to this term
+    // ✅ NEW: Validate subject can be online if is_online_session is true
+    if (is_online_session && !subject.can_be_online) {
+      return NextResponse.json({
+        error: 'Subject cannot be online',
+        details: `${subject.name} (${subject.code}) is not configured to allow online sessions`
+      }, { status: 400 });
+    }
+
+    // Check if the class is assigned to this term
     const termClass = await db.termclasses.findUnique({
       where: {
         term_id_class_id: {
@@ -310,7 +325,7 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // ✅ Check if the subject is assigned to this class for this term
+    // Check if the subject is assigned to this class for this term
     const classSubject = await db.classsubjects.findFirst({
       where: {
         class_id: class_id,
@@ -325,6 +340,7 @@ export async function POST(request: NextRequest) {
         details: `${subject.name} (${subject.code}) must be assigned to ${classRecord.name} for ${term.name} before scheduling`
       }, { status: 400 });
     }
+
     // Check for conflicts (same room, same time, same day OR same trainer, same time, same day)
     const existingSlot = await db.timetableslots.findFirst({
       where: {
@@ -370,6 +386,7 @@ export async function POST(request: NextRequest) {
         lesson_period_id,
         day_of_week,
         status,
+        is_online_session, // ✅ NEW: Set online flag
         created_at: new Date(),
         updated_at: new Date()
       },
@@ -385,7 +402,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: 'Timetable slot created successfully',
+      message: `Timetable slot created successfully${is_online_session ? ' (Online Session)' : ''}`,
       data: timetableSlot
     }, { status: 201 });
 
@@ -394,6 +411,119 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error: 'Failed to create timetable slot',
+        details: error.message
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * PATCH /api/timetable
+ * Update an existing timetable slot (Admin or Timetable Admin only)
+ * ✅ NEW: Allows toggling is_online_session for specific slots
+ */
+export async function PATCH(request: NextRequest) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    const { user } = authResult;
+
+    // ✅ AUTHORIZATION CHECK: Only admin or timetable admin can modify timetable
+    const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
+    
+    if (!hasTimetableAccess) {
+      return NextResponse.json(
+        { error: 'Unauthorized. Admin or Timetable Admin access required to modify timetable slots.' },
+        { status: 403 }
+      );
+    }
+
+    const body = await request.json();
+    const { id, is_online_session, status } = body;
+
+    if (!id) {
+      return NextResponse.json(
+        { error: 'Timetable slot ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Find the existing slot
+    const existingSlot = await db.timetableslots.findUnique({
+      where: { id },
+      include: {
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            can_be_online: true
+          }
+        }
+      }
+    });
+
+    if (!existingSlot) {
+      return NextResponse.json(
+        { error: 'Timetable slot not found' },
+        { status: 404 }
+      );
+    }
+
+    // ✅ ADDITIONAL CHECK: Validate if changing to online
+    if (is_online_session === true && !existingSlot.subjects?.can_be_online) {
+      return NextResponse.json({
+        error: 'Subject cannot be online',
+        details: `${existingSlot.subjects?.name} is not configured to allow online sessions`
+      }, { status: 400 });
+    }
+
+    // Build update data
+    const updateData: any = {
+      updated_at: new Date()
+    };
+
+    if (is_online_session !== undefined) {
+      updateData.is_online_session = is_online_session;
+    }
+
+    if (status !== undefined) {
+      updateData.status = status;
+    }
+
+    // Update the slot
+    const updatedSlot = await db.timetableslots.update({
+      where: { id },
+      data: updateData,
+      include: {
+        classes: true,
+        subjects: true,
+        rooms: true,
+        lessonperiods: true,
+        users: true,
+        terms: true
+      }
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `Timetable slot updated successfully${is_online_session !== undefined ? (is_online_session ? ' - Session marked as ONLINE' : ' - Session marked as PHYSICAL') : ''}`,
+      data: updatedSlot
+    });
+
+  } catch (error: any) {
+    console.error('Error updating timetable slot:', error);
+    return NextResponse.json(
+      {
+        error: 'Failed to update timetable slot',
         details: error.message
       },
       { status: 500 }
