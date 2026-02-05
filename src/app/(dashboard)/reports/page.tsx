@@ -6,6 +6,8 @@ import Filters from '@/components/reports/Filters';
 import ReportsTable from '@/components/reports/ReportsTable';
 import PDFReportGenerator from '@/components/reports/PDFReportGenerator';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import ClassAttendanceReport from '@/components/reports/ClassAttendanceReport';
 import {
   Pagination,
   PaginationContent,
@@ -24,6 +26,7 @@ const WORK_END_HOUR = 18; // 6 PM
 export default function ReportsPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
+  const [activeTab, setActiveTab] = useState('work-attendance');
   const [filters, setFilters] = useState<FilterState>({
     employeeName: '',
     status: 'all',
@@ -290,113 +293,127 @@ export default function ReportsPage() {
     link.click();
   };
 
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Attendance Reports</h1>
-        <div className="flex gap-2">
-          <Button 
-            onClick={toggleNotCheckedInFilter} 
-            variant={showNotCheckedIn ? "default" : "outline"}
-            size="sm"
-          >
-            {showNotCheckedIn ? "Showing Late/Not Checked In" : "Show Late/Not Checked In"}
-          </Button>
-          <Button onClick={exportToCSV} variant="outline" size="sm" disabled={filteredData.length === 0}>
-            <Download className="mr-2 h-4 w-4" />
-            Export to CSV
-          </Button>
-          <PDFReportGenerator />
+return (
+  <div className="p-6 space-y-6">
+    <h1 className="text-2xl font-bold">Attendance Reports</h1>
+    
+    <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <TabsList>
+        <TabsTrigger value="work-attendance">Work Attendance</TabsTrigger>
+        <TabsTrigger value="class-attendance">Class Attendance</TabsTrigger>
+      </TabsList>
+      
+      <TabsContent value="work-attendance" className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div className="flex gap-2">
+            <Button 
+              onClick={toggleNotCheckedInFilter} 
+              variant={showNotCheckedIn ? "default" : "outline"}
+              size="sm"
+            >
+              {showNotCheckedIn ? "Showing Late/Not Checked In" : "Show Late/Not Checked In"}
+            </Button>
+            <Button onClick={exportToCSV} variant="outline" size="sm" disabled={filteredData.length === 0}>
+              <Download className="mr-2 h-4 w-4" />
+              Export to CSV
+            </Button>
+            <PDFReportGenerator />
+          </div>
         </div>
-      </div>
 
-      <Filters
-        filters={filters}
-        onFilterChange={handleFilterChange}
-        resultCount={filteredData.length}
-      />
+        <Filters
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          resultCount={filteredData.length}
+        />
 
-      {loading ? (
-        <div className="text-center py-12">
-          <p className="text-gray-600">Loading attendance data...</p>
-        </div>
-      ) : attendanceData.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-gray-600">No attendance records found.</p>
-        </div>
-      ) : filteredData.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-gray-600">No records match your filters.</p>
-        </div>
-      ) : (
-        <ReportsTable data={paginatedData} />
-      )}
+        {loading ? (
+          <div className="text-center py-12">
+            <p className="text-gray-600">Loading attendance data...</p>
+          </div>
+        ) : attendanceData.length === 0 ? (
+          <div className="text-center py-12">
+            <p className="text-gray-600">No attendance records found.</p>
+          </div>
+        ) : filteredData.length === 0 ? (
+          <div className="text-center py-12">
+            <p className="text-gray-600">No records match your filters.</p>
+          </div>
+        ) : (
+          <ReportsTable data={paginatedData} />
+        )}
 
-      {totalPages > 1 && (
-        <Pagination className="mt-4">
-          <PaginationContent>
-            <PaginationItem>
-              <PaginationPrevious
-                className={cn(currentPage === 1 && "pointer-events-none opacity-50 cursor-not-allowed")}
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (currentPage > 1) setCurrentPage(prev => prev - 1);
-                }}
-                href="#"
-              />
-            </PaginationItem>
-
-            {getVisiblePages()[0] > 1 && (
-              <>
-                <PaginationItem>
-                  <PaginationLink href="#" onClick={(e) => { e.preventDefault(); setCurrentPage(1); }}>
-                    1
-                  </PaginationLink>
-                </PaginationItem>
-                {getVisiblePages()[0] > 2 && (
-                  <PaginationItem><span className="px-4 py-2">...</span></PaginationItem>
-                )}
-              </>
-            )}
-
-            {getVisiblePages().map((pageNum) => (
-              <PaginationItem key={pageNum}>
-                <PaginationLink
+        {totalPages > 1 && (
+          <Pagination className="mt-4">
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  className={cn(currentPage === 1 && "pointer-events-none opacity-50 cursor-not-allowed")}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (currentPage > 1) setCurrentPage(prev => prev - 1);
+                  }}
                   href="#"
-                  onClick={(e) => { e.preventDefault(); setCurrentPage(pageNum); }}
-                  isActive={currentPage === pageNum}
-                >
-                  {pageNum}
-                </PaginationLink>
+                />
               </PaginationItem>
-            ))}
 
-            {getVisiblePages()[getVisiblePages().length - 1] < totalPages && (
-              <>
-                {getVisiblePages()[getVisiblePages().length - 1] < totalPages - 1 && (
-                  <PaginationItem><span className="px-4 py-2">...</span></PaginationItem>
-                )}
-                <PaginationItem>
-                  <PaginationLink href="#" onClick={(e) => { e.preventDefault(); setCurrentPage(totalPages); }}>
-                    {totalPages}
+              {getVisiblePages()[0] > 1 && (
+                <>
+                  <PaginationItem>
+                    <PaginationLink href="#" onClick={(e) => { e.preventDefault(); setCurrentPage(1); }}>
+                      1
+                    </PaginationLink>
+                  </PaginationItem>
+                  {getVisiblePages()[0] > 2 && (
+                    <PaginationItem><span className="px-4 py-2">...</span></PaginationItem>
+                  )}
+                </>
+              )}
+
+              {getVisiblePages().map((pageNum) => (
+                <PaginationItem key={pageNum}>
+                  <PaginationLink
+                    href="#"
+                    onClick={(e) => { e.preventDefault(); setCurrentPage(pageNum); }}
+                    isActive={currentPage === pageNum}
+                  >
+                    {pageNum}
                   </PaginationLink>
                 </PaginationItem>
-              </>
-            )}
+              ))}
 
-            <PaginationItem>
-              <PaginationNext
-                className={cn(currentPage === totalPages && "pointer-events-none opacity-50 cursor-not-allowed")}
-                onClick={(e) => {
-                  e.preventDefault();
-                  if (currentPage < totalPages) setCurrentPage(prev => prev + 1);
-                }}
-                href="#"
-              />
-            </PaginationItem>
-          </PaginationContent>
-        </Pagination>
-      )}
-    </div>
-  );
+              {getVisiblePages()[getVisiblePages().length - 1] < totalPages && (
+                <>
+                  {getVisiblePages()[getVisiblePages().length - 1] < totalPages - 1 && (
+                    <PaginationItem><span className="px-4 py-2">...</span></PaginationItem>
+                  )}
+                  <PaginationItem>
+                    <PaginationLink href="#" onClick={(e) => { e.preventDefault(); setCurrentPage(totalPages); }}>
+                      {totalPages}
+                    </PaginationLink>
+                  </PaginationItem>
+                </>
+              )}
+
+              <PaginationItem>
+                <PaginationNext
+                  className={cn(currentPage === totalPages && "pointer-events-none opacity-50 cursor-not-allowed")}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (currentPage < totalPages) setCurrentPage(prev => prev + 1);
+                  }}
+                  href="#"
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+        )}
+      </TabsContent>
+      
+      <TabsContent value="class-attendance">
+        {userRole && <ClassAttendanceReport userRole={userRole} />}
+      </TabsContent>
+    </Tabs>
+  </div>
+);
 }

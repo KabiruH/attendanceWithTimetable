@@ -221,7 +221,7 @@ export async function GET(
           subjects,
           lastAttendance: lastAttendance ? {
             date: lastAttendance.date.toISOString().split('T')[0],
-            check_in_time: lastAttendance.check_in_time.toISOString(),
+            check_in_time: lastAttendance.check_in_time?.toISOString() || null,
             check_out_time: lastAttendance.check_out_time?.toISOString() || null,
             status: lastAttendance.status
           } : null,
