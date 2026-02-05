@@ -101,6 +101,97 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
+// NEW: Function to mark absences for closed check-in windows
+async function markMissedClassesAsAbsent(currentTime: Date) {
+  try {
+    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
+    const dayOfWeek = currentTime.getDay();
+    
+    // Get active term
+    const activeTerm = await db.terms.findFirst({
+      where: { is_active: true }
+    });
+
+    if (!activeTerm) return;
+
+    // Get timetable settings
+    const settings = await db.timetablesettings.findFirst();
+    const lateThreshold = settings?.attendance_late_threshold || 10;
+
+    // Get all timetable slots for today
+    const todaySlots = await db.timetableslots.findMany({
+      where: {
+        term_id: activeTerm.id,
+        day_of_week: dayOfWeek,
+        status: 'scheduled'
+      },
+      include: {
+        lessonperiods: {
+          select: {
+            start_time: true,
+            end_time: true
+          }
+        }
+      }
+    });
+
+    // Check each slot
+    for (const slot of todaySlots) {
+      if (!slot.lessonperiods) continue;
+
+      const startTime = new Date(slot.lessonperiods.start_time);
+      const lessonStart = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth(),
+        currentDate.getDate(),
+        startTime.getHours(),
+        startTime.getMinutes(),
+        0
+      );
+
+      // Calculate when check-in window closes (start time + late threshold)
+      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+
+      // Only process if check-in window has closed
+      if (currentTime < checkInWindowClosed) continue;
+
+      // Check if trainer has attendance record for this slot
+      const existingAttendance = await db.classattendance.findFirst({
+        where: {
+          trainer_id: slot.employee_id,
+          class_id: slot.class_id,
+          date: currentDate,
+          timetable_slot_id: slot.id
+        }
+      });
+
+      // If no attendance record exists, mark as absent
+      if (!existingAttendance) {
+        await db.classattendance.create({
+          data: {
+            trainer_id: slot.employee_id,
+            class_id: slot.class_id,
+            date: currentDate,
+            timetable_slot_id: slot.id,
+            status: 'Absent',
+            location_verified: false,
+            is_online_attendance: slot.is_online_session || false,
+            // No check-in/check-out times for absences
+            check_in_time: null,
+            check_out_time: null,
+            work_attendance_id: null
+          }
+        });
+        
+        console.log(`✅ Marked absence for trainer ${slot.employee_id}, slot ${slot.id}`);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error marking absences:', error);
+  }
+}
+
+
 // Get trainer's schedule for today from timetable
 async function getTodaySchedule(trainerId: number, currentDate: Date) {
   const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
@@ -226,6 +317,9 @@ export async function GET(request: NextRequest) {
     const currentTime = nowInKenya.toJSDate();
     const currentDate = new Date(currentTime.toISOString().split('T')[0]);
 
+    // ✅ NEW: Mark absences for all trainers before returning schedule
+    await markMissedClassesAsAbsent(currentTime);
+
     const url = new URL(request.url);
     const queryEmployeeId = url.searchParams.get('employee_id');
     
@@ -238,7 +332,7 @@ export async function GET(request: NextRequest) {
     // Get today's schedule from timetable
     const todaySchedule = await getTodaySchedule(userIdToUse, currentTime);
 
-    // Get today's attendance records
+    // Get today's attendance records (INCLUDING ABSENCES NOW)
     const todayAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: userIdToUse,
@@ -250,10 +344,10 @@ export async function GET(request: NextRequest) {
         timetable_slot_id: true,
         check_in_time: true,
         check_out_time: true,
-        status: true,
+        status: true, // Will now include 'Absent'
         auto_checkout: true,
         location_verified: true,
-        is_online_attendance: true // ✅ NEW: Include online attendance flag
+        is_online_attendance: true
       }
     });
 
@@ -265,12 +359,13 @@ export async function GET(request: NextRequest) {
       return {
         ...slot,
         attendance,
-        canCheckIn: checkInStatus.canCheckIn,
-        checkInReason: checkInStatus.reason,
+        canCheckIn: attendance?.status === 'Absent' ? false : checkInStatus.canCheckIn, // ✅ Can't check in if marked absent
+        checkInReason: attendance?.status === 'Absent' ? 'Marked as absent' : checkInStatus.reason,
         isLate: checkInStatus.isLate || false,
         hasCheckedIn: !!attendance?.check_in_time,
         hasCheckedOut: !!attendance?.check_out_time,
-        isOnlineSession: slot.is_online_session || false // ✅ NEW: Include online flag
+        isAbsent: attendance?.status === 'Absent', // ✅ NEW: Flag for UI
+        isOnlineSession: slot.is_online_session || false
       };
     });
 

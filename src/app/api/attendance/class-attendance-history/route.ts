@@ -43,6 +43,83 @@ function calculateDuration(checkIn: Date, checkOut: Date): { hours: number; minu
   };
 }
 
+async function markMissedClassesAsAbsent(currentTime: Date) {
+  try {
+    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
+    const dayOfWeek = currentTime.getDay();
+    
+    const activeTerm = await db.terms.findFirst({
+      where: { is_active: true }
+    });
+
+    if (!activeTerm) return;
+
+    const settings = await db.timetablesettings.findFirst();
+    const lateThreshold = settings?.attendance_late_threshold || 10;
+
+    const todaySlots = await db.timetableslots.findMany({
+      where: {
+        term_id: activeTerm.id,
+        day_of_week: dayOfWeek,
+        status: 'scheduled'
+      },
+      include: {
+        lessonperiods: {
+          select: {
+            start_time: true,
+            end_time: true
+          }
+        }
+      }
+    });
+
+    for (const slot of todaySlots) {
+      if (!slot.lessonperiods) continue;
+
+      const startTime = new Date(slot.lessonperiods.start_time);
+      const lessonStart = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth(),
+        currentDate.getDate(),
+        startTime.getHours(),
+        startTime.getMinutes(),
+        0
+      );
+
+      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+
+      if (currentTime < checkInWindowClosed) continue;
+
+      const existingAttendance = await db.classattendance.findFirst({
+        where: {
+          trainer_id: slot.employee_id,
+          class_id: slot.class_id,
+          date: currentDate,
+          timetable_slot_id: slot.id
+        }
+      });
+
+      if (!existingAttendance) {
+        await db.classattendance.create({
+          data: {
+            trainer_id: slot.employee_id,
+            class_id: slot.class_id,
+            date: currentDate,
+            timetable_slot_id: slot.id,
+            status: 'Absent',
+            location_verified: false,
+            is_online_attendance: slot.is_online_session || false,
+            // Use undefined instead of null if the schema doesn't allow null
+            work_attendance_id: null
+          }
+        });
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error marking absences:', error);
+  }
+}
+
 // GET - Get class attendance history with filters
 export async function GET(req: NextRequest) {
   try {
@@ -61,6 +138,9 @@ export async function GET(req: NextRequest) {
     const trainerId = searchParams.get('trainer_id'); // For admin viewing other trainers
     
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
+    
+    // ✅ Mark absences before fetching
+    await markMissedClassesAsAbsent(nowInKenya.toJSDate());
     
     // Default to current month if no dates provided
     const defaultStartDate = new Date(nowInKenya.year, nowInKenya.month - 1, 1);
@@ -122,6 +202,7 @@ export async function GET(req: NextRequest) {
             totalHours: '0',
             onTimeCount: 0,
             lateCount: 0,
+            absentCount: 0,
             averageDuration: '0'
           }
         });
@@ -235,6 +316,7 @@ export async function GET(req: NextRequest) {
     const completedRecords = enrichedRecords.filter(r => r.check_out_time);
     const lateRecords = enrichedRecords.filter(r => r.status === 'Late');
     const onTimeRecords = enrichedRecords.filter(r => r.status === 'Present');
+    const absentRecords = enrichedRecords.filter(r => r.status === 'Absent');
     
     let totalMinutes = 0;
     completedRecords.forEach(record => {
@@ -266,10 +348,12 @@ export async function GET(req: NextRequest) {
         totalHours: totalHoursFormatted,
         onTimeCount: onTimeRecords.length,
         lateCount: lateRecords.length,
+        absentCount: absentRecords.length, // ✅ NEW
         completedCount: completedRecords.length,
         inProgressCount: enrichedRecords.length - completedRecords.length,
         averageDuration,
-        onTimePercentage: enrichedRecords.length > 0 ? Math.round((onTimeRecords.length / enrichedRecords.length) * 100) : 0
+        onTimePercentage: enrichedRecords.length > 0 ? Math.round((onTimeRecords.length / enrichedRecords.length) * 100) : 0,
+        absentPercentage: enrichedRecords.length > 0 ? Math.round((absentRecords.length / enrichedRecords.length) * 100) : 0 // ✅ NEW
       }
     });
     

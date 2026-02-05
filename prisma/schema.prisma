@@ -70,7 +70,7 @@ model classattendance {
   trainer_id          Int
   class_id            Int
   date                DateTime         @db.Date
-  check_in_time       DateTime
+  check_in_time       DateTime?
   check_out_time      DateTime?
   status              String           @default("Present") @db.VarChar(20)
   auto_checkout       Boolean          @default(false)
