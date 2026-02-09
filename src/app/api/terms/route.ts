@@ -9,7 +9,6 @@ import { db } from '@/lib/db/db';
  */
 export async function POST(request: NextRequest) {
   try {
-    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
     const authResult = await verifyAuth(request);
     if (authResult.error || !authResult.user) {
       return NextResponse.json(
@@ -20,7 +19,6 @@ export async function POST(request: NextRequest) {
 
     const { user } = authResult;
 
-    // Check if user is admin or timetable admin
     if (user.role !== 'admin' && !user.has_timetable_admin) {
       return NextResponse.json(
         { error: "Unauthorized: Only admins and timetable admins can create terms" },
@@ -30,6 +28,16 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { name, start_date, end_date, working_days, holidays } = body;
+
+    console.log('📅 Creating term with holidays:', {
+      name,
+      start_date,
+      end_date,
+      working_days,
+      holidays,
+      holidays_type: typeof holidays,
+      holidays_length: Array.isArray(holidays) ? holidays.length : 0
+    });
 
     // Validation
     if (!name || !start_date || !end_date) {
@@ -48,6 +56,19 @@ export async function POST(request: NextRequest) {
         { error: 'Start date must be before end date' },
         { status: 400 }
       );
+    }
+
+    // Validate holidays are within term range
+    if (holidays && Array.isArray(holidays)) {
+      for (const holiday of holidays) {
+        const holidayDate = new Date(holiday);
+        if (holidayDate < startDate || holidayDate > endDate) {
+          return NextResponse.json(
+            { error: `Holiday ${holiday} is outside the term date range` },
+            { status: 400 }
+          );
+        }
+      }
     }
 
     // Check for overlapping terms
@@ -89,16 +110,25 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    // ✅ Type guard for holidays count
+    const holidaysCount = Array.isArray(term.holidays) ? term.holidays.length : 0;
+
+    console.log('✅ Term created with holidays:', {
+      id: term.id,
+      holidays: term.holidays,
+      holidays_count: holidaysCount
+    });
+
     return NextResponse.json(
       {
         success: true,
-        message: 'Term created successfully',
+        message: `Term created successfully with ${holidaysCount} holiday${holidaysCount !== 1 ? 's' : ''}`,
         data: term
       },
       { status: 201 }
     );
   } catch (error: any) {
-    console.error('Error creating term:', error);
+    console.error('❌ Error creating term:', error);
     return NextResponse.json(
       { 
         error: 'Failed to create term',
@@ -115,7 +145,6 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(request: NextRequest) {
   try {
-    // Use centralized auth that supports both web (cookies) and mobile (Authorization header)
     const authResult = await verifyAuth(request);
     if (authResult.error || !authResult.user) {
       return NextResponse.json(
@@ -130,13 +159,11 @@ export async function GET(request: NextRequest) {
 
     const whereClause: any = {};
 
-    // Filter by active status
     if (isActive === 'true') {
       whereClause.is_active = true;
     } else if (isActive === 'false') {
       whereClause.is_active = false;
     } else if (!includeInactive) {
-      // By default, only show active terms unless specified
       whereClause.is_active = true;
     }
 
