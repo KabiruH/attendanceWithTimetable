@@ -75,6 +75,7 @@ export default function TimetableAdminAssignmentSection() {
   const [terms, setTerms] = useState<Term[]>([]);
   const [availableSubjects, setAvailableSubjects] = useState<Subject[]>([]);
   const [trainerAssignments, setTrainerAssignments] = useState<TrainerAssignment[]>([]);
+  const [classesWithSubjects, setClassesWithSubjects] = useState<Set<number>>(new Set());
   
   const [selectedTrainer, setSelectedTrainer] = useState<string>('');
   const [selectedTerm, setSelectedTerm] = useState<string>('');
@@ -92,52 +93,69 @@ export default function TimetableAdminAssignmentSection() {
   const [unassigningClassId, setUnassigningClassId] = useState<number | null>(null);
   const [unassigningSubjectId, setUnassigningSubjectId] = useState<number | null>(null);
 
-const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-const [authLoading, setAuthLoading] = useState(true);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-useEffect(() => {
-  if (authLoading) return;
-  if (!authUser) return;
-  if (authUser.is_blocked) return;
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("/api/auth/check", {
+          credentials: "include",
+        });
 
-  const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
+        if (!res.ok) throw new Error("Not authenticated");
 
-  if (!hasAccess) 
-    return;
+        const data = await res.json();
+        setAuthUser(data.user);
+      } catch {
+        setAuthUser(null);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
 
-  fetchTrainers();
-   fetchClasses();  
-  fetchTerms(); 
-}, [authUser, authLoading]);
+    checkAuth();
+  }, []);
 
-// Update this function in app/timetable/page.tsx
-const fetchTrainers = async () => {
-  setIsLoadingTrainers(true)
-  try {
-    // Point to the new endpoint we just created
-    const response = await fetch('/api/trainers'); 
-    if (!response.ok) throw new Error('Failed to fetch trainers');
-    
-    const result = await response.json();
-    
-    // result.data will now be an array of { id, name, department }
-    const trainerList = result.data.map((trainer: any) => ({
-      id: trainer.id,
-      name: trainer.name,
-      department: trainer.department
-    }));
-     setTrainers(trainerList);
-  } catch (error) {
-    console.error('Error fetching trainers:', error);
-    toast({
-      title: "Error",
-      description: "Failed to load trainers",
-      variant: "destructive",
-    });
-  } finally {
-    setIsLoadingTrainers(false); // ✅ ADD THIS
-  }
-};
+  useEffect(() => {
+    if (authLoading) return;
+    if (!authUser) return;
+    if (authUser.is_blocked) return;
+
+    const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
+
+    if (!hasAccess) return;
+
+    fetchTrainers();
+    fetchClasses();  
+    fetchTerms(); 
+  }, [authUser, authLoading]);
+
+  const fetchTrainers = async () => {
+    setIsLoadingTrainers(true);
+    try {
+      const response = await fetch('/api/trainers'); 
+      if (!response.ok) throw new Error('Failed to fetch trainers');
+      
+      const result = await response.json();
+      
+      const trainerList = result.data.map((trainer: any) => ({
+        id: trainer.id,
+        name: trainer.name,
+        department: trainer.department
+      }));
+      setTrainers(trainerList);
+    } catch (error) {
+      console.error('Error fetching trainers:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load trainers",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingTrainers(false);
+    }
+  };
 
   useEffect(() => {
     if (selectedTrainer && selectedTerm) {
@@ -150,28 +168,6 @@ const fetchTrainers = async () => {
   }, [selectedTrainer, selectedTerm]);
 
   useEffect(() => {
-  const checkAuth = async () => {
-    try {
-      const res = await fetch("/api/auth/check", {
-        credentials: "include",
-      });
-
-      if (!res.ok) throw new Error("Not authenticated");
-
-      const data = await res.json();
-      setAuthUser(data.user);
-    } catch {
-      setAuthUser(null);
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  checkAuth();
-}, []);
-
-
-  useEffect(() => {
     if (selectedClass && selectedTerm && selectedTrainer) {
       fetchSubjectsForClass(parseInt(selectedClass), parseInt(selectedTerm));
     } else {
@@ -179,6 +175,15 @@ const fetchTrainers = async () => {
       setSelectedSubjects([]);
     }
   }, [selectedClass, selectedTerm, selectedTrainer]);
+
+  // ✅ NEW: Check all classes for assigned subjects
+  useEffect(() => {
+    if (trainerAssignments.length > 0 && selectedTrainer && selectedTerm) {
+      checkAllClassesForSubjects();
+    } else {
+      setClassesWithSubjects(new Set());
+    }
+  }, [trainerAssignments, selectedTerm, selectedTrainer]);
 
   const fetchClasses = async () => {
     setIsLoadingClasses(true);
@@ -271,6 +276,43 @@ const fetchTrainers = async () => {
     }
   };
 
+  // ✅ NEW: Check if a single class has assigned subjects
+  const checkClassHasAssignedSubjects = async (classId: number): Promise<boolean> => {
+    if (!selectedTrainer || !selectedTerm) return false;
+    
+    try {
+      const response = await fetch(
+        `/api/class-subjects/${classId}?term_id=${selectedTerm}&trainer_id=${selectedTrainer}`
+      );
+      
+      if (!response.ok) return false;
+      
+      const data = await response.json();
+      const assignedSubjects = data.data.filter((subject: any) => subject.is_assigned);
+      
+      return assignedSubjects.length > 0;
+    } catch (error) {
+      console.error('Error checking assigned subjects:', error);
+      return false;
+    }
+  };
+
+  // ✅ NEW: Check all assigned classes for subjects
+  const checkAllClassesForSubjects = async () => {
+    if (!selectedTrainer || !selectedTerm) return;
+    
+    const classesWithAssignedSubjects = new Set<number>();
+    
+    for (const assignment of trainerAssignments) {
+      const hasSubjects = await checkClassHasAssignedSubjects(assignment.class_id);
+      if (hasSubjects) {
+        classesWithAssignedSubjects.add(assignment.class_id);
+      }
+    }
+    
+    setClassesWithSubjects(classesWithAssignedSubjects);
+  };
+
   const handleClassToggle = (classId: number) => {
     setSelectedClasses(prev =>
       prev.includes(classId)
@@ -289,6 +331,21 @@ const fetchTrainers = async () => {
 
   const handleUnassignClass = async (classId: number) => {
     if (!selectedTrainer || !selectedTerm) return;
+
+    // ✅ NEW: Check if class has assigned subjects
+    const hasAssignedSubjects = await checkClassHasAssignedSubjects(classId);
+    
+    if (hasAssignedSubjects) {
+      const className = classes.find(c => c.id === classId)?.name || 'this class';
+      
+      toast({
+        title: "Cannot Remove Class",
+        description: `${className} has subjects currently assigned to this trainer. Please remove all assigned subjects from this class first before unassigning the class. 💡 Go to Step 3 below to unassign subjects for this class.`,
+        variant: "destructive",
+        duration: 7000,
+      });
+      return;
+    }
 
     setUnassigningClassId(classId);
     try {
@@ -359,6 +416,8 @@ const fetchTrainers = async () => {
 
       // Refresh subjects
       await fetchSubjectsForClass(parseInt(selectedClass), parseInt(selectedTerm));
+      // Refresh class subject indicators
+      await checkAllClassesForSubjects();
     } catch (error) {
       console.error('Error unassigning subject:', error);
       toast({
@@ -474,6 +533,9 @@ const fetchTrainers = async () => {
       if (selectedClass && selectedTerm) {
         await fetchSubjectsForClass(parseInt(selectedClass), parseInt(selectedTerm));
       }
+      
+      // Refresh class subject indicators
+      await checkAllClassesForSubjects();
     } catch (error) {
       console.error('Error assigning subjects:', error);
       toast({
@@ -486,40 +548,38 @@ const fetchTrainers = async () => {
     }
   };
 
- // WITH THIS:
-if (authLoading) {
-  return (
-    <div className="flex justify-center py-8">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-    </div>
-  );
-}
+  if (authLoading) {
+    return (
+      <div className="flex justify-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+      </div>
+    );
+  }
 
-if (!authUser) {
-  return (
-    <Alert variant="destructive">
-      <AlertTriangle className="h-4 w-4" />
-      <AlertDescription>
-        Please log in to access this page.
-      </AlertDescription>
-    </Alert>
-  );
-}
+  if (!authUser) {
+    return (
+      <Alert variant="destructive">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          Please log in to access this page.
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
-const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
+  const hasAccess = authUser.role === "admin" || authUser.has_timetable_admin === true;
 
-if (!hasAccess) {
-  return (
-    <Alert variant="destructive">
-      <AlertTriangle className="h-4 w-4" />
-      <AlertDescription>
-        You do not have permission to access timetable administration.
-        Only admins and timetable admins can assign classes and subjects.
-      </AlertDescription>
-    </Alert>
-  );
-}
-
+  if (!hasAccess) {
+    return (
+      <Alert variant="destructive">
+        <AlertTriangle className="h-4 w-4" />
+        <AlertDescription>
+          You do not have permission to access timetable administration.
+          Only admins and timetable admins can assign classes and subjects.
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   return (
     <div className="space-y-6 mt-11">
@@ -609,7 +669,7 @@ if (!hasAccess) {
               <AlertDescription>
                 Select the classes this trainer will teach during the selected term.
                 <span className="block mt-1 text-xs">
-                  🟢 Green background = Already assigned | Select to assign new classes
+                  🟢 Green = Already assigned | 🔴 Red "Has Subjects" badge = Remove subjects before unassigning class
                 </span>
               </AlertDescription>
             </Alert>
@@ -650,20 +710,28 @@ if (!hasAccess) {
                           htmlFor={`class-${cls.id}`}
                           className={`flex-1 ${cls.is_assigned ? 'ml-3' : 'cursor-pointer'}`}
                         >
-                          <span className="font-medium">{cls.code}</span>
-                          <span className="text-sm text-gray-600 ml-2">
-                            {cls.name}
-                          </span>
-                          {cls.department && (
-                            <Badge variant="outline" className="ml-2">
-                              {cls.department}
-                            </Badge>
-                          )}
-                          {cls.is_assigned && (
-                            <Badge variant="default" className="ml-2 bg-green-600">
-                              Assigned
-                            </Badge>
-                          )}
+                          <div className="flex items-center flex-wrap gap-2">
+                            <span className="font-medium">{cls.code}</span>
+                            <span className="text-sm text-gray-600">
+                              {cls.name}
+                            </span>
+                            {cls.department && (
+                              <Badge variant="outline">
+                                {cls.department}
+                              </Badge>
+                            )}
+                            {cls.is_assigned && (
+                              <Badge variant="default" className="bg-green-600">
+                                Assigned
+                              </Badge>
+                            )}
+                            {/* ✅ NEW: Show warning if class has assigned subjects */}
+                            {cls.is_assigned && classesWithSubjects.has(cls.id) && (
+                              <Badge variant="destructive" className="animate-pulse">
+                                ⚠ Has Subjects
+                              </Badge>
+                            )}
+                          </div>
                         </Label>
                       </div>
                       
@@ -732,7 +800,7 @@ if (!hasAccess) {
               <AlertDescription>
                 After assigning classes, select which subjects within each class the trainer will teach.
                 <span className="block mt-1 text-xs">
-                  🟢 Green background = Already assigned to this class | Select to assign new subjects
+                  🟢 Green = Already assigned to this class | 🟡 Yellow = Assigned to another class
                 </span>
               </AlertDescription>
             </Alert>
@@ -756,6 +824,7 @@ if (!hasAccess) {
                         .map((cls) => (
                           <SelectItem key={cls.id} value={cls.id.toString()}>
                             {cls.code} - {cls.name}
+                            {classesWithSubjects.has(cls.id) && ' ⚠'}
                           </SelectItem>
                         ))
                     )}
