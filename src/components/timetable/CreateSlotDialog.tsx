@@ -73,6 +73,7 @@ export default function CreateSlotDialog({
 }: CreateSlotDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [loadingClasses, setLoadingClasses] = useState(false);
   
   // Form data
   const [formData, setFormData] = useState({
@@ -103,27 +104,41 @@ export default function CreateSlotDialog({
   ];
 
   useEffect(() => {
-    if (open) {
+    if (open && selectedTerm) {
       fetchOptions();
       resetForm();
     }
-  }, [open]);
+  }, [open, selectedTerm]);
 
   // Fetch subjects when class is selected
   useEffect(() => {
-    if (formData.class_id) {
+    if (formData.class_id && selectedTerm) {
       fetchSubjectsForClass(parseInt(formData.class_id));
     } else {
       setAvailableSubjects([]);
       setFormData(prev => ({ ...prev, subject_id: '' }));
     }
-  }, [formData.class_id]);
+  }, [formData.class_id, selectedTerm]);
 
   const fetchOptions = async () => {
+    if (!selectedTerm) {
+      setError('No term selected');
+      return;
+    }
+
     try {
-      // Fetch classes assigned to the selected term
+      setLoadingClasses(true);
+
+      // ✅ Fetch classes that have subjects assigned for this term
       const classesRes = await fetch(`/api/terms/${selectedTerm}/classes`);
+      
+      if (!classesRes.ok) {
+        throw new Error('Failed to fetch classes for this term');
+      }
+      
       const classesData = await classesRes.json();
+      console.log('📚 Classes for term:', classesData);
+      
       setClasses(classesData.data || classesData || []);
 
       // Fetch trainers (employees)
@@ -143,23 +158,41 @@ export default function CreateSlotDialog({
     } catch (error) {
       console.error('Error fetching options:', error);
       setError('Failed to load form options');
+    } finally {
+      setLoadingClasses(false);
     }
   };
 
   const fetchSubjectsForClass = async (classId: number) => {
+    if (!selectedTerm) {
+      setError('No term selected');
+      return;
+    }
+
     setLoadingSubjects(true);
+    setError('');
+    
     try {
-      // Fetch subjects assigned to this class
-      const response = await fetch(`/api/classes/${classId}/subjects`);
+      const response = await fetch(`/api/admin/classes/${classId}/subjects?term_id=${selectedTerm}`);
       const data = await response.json();
       
+      console.log('📚 Subjects response:', data);
+      
       if (response.ok) {
-        // Extract subjects from ClassSubjects
-        const subjects = data.map((cs: ClassSubject) => cs.subject);
+        // Extract subjects from response - handle both formats
+        const subjects = data.map((item: any) => {
+          // Handle format: { subject: {...} }
+          if (item.subject) return item.subject;
+          // Handle format: { subjects: {...} }
+          if (item.subjects) return item.subjects;
+          // Handle direct subject object
+          return item;
+        }).filter(Boolean);
+        
         setAvailableSubjects(subjects);
       } else {
         setAvailableSubjects([]);
-        setError('Failed to load subjects for selected class');
+        console.warn('Failed to load subjects:', data);
       }
     } catch (error) {
       console.error('Error fetching subjects:', error);
@@ -248,20 +281,30 @@ export default function CreateSlotDialog({
             </Alert>
           )}
 
+          {/* Term info banner */}
+          {selectedTerm && (
+            <Alert>
+              <AlertDescription>
+                Creating slot for <strong>selected term</strong>. Only classes and subjects assigned to this term are shown.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Class Selection */}
           <div className="space-y-2">
             <Label htmlFor="class">Class *</Label>
             <Select
               value={formData.class_id}
               onValueChange={(value) => setFormData({ ...formData, class_id: value, subject_id: '' })}
+              disabled={loadingClasses}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select class first" />
+                <SelectValue placeholder={loadingClasses ? "Loading classes..." : "Select class first"} />
               </SelectTrigger>
               <SelectContent>
                 {classes.length === 0 ? (
                   <div className="p-2 text-sm text-muted-foreground">
-                    No classes assigned to this term
+                    {loadingClasses ? "Loading..." : "No classes with subjects assigned to this term"}
                   </div>
                 ) : (
                   classes.map((cls) => (
@@ -305,7 +348,7 @@ export default function CreateSlotDialog({
                 {availableSubjects.length === 0 ? (
                   <div className="p-2 text-sm text-muted-foreground">
                     {formData.class_id 
-                      ? "No subjects assigned to this class" 
+                      ? "No subjects assigned to this class for this term" 
                       : "Select a class first"}
                   </div>
                 ) : (
@@ -445,7 +488,7 @@ export default function CreateSlotDialog({
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || loadingClasses}
             >
               {isSubmitting ? 'Creating...' : 'Create Slot'}
             </Button>
