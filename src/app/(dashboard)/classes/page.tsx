@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { PlusCircle, Upload, Download, Settings, User, Search, X } from "lucide-react";
+import { PlusCircle, Upload, Download, Settings, User, Search, X, Calendar } from "lucide-react";
 import {
     AlertDialog,
     AlertDialogAction,
@@ -17,6 +17,14 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import ClassesTable from '@/components/classes/ClassesTable';
 import ClassesForm from '@/components/classes/ClassesForm';
 import ClassSelection from '@/components/classes/ClassSelection';
@@ -42,11 +50,21 @@ interface User {
     department: string;
 }
 
+interface Term {
+    id: number;
+    name: string;
+    start_date: string;
+    end_date: string;
+    is_active: boolean;
+}
+
 export default function ClassesPage() {
     // State management
     const [user, setUser] = useState<User | null>(null);
     const [userRole, setUserRole] = useState<string | null>(null);
     const [classes, setClasses] = useState<Class[]>([]);
+    const [terms, setTerms] = useState<Term[]>([]);
+    const [selectedTerm, setSelectedTerm] = useState<number | null>(null);
     const [searchTerm, setSearchTerm] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,7 +84,7 @@ export default function ClassesPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const isAdmin = userRole === 'admin';
-    const isTrainer = userRole === 'employee'; // All employees can potentially be trainers
+    const isTrainer = userRole === 'employee';
 
     // Filtered classes based on search term
     const filteredClasses = useMemo(() => {
@@ -90,6 +108,11 @@ export default function ClassesPage() {
         authenticateUser();
     }, []);
 
+    // ✅ Fetch terms on mount
+    useEffect(() => {
+        fetchTerms();
+    }, []);
+
     const authenticateUser = async () => {
         try {
             const authResponse = await fetch("/api/auth/check", { method: "GET" });
@@ -104,7 +127,28 @@ export default function ClassesPage() {
             setUserRole(user.role);
         } catch (error) {
             console.error('Error authenticating user:', error);
-            // Handle auth error - redirect to login or show error
+        }
+    };
+
+    // ✅ Fetch available terms
+    const fetchTerms = async () => {
+        try {
+            const response = await fetch('/api/terms');
+            if (!response.ok) throw new Error('Failed to fetch terms');
+            const data = await response.json();
+            setTerms(data.data || []);
+
+            // Try to get active term
+            const activeResponse = await fetch('/api/terms/active');
+            if (activeResponse.ok) {
+                const activeData = await activeResponse.json();
+                setSelectedTerm(activeData.data.id);
+            } else if (data.data.length > 0) {
+                // Default to first term if no active term
+                setSelectedTerm(data.data[0].id);
+            }
+        } catch (error) {
+            console.error('Error fetching terms:', error);
         }
     };
 
@@ -123,9 +167,8 @@ export default function ClassesPage() {
     useEffect(() => {
         if (userRole) {
             if (isAdmin) {
-                fetchClasses(); // Admin fetches all classes directly
+                fetchClasses();
             } else {
-                // For employees, just set loading to false - ClassSelection handles its own data
                 setIsLoading(false);
             }
         }
@@ -135,20 +178,6 @@ export default function ClassesPage() {
     const fetchClasses = async () => {
         try {
             const response = await fetch('/api/classes');
-            if (!response.ok) throw new Error('Failed to fetch classes');
-            const data = await response.json();
-            setClasses(data);
-        } catch (error) {
-            console.error('Error fetching classes:', error);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    // API Functions for employees (fetch only active classes)
-    const fetchActiveClasses = async () => {
-        try {
-            const response = await fetch('/api/classes?active_only=true');
             if (!response.ok) throw new Error('Failed to fetch classes');
             const data = await response.json();
             setClasses(data);
@@ -319,16 +348,13 @@ export default function ClassesPage() {
 
     // Callback functions to handle component synchronization
     const handleClassSelectionSaved = () => {
-        // Only refresh MyClasses when selection is actually SAVED
         setRefreshMyClasses(prev => prev + 1);
     };
 
     const handleClassRemoved = () => {
-        // When a class is removed from MyClasses, refresh ClassSelection to update checkboxes
         setRefreshClassSelection(prev => prev + 1);
     };
 
-    // For employees, we get classes from the ClassSelection component instead
     const handleClassesLoaded = (loadedClasses: Class[]) => {
         setClasses(loadedClasses);
         setIsLoading(false);
@@ -368,185 +394,221 @@ export default function ClassesPage() {
                 </Alert>
             )}
 
-            {/* Role-based content */}
-            {isAdmin ? (
-                // ADMIN VIEW
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-                    <TabsList>
-                        <TabsTrigger value="manage" className="flex items-center gap-2">
-                            <Settings className="h-4 w-4" />
-                            Manage Classes
-                        </TabsTrigger>
-                        <TabsTrigger value="select" className="flex items-center gap-2">
-                            <User className="h-4 w-4" />
-                            My Teaching
-                        </TabsTrigger>
-                    </TabsList>
+            {/* ✅ Term Selection - Show for both admin and trainers */}
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <Label htmlFor="term" className="flex items-center gap-2 mb-2">
+                    <Calendar className="h-4 w-4" />
+                    <span className="font-semibold">Select Term</span>
+                </Label>
+                <Select
+                    value={selectedTerm?.toString()}
+                    onValueChange={(value) => setSelectedTerm(parseInt(value))}
+                >
+                    <SelectTrigger className="bg-white max-w-md">
+                        <SelectValue placeholder="Select a term" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {terms.map((term) => (
+                            <SelectItem key={term.id} value={term.id.toString()}>
+                                {term.name} {term.is_active && '(Active)'}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-2">
+                    Class assignments and subjects are term-specific. Select the term to view or manage.
+                </p>
+            </div>
 
-                    <TabsContent value="manage" className="space-y-6">
-                        {/* Search Section */}
-                        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-                            <div className="relative flex-1 max-w-md">
-                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                                <Input
-                                    placeholder="Search by class name, code, or department..."
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="pl-10 pr-10"
-                                />
-                                {searchTerm && (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={clearSearch}
-                                        className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0 hover:bg-gray-200"
-                                    >
-                                        <X className="h-3 w-3" />
-                                    </Button>
-                                )}
-                            </div>
-                            
-                            {/* Results count */}
-                            {searchTerm && (
-                                <div className="text-sm text-gray-500">
-                                    {filteredClasses.length} of {classes.length} classes found
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Admin Controls */}
-                        <div className="flex justify-end gap-2">
-                            <Button
-                                variant="outline"
-                                onClick={downloadTemplate}
-                            >
-                                <Download className="mr-2 h-4 w-4" />
-                                Download Template
-                            </Button>
-                            <Button
-                                variant="outline"
-                                onClick={() => fileInputRef.current?.click()}
-                                disabled={isImporting}
-                            >
-                                <Upload className="mr-2 h-4 w-4" />
-                                {isImporting ? 'Importing...' : 'Import Excel'}
-                            </Button>
-                            <Button onClick={handleOpenForm}>
-                                <PlusCircle className="mr-2 h-4 w-4" />
-                                Add Class
-                            </Button>
-                        </div>
-
-                        {/* No results message */}
-                        {searchTerm && filteredClasses.length === 0 && (
-                            <div className="text-center py-8 text-gray-500">
-                                <Search className="mx-auto h-12 w-12 text-gray-300 mb-4" />
-                                <p className="text-lg font-medium">No classes found</p>
-                                <p className="text-sm">Try adjusting your search terms</p>
-                                <Button
-                                    variant="outline"
-                                    onClick={clearSearch}
-                                    className="mt-3"
-                                >
-                                    Clear search
-                                </Button>
-                            </div>
-                        )}
-
-                        {/* Classes Table */}
-                        {(!searchTerm || filteredClasses.length > 0) && (
-                            <ClassesTable
-                                classes={filteredClasses}
-                                onEdit={handleEdit}
-                                onDeactivate={handleDeactivate}
-                            />
-                        )}
-                    </TabsContent>
-
-                    <TabsContent value="select" className="space-y-6">
-                        {/* Admin's Teaching Assignments */}
-                        <div className="grid gap-6 lg:grid-cols-1">
-                            <MyClasses
-                                userId={user.id}
-                                showRemoveOption={true}
-                                onClassRemoved={handleClassRemoved}
-                                key={`classes-${refreshMyClasses}`}
-                            />
-                            <ClassSelection
-                                userId={user.id}
-                                onSelectionSaved={handleClassSelectionSaved}
-                                key={`selection-${refreshClassSelection}`}
-                            />
-                        </div>
-                    </TabsContent>
-                </Tabs>
-            ) : (
-                // TRAINER VIEW  
-                <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-                    <TabsList>
-                        <TabsTrigger value="select" className="flex items-center gap-2">
-                            <PlusCircle className="h-4 w-4" />
-                            Select Classes
-                        </TabsTrigger>
-                        <TabsTrigger value="my-classes" className="flex items-center gap-2">
-                            <User className="h-4 w-4" />
-                            My Classes
-                        </TabsTrigger>
-                    </TabsList>
-
-                    <TabsContent value="select" className="space-y-6">
-                        {/* Search Section for Employee - Class Selection */}
-                        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-                            <div className="relative flex-1 max-w-md">
-                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                                <Input
-                                    placeholder="Search available classes..."
-                                    value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
-                                    className="pl-10 pr-10"
-                                />
-                                {searchTerm && (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={clearSearch}
-                                        className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0 hover:bg-gray-200"
-                                    >
-                                        <X className="h-3 w-3" />
-                                    </Button>
-                                )}
-                            </div>
-                            
-                            {/* Results count - only show if we have classes data */}
-                            {searchTerm && classes.length > 0 && (
-                                <div className="text-sm text-gray-500">
-                                    {filteredClasses.length} of {classes.length} classes found
-                                </div>
-                            )}
-                        </div>
-
-                        {/* ClassSelection Component - always show, it handles its own search */}
-                        <ClassSelection
-                            userId={user.id}
-                            onSelectionSaved={handleClassSelectionSaved}
-                            searchTerm={searchTerm}
-                            onClassesLoaded={handleClassesLoaded}
-                            key={`selection-${refreshClassSelection}`}
-                        />
-                    </TabsContent>
-
-                    <TabsContent value="my-classes" className="space-y-6">
-                        <MyClasses
-                            userId={user.id}
-                            showRemoveOption={true}
-                            onClassRemoved={handleClassRemoved}
-                            key={`classes-${refreshMyClasses}`}
-                        />
-                    </TabsContent>
-                </Tabs>
+            {/* Show warning if no term selected */}
+            {!selectedTerm && (
+                <Alert className="mb-6">
+                    <AlertDescription>
+                        Please select a term above to view and manage classes.
+                    </AlertDescription>
+                </Alert>
             )}
 
-            {/* Hidden file input */}
+            {/* Role-based content - Only show if term is selected */}
+            {selectedTerm && (
+                <>
+                    {isAdmin ? (
+                        // ADMIN VIEW
+                        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+                            <TabsList>
+                                <TabsTrigger value="manage" className="flex items-center gap-2">
+                                    <Settings className="h-4 w-4" />
+                                    Manage Classes
+                                </TabsTrigger>
+                                <TabsTrigger value="select" className="flex items-center gap-2">
+                                    <User className="h-4 w-4" />
+                                    My Teaching
+                                </TabsTrigger>
+                            </TabsList>
+
+                            <TabsContent value="manage" className="space-y-6">
+                                {/* Search Section */}
+                                <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                                    <div className="relative flex-1 max-w-md">
+                                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                                        <Input
+                                            placeholder="Search by class name, code, or department..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                            className="pl-10 pr-10"
+                                        />
+                                        {searchTerm && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={clearSearch}
+                                                className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0 hover:bg-gray-200"
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </Button>
+                                        )}
+                                    </div>
+                                    
+                                    {searchTerm && (
+                                        <div className="text-sm text-gray-500">
+                                            {filteredClasses.length} of {classes.length} classes found
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Admin Controls */}
+                                <div className="flex justify-end gap-2">
+                                    <Button
+                                        variant="outline"
+                                        onClick={downloadTemplate}
+                                    >
+                                        <Download className="mr-2 h-4 w-4" />
+                                        Download Template
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        disabled={isImporting}
+                                    >
+                                        <Upload className="mr-2 h-4 w-4" />
+                                        {isImporting ? 'Importing...' : 'Import Excel'}
+                                    </Button>
+                                    <Button onClick={handleOpenForm}>
+                                        <PlusCircle className="mr-2 h-4 w-4" />
+                                        Add Class
+                                    </Button>
+                                </div>
+
+                                {searchTerm && filteredClasses.length === 0 && (
+                                    <div className="text-center py-8 text-gray-500">
+                                        <Search className="mx-auto h-12 w-12 text-gray-300 mb-4" />
+                                        <p className="text-lg font-medium">No classes found</p>
+                                        <p className="text-sm">Try adjusting your search terms</p>
+                                        <Button
+                                            variant="outline"
+                                            onClick={clearSearch}
+                                            className="mt-3"
+                                        >
+                                            Clear search
+                                        </Button>
+                                    </div>
+                                )}
+
+                                {(!searchTerm || filteredClasses.length > 0) && (
+                                    <ClassesTable
+                                        classes={filteredClasses}
+                                        termId={selectedTerm} 
+                                        onEdit={handleEdit}
+                                        onDeactivate={handleDeactivate}
+                                    />
+                                )}
+                            </TabsContent>
+
+                            <TabsContent value="select" className="space-y-6">
+                                <div className="grid gap-6 lg:grid-cols-1">
+                                    <MyClasses
+                                        userId={user.id}
+                                        termId={selectedTerm}
+                                        showRemoveOption={true}
+                                        onClassRemoved={handleClassRemoved}
+                                        key={`classes-${refreshMyClasses}-${selectedTerm}`}
+                                    />
+                                    <ClassSelection
+                                        userId={user.id}
+                                        termId={selectedTerm}
+                                        onSelectionSaved={handleClassSelectionSaved}
+                                        key={`selection-${refreshClassSelection}-${selectedTerm}`}
+                                    />
+                                </div>
+                            </TabsContent>
+                        </Tabs>
+                    ) : (
+                        // TRAINER VIEW  
+                        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+                            <TabsList>
+                                <TabsTrigger value="select" className="flex items-center gap-2">
+                                    <PlusCircle className="h-4 w-4" />
+                                    Select Classes
+                                </TabsTrigger>
+                                <TabsTrigger value="my-classes" className="flex items-center gap-2">
+                                    <User className="h-4 w-4" />
+                                    My Classes
+                                </TabsTrigger>
+                            </TabsList>
+
+                            <TabsContent value="select" className="space-y-6">
+                                <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                                    <div className="relative flex-1 max-w-md">
+                                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                                        <Input
+                                            placeholder="Search available classes..."
+                                            value={searchTerm}
+                                            onChange={(e) => setSearchTerm(e.target.value)}
+                                            className="pl-10 pr-10"
+                                        />
+                                        {searchTerm && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={clearSearch}
+                                                className="absolute right-1 top-1/2 transform -translate-y-1/2 h-7 w-7 p-0 hover:bg-gray-200"
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </Button>
+                                        )}
+                                    </div>
+                                    
+                                    {searchTerm && classes.length > 0 && (
+                                        <div className="text-sm text-gray-500">
+                                            {filteredClasses.length} of {classes.length} classes found
+                                        </div>
+                                    )}
+                                </div>
+
+                                <ClassSelection
+                                    userId={user.id}
+                                    termId={selectedTerm}
+                                    onSelectionSaved={handleClassSelectionSaved}
+                                    searchTerm={searchTerm}
+                                    onClassesLoaded={handleClassesLoaded}
+                                    key={`selection-${refreshClassSelection}-${selectedTerm}`}
+                                />
+                            </TabsContent>
+
+                            <TabsContent value="my-classes" className="space-y-6">
+                                <MyClasses
+                                    userId={user.id}
+                                    termId={selectedTerm}
+                                    showRemoveOption={true}
+                                    onClassRemoved={handleClassRemoved}
+                                    key={`classes-${refreshMyClasses}-${selectedTerm}`}
+                                />
+                            </TabsContent>
+                        </Tabs>
+                    )}
+                </>
+            )}
+
             <input
                 ref={fileInputRef}
                 type="file"
@@ -555,10 +617,8 @@ export default function ClassesPage() {
                 className="hidden"
             />
 
-            {/* Admin-only dialogs */}
             {isAdmin && (
                 <>
-                    {/* Classes Form Dialog */}
                     <ClassesForm
                         isOpen={isFormOpen}
                         onClose={handleCloseForm}
@@ -568,7 +628,6 @@ export default function ClassesPage() {
                         error={error}
                     />
 
-                    {/* Deactivation Confirmation Dialog */}
                     <AlertDialog
                         open={!!deactivatingClass}
                         onOpenChange={() => setDeactivatingClass(null)}

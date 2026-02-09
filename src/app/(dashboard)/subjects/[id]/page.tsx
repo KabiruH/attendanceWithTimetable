@@ -88,6 +88,9 @@ export default function ManageClassSubjectsPage() {
   useEffect(() => {
     if (classId && !isNaN(classId) && selectedTerm) {
       fetchAssignedSubjects();
+    } else if (!selectedTerm) {
+      // ✅ Clear assigned subjects if no term selected
+      setAssignedSubjects([]);
     }
   }, [classId, selectedTerm]);
 
@@ -140,12 +143,24 @@ export default function ManageClassSubjectsPage() {
     }
   };
 
+  // ✅ UPDATED: Filter assigned subjects by selected term
   const fetchAssignedSubjects = async () => {
+    if (!selectedTerm) {
+      setAssignedSubjects([]);
+      return;
+    }
+
     try {
-      const response = await fetch(`/api/admin/classes/${classId}/subjects`);
+      const response = await fetch(`/api/admin/classes/${classId}/subjects?term_id=${selectedTerm}`);
       if (!response.ok) throw new Error("Failed to fetch assigned subjects");
       const data = await response.json();
-      setAssignedSubjects(data);
+      
+      // ✅ Filter by term_id on the client side as well (defensive programming)
+      const filteredData = data.filter((subject: AssignedSubject) => 
+        subject.term_id === selectedTerm
+      );
+      
+      setAssignedSubjects(filteredData);
     } catch (error) {
       console.error("Error fetching assigned subjects:", error);
       toast.error("Failed to load assigned subjects");
@@ -165,7 +180,7 @@ export default function ManageClassSubjectsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           subjectId,
-          term_id: selectedTerm // ✅ NOW SENDING TERM_ID!
+          term_id: selectedTerm
         }),
       });
 
@@ -209,7 +224,7 @@ export default function ManageClassSubjectsPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
               subjectId,
-              term_id: selectedTerm // ✅ NOW SENDING TERM_ID!
+              term_id: selectedTerm
             }),
           });
 
@@ -247,29 +262,29 @@ export default function ManageClassSubjectsPage() {
     );
   };
 
-const handleRemoveSubject = async (classSubjectId: number) => {
-  try {
-    const response = await fetch(`/api/class-subjects/${classSubjectId}`, {  // ✅ Fixed
-      method: "DELETE" 
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || "Failed to remove subject");
+  const handleRemoveSubject = async (classSubjectId: number) => {
+    try {
+      const response = await fetch(`/api/class-subjects/${classSubjectId}`, {
+        method: "DELETE" 
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to remove subject");
+      }
+      
+      const removedSubject = assignedSubjects.find((as) => as.id === classSubjectId);
+      if (removedSubject) {
+        setAssignedSubjects((prev) => prev.filter((as) => as.id !== classSubjectId));
+        setAvailableSubjects((prev) => [...prev, removedSubject.subject]);
+      }
+      
+      toast.success("Subject removed successfully");
+    } catch (error: any) {
+      console.error("Error removing subject:", error);
+      toast.error(error.message || "Failed to remove subject");
     }
-    
-    const removedSubject = assignedSubjects.find((as) => as.id === classSubjectId);
-    if (removedSubject) {
-      setAssignedSubjects((prev) => prev.filter((as) => as.id !== classSubjectId));
-      setAvailableSubjects((prev) => [...prev, removedSubject.subject]);
-    }
-    
-    toast.success("Subject removed successfully");
-  } catch (error: any) {
-    console.error("Error removing subject:", error);
-    toast.error(error.message || "Failed to remove subject");
-  }
-};
+  };
 
   const handleAddSubjectSuccess = (newSubject: Subject) => {
     setAvailableSubjects((prev) => [newSubject, ...prev]);
@@ -329,13 +344,13 @@ const handleRemoveSubject = async (classSubjectId: number) => {
             <div className="flex items-center gap-4 text-muted-foreground">
               <span>{classData.department}</span>
               <span>•</span>
-              <span>{assignedSubjects.length} subjects assigned</span>
+              <span>{assignedSubjects.length} subjects assigned {selectedTerm && `for selected term`}</span>
             </div>
           </div>
         )}
       </div>
 
-      {/* ✅ NEW: Term Selection */}
+      {/* ✅ Term Selection */}
       <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <Label htmlFor="term" className="flex items-center gap-2 mb-2">
           <Calendar className="h-4 w-4" />
@@ -357,7 +372,7 @@ const handleRemoveSubject = async (classSubjectId: number) => {
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground mt-2">
-          Subject assignments are term-specific. Select the term you're adding subjects for.
+          Subject assignments are term-specific. Changing the term will show subjects assigned to that specific term only.
         </p>
       </div>
 
@@ -365,7 +380,7 @@ const handleRemoveSubject = async (classSubjectId: number) => {
       {!selectedTerm && (
         <Alert className="mb-6">
           <AlertDescription>
-            Please select a term above to assign subjects to this class.
+            Please select a term above to view and assign subjects for this class.
           </AlertDescription>
         </Alert>
       )}
@@ -385,7 +400,10 @@ const handleRemoveSubject = async (classSubjectId: number) => {
             onToggleSubject={handleToggleSubject}
             onBatchAssign={handleBatchAssign}
           />
-          <AssignedSubjectsList subjects={assignedSubjects} onRemoveSubject={handleRemoveSubject} />
+          <AssignedSubjectsList 
+            subjects={assignedSubjects} 
+            onRemoveSubject={handleRemoveSubject} 
+          />
         </div>
       )}
 

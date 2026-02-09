@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BookOpen } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 
 interface Class {
   id: number;
@@ -21,12 +22,66 @@ interface Class {
 
 interface ClassesTableProps {
   classes: Class[];
+  termId: number | null; // ✅ ADDED
   onEdit: (classItem: Class) => void;
   onDeactivate: (classItem: Class) => void;
 }
 
-export default function ClassesTable({ classes, onEdit, onDeactivate }: ClassesTableProps) {
+interface ClassSubjectCount {
+  [classId: number]: number;
+}
+
+export default function ClassesTable({ classes, termId, onEdit, onDeactivate }: ClassesTableProps) {
   const router = useRouter();
+  const [subjectCounts, setSubjectCounts] = useState<ClassSubjectCount>({});
+  const [loadingCounts, setLoadingCounts] = useState(false);
+
+  // ✅ Fetch subject counts for each class based on selected term
+  useEffect(() => {
+    if (termId && classes.length > 0) {
+      fetchSubjectCounts();
+    } else {
+      setSubjectCounts({});
+    }
+  }, [termId, classes]);
+
+  const fetchSubjectCounts = async () => {
+    if (!termId) return;
+    
+    setLoadingCounts(true);
+    try {
+      // Fetch subject counts for all classes in parallel
+      const countPromises = classes.map(async (classItem) => {
+        try {
+          const response = await fetch(`/api/admin/classes/${classItem.id}/subjects?term_id=${termId}`);
+          if (!response.ok) return { classId: classItem.id, count: 0 };
+          
+          const data = await response.json();
+          return { 
+            classId: classItem.id, 
+            count: Array.isArray(data) ? data.length : 0 
+          };
+        } catch (error) {
+          console.error(`Error fetching subjects for class ${classItem.id}:`, error);
+          return { classId: classItem.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.all(countPromises);
+      
+      // Convert array to object for easy lookup
+      const countsObj = results.reduce((acc, { classId, count }) => {
+        acc[classId] = count;
+        return acc;
+      }, {} as ClassSubjectCount);
+      
+      setSubjectCounts(countsObj);
+    } catch (error) {
+      console.error('Error fetching subject counts:', error);
+    } finally {
+      setLoadingCounts(false);
+    }
+  };
 
   const handleManageSubjects = (classId: number) => {
     router.push(`/subjects/${classId}`);
@@ -40,7 +95,9 @@ export default function ClassesTable({ classes, onEdit, onDeactivate }: ClassesT
             <th className="h-12 px-4 text-left align-middle font-medium">Class Name</th>
             <th className="h-12 px-4 text-left align-middle font-medium">Code</th>
             <th className="h-12 px-4 text-left align-middle font-medium">Department</th>
-            <th className="h-12 px-4 text-left align-middle font-medium">Subjects</th>
+            <th className="h-12 px-4 text-left align-middle font-medium">
+              Subjects {termId && '(This Term)'}
+            </th>
             <th className="h-12 px-4 text-left align-middle font-medium">Status</th>
             <th className="h-12 px-4 text-left align-middle font-medium">Actions</th>
           </tr>
@@ -61,9 +118,21 @@ export default function ClassesTable({ classes, onEdit, onDeactivate }: ClassesT
               </td>
               <td className="p-4 align-middle">{classItem.department}</td>
               <td className="p-4 align-middle">
-                <Badge variant="secondary" className="text-sm">
-                  {classItem._count?.subjects || 0} Total
-                </Badge>
+                {termId ? (
+                  loadingCounts ? (
+                    <Badge variant="outline" className="text-sm">
+                      Loading...
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-sm">
+                      {subjectCounts[classItem.id] || 0} Subject{subjectCounts[classItem.id] !== 1 ? 's' : ''}
+                    </Badge>
+                  )
+                ) : (
+                  <Badge variant="secondary" className="text-sm">
+                    {classItem._count?.subjects || 0} Total
+                  </Badge>
+                )}
               </td>
               <td className="p-4 align-middle">
                 <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${

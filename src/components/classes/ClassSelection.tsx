@@ -1,11 +1,12 @@
 //components/classes/classSelection.tsx
+'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Clock, Users, Building, Calendar, Ban, AlertTriangle } from "lucide-react"; // Added AlertTriangle
+import { Clock, Users, Building, Calendar, Ban, AlertTriangle, CheckCircle } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -37,22 +38,22 @@ interface Term {
 
 interface ClassSelectionProps {
   userId: number;
+  termId: number;
   onSelectionSaved?: () => void;
   searchTerm?: string;
   onClassesLoaded?: (classes: Class[]) => void;
 }
 
 export default function ClassSelection({ 
-  userId, 
+  userId,
+  termId,
   onSelectionSaved, 
   searchTerm = '',
   onClassesLoaded 
 }: ClassSelectionProps) {
   const [availableClasses, setAvailableClasses] = useState<Class[]>([]);
-  const [terms, setTerms] = useState<Term[]>([]);
-  const [selectedTerm, setSelectedTerm] = useState<number | null>(null);
   const [selectedClassIds, setSelectedClassIds] = useState<number[]>([]);
-  const [savedClassIds, setSavedClassIds] = useState<number[]>([]);
+  const [assignedClassIds, setAssignedClassIds] = useState<number[]>([]); // ✅ Track which classes are already assigned
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
@@ -60,41 +61,39 @@ export default function ClassSelection({
   const [isBlocked, setIsBlocked] = useState(false);
   const [blockMessage, setBlockMessage] = useState('');
   const [isGloballyBlocked, setIsGloballyBlocked] = useState(false);
-  const [checkingBlock, setCheckingBlock] = useState(true); // NEW: Loading state for block check
+  const [checkingBlock, setCheckingBlock] = useState(true);
 
-  // Computed: Can user select classes?
   const canSelect = !isBlocked && !isGloballyBlocked;
 
-  // Filter classes based on search term
-  const filteredClasses = useMemo(() => {
-    if (!searchTerm.trim()) return availableClasses;
+  // ✅ Filter classes and separate assigned/unassigned
+  const { assignedClasses, unassignedClasses } = useMemo(() => {
+    let filtered = availableClasses;
     
-    const term = searchTerm.toLowerCase();
-    return availableClasses.filter(classItem => 
-      classItem.name.toLowerCase().includes(term) ||
-      classItem.code.toLowerCase().includes(term) ||
-      classItem.department.toLowerCase().includes(term)
-    );
-  }, [availableClasses, searchTerm]);
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      filtered = availableClasses.filter(classItem => 
+        classItem.name.toLowerCase().includes(term) ||
+        classItem.code.toLowerCase().includes(term) ||
+        classItem.department.toLowerCase().includes(term)
+      );
+    }
+    
+    const assigned = filtered.filter(c => assignedClassIds.includes(c.id));
+    const unassigned = filtered.filter(c => !assignedClassIds.includes(c.id));
+    
+    return { assignedClasses: assigned, unassignedClasses: unassigned };
+  }, [availableClasses, searchTerm, assignedClassIds]);
 
-  // ✅ Check block status on mount
   useEffect(() => {
     checkBlockStatus();
   }, []);
 
-  // ✅ Fetch terms on mount
   useEffect(() => {
-    fetchTerms();
-  }, []);
-
-  // ✅ Fetch classes and assignments when term changes
-  useEffect(() => {
-    if (selectedTerm) {
+    if (userId && termId) {
       fetchClassesAndAssignments();
     }
-  }, [userId, selectedTerm]);
+  }, [userId, termId]);
 
-  // Send classes to parent when they're loaded
   useEffect(() => {
     if (availableClasses.length > 0) {
       onClassesLoaded?.(availableClasses);
@@ -104,7 +103,6 @@ export default function ClassSelection({
   const checkBlockStatus = async () => {
     setCheckingBlock(true);
     try {
-      // Check if user is individually blocked
       const userResponse = await fetch('/api/auth/check');
       const userData = await userResponse.json();
       
@@ -119,7 +117,6 @@ export default function ClassSelection({
         return;
       }
 
-      // Check if globally blocked
       const settingsResponse = await fetch('/api/timetable-settings');
       const settingsData = await settingsResponse.json();
       
@@ -134,71 +131,47 @@ export default function ClassSelection({
     }
   };
 
-  // ✅ NEW: Fetch available terms
-  const fetchTerms = async () => {
-    try {
-      const response = await fetch('/api/terms');
-      if (!response.ok) throw new Error('Failed to fetch terms');
-      const data = await response.json();
-      setTerms(data.data || []);
+  const fetchClassesAndAssignments = async () => {
+    if (!termId) return;
 
-      // Try to get active term
-      const activeResponse = await fetch('/api/terms/active');
-      if (activeResponse.ok) {
-        const activeData = await activeResponse.json();
-        setSelectedTerm(activeData.data.id);
-      } else if (data.data.length > 0) {
-        // Default to first term if no active term
-        setSelectedTerm(data.data[0].id);
+    try {
+      setIsLoading(true);
+      
+      // Fetch all active classes
+      const classesResponse = await fetch('/api/classes?active_only=true');
+      if (!classesResponse.ok) throw new Error('Failed to fetch classes');
+      const classes = await classesResponse.json();
+      
+      let assignedIds: number[] = [];
+      
+      // ✅ Fetch term-specific assignments
+      try {
+        const assignmentsResponse = await fetch(
+          `/api/trainers/${userId}/assignments?term_id=${termId}`
+        );
+        if (assignmentsResponse.ok) {
+          const assignments = await assignmentsResponse.json();
+          assignedIds = assignments.map((assignment: any) => assignment.class_id);
+        }
+      } catch (assignmentError) {
+        console.warn('Error fetching assignments:', assignmentError);
       }
+      
+      setAvailableClasses(classes);
+      setAssignedClassIds(assignedIds); // ✅ Store assigned class IDs
+      setSelectedClassIds([]); // ✅ Reset selections (only show newly selected)
     } catch (error) {
-      console.error('Error fetching terms:', error);
-      setError('Failed to load terms');
+      setError(error instanceof Error ? error.message : 'Failed to load data');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-// components/classes/classSelection.tsx
-const fetchClassesAndAssignments = async () => {
-  if (!selectedTerm) return;
-
-  try {
-    setIsLoading(true);
-    
-    // Fetch all active classes
-    const classesResponse = await fetch('/api/classes?active_only=true');
-    if (!classesResponse.ok) throw new Error('Failed to fetch classes');
-    const classes = await classesResponse.json();
-    
-    let assignedClassIds: number[] = [];
-    
-    // ✅ CHANGED: Pass term_id to get term-specific assignments
-    try {
-      const assignmentsResponse = await fetch(
-        `/api/trainers/${userId}/assignments?term_id=${selectedTerm}` // ADD term_id
-      );
-      if (assignmentsResponse.ok) {
-        const assignments = await assignmentsResponse.json();
-        assignedClassIds = assignments.map((assignment: any) => assignment.class_id);
-      } else {
-        console.warn(`Failed to fetch assignments for user ${userId}: ${assignmentsResponse.status}`);
-      }
-    } catch (assignmentError) {
-      console.warn('Error fetching assignments:', assignmentError);
-    }
-    
-    setAvailableClasses(classes);
-    setSelectedClassIds(assignedClassIds);
-    setSavedClassIds(assignedClassIds);
-  } catch (error) {
-    setError(error instanceof Error ? error.message : 'Failed to load data');
-  } finally {
-    setIsLoading(false);
-  }
-};
-
   const handleClassToggle = (classId: number, checked: boolean) => {
-    // Prevent toggling if blocked
     if (!canSelect) return;
+    
+    // ✅ Don't allow toggling already assigned classes
+    if (assignedClassIds.includes(classId)) return;
 
     const newSelectedIds = checked 
       ? [...selectedClassIds, classId]
@@ -208,38 +181,33 @@ const fetchClassesAndAssignments = async () => {
   };
 
   const handleSaveSelections = async () => {
-    // Prevent saving if blocked
     if (!canSelect) {
       setError(blockMessage);
       return;
     }
 
-    if (!selectedTerm) {
+    if (!termId) {
       setError('Please select a term first');
       return;
     }
 
-    console.log('🔍 DEBUG 1 - Before sending:', {
-      selectedTerm,
-      type: typeof selectedTerm,
-      isNumber: !isNaN(selectedTerm),
-      userId
-    });
+    if (selectedClassIds.length === 0) {
+      setError('Please select at least one class to add');
+      return;
+    }
 
     setIsSaving(true);
     setError('');
     setSuccessMessage('');
 
     try {
-      // Combine currently selected with previously saved
-      const combinedClassIds = [...new Set([...savedClassIds, ...selectedClassIds])];
+      // ✅ Combine assigned + newly selected
+      const combinedClassIds = [...assignedClassIds, ...selectedClassIds];
       
       const payload = {
         class_ids: combinedClassIds,
-        term_id: selectedTerm
+        term_id: termId
       };
-      
-      console.log('🔍 DEBUG 2 - Payload:', JSON.stringify(payload, null, 2));
             
       const response = await fetch(`/api/trainers/${userId}/assignments`, {
         method: 'POST',
@@ -250,37 +218,27 @@ const fetchClassesAndAssignments = async () => {
       });
 
       const result = await response.json();
-      console.log('🔍 DEBUG 3 - API Response:', result);
 
       if (!response.ok) {
-        // Handle 403 (blocked) specifically
         if (response.status === 403) {
           setError(result.error || 'You are blocked from making selections');
-          // Refresh block status
           await checkBlockStatus();
           return;
         }
         
-        console.error('API Error:', result);
         throw new Error(result.error || 'Failed to save selections');
       }
 
-      // Update saved state
-      setSavedClassIds(combinedClassIds);
-      setSelectedClassIds(combinedClassIds);
+      // ✅ Update state to reflect new assignments
+      setAssignedClassIds(combinedClassIds);
+      setSelectedClassIds([]);
 
-      // ✅ Show success message with details
-      const termName = terms.find(t => t.id === selectedTerm)?.name || 'selected term';
       setSuccessMessage(
-        `Successfully updated class assignments for ${termName}! ` +
-        `You are now assigned to ${combinedClassIds.length} ${combinedClassIds.length === 1 ? 'class' : 'classes'} ` +
-        `with ${result.subject_assignments || 0} subjects.`
+        `Successfully added ${selectedClassIds.length} class${selectedClassIds.length !== 1 ? 'es' : ''}!`
       );
       
-      // Call parent callback if provided
       onSelectionSaved?.();
       
-      // Clear success message after 5 seconds
       setTimeout(() => setSuccessMessage(''), 5000);
       
     } catch (error) {
@@ -291,7 +249,7 @@ const fetchClassesAndAssignments = async () => {
     }
   };
 
-  if (checkingBlock || (isLoading && selectedTerm === null)) {
+  if (checkingBlock || isLoading) {
     return (
       <div className="flex justify-center items-center py-10">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -301,7 +259,7 @@ const fetchClassesAndAssignments = async () => {
 
   return (
     <div className="space-y-6">
-      {/* Block Alerts - Show at TOP */}
+      {/* Block Alerts */}
       {isBlocked && (
         <Alert variant="destructive">
           <Ban className="h-4 w-4" />
@@ -330,81 +288,102 @@ const fetchClassesAndAssignments = async () => {
         </Alert>
       )}
 
-      {/* ✅ Term Selection - Disabled if blocked */}
-      <div className={`p-4 border rounded-lg ${canSelect ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
-        <Label htmlFor="term" className="flex items-center gap-2 mb-2">
-          <Calendar className="h-4 w-4" />
-          <span className="font-semibold">Select Term</span>
-        </Label>
-        <Select
-          value={selectedTerm?.toString()}
-          onValueChange={(value) => setSelectedTerm(parseInt(value))}
-          disabled={!canSelect}
-        >
-          <SelectTrigger className="bg-white">
-            <SelectValue placeholder="Select a term" />
-          </SelectTrigger>
-          <SelectContent>
-            {terms.map((term) => (
-              <SelectItem key={term.id} value={term.id.toString()}>
-                {term.name} {term.is_active && '(Active)'}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground mt-2">
-          {canSelect 
-            ? 'Class assignments are term-specific. Select the term you want to assign classes for.'
-            : 'Selection is currently disabled.'
-          }
-        </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-semibold">Select Your Classes</h2>
+          <p className="text-muted-foreground">
+            Choose the classes you want to teach for this term.
+            Classes you're already teaching are highlighted in green.
+          </p>
+          {searchTerm && (
+            <p className="text-sm text-blue-600 mt-1">
+              Showing {assignedClasses.length + unassignedClasses.length} classes for "{searchTerm}"
+            </p>
+          )}
+        </div>
+        <div className="text-sm text-muted-foreground">
+          {assignedClassIds.length} assigned • {selectedClassIds.length} newly selected
+        </div>
       </div>
 
-      {/* Show content only if term is selected */}
-      {selectedTerm ? (
-        <>
-          <div className="flex justify-between items-center">
-            <div>
-              <h2 className="text-xl font-semibold">Select Your Classes</h2>
-              <p className="text-muted-foreground">
-                Choose the classes you want to teach for{' '}
-                <strong>{terms.find(t => t.id === selectedTerm)?.name}</strong>.
-                You can check attendance only for selected classes.
-              </p>
-              {searchTerm && (
-                <p className="text-sm text-blue-600 mt-1">
-                  Showing {filteredClasses.length} of {availableClasses.length} classes for "{searchTerm}"
-                </p>
-              )}
-            </div>
-            <div className="text-sm text-muted-foreground">
-              {selectedClassIds.length} of {availableClasses.length} classes selected
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {successMessage && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="text-green-800">{successMessage}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* ✅ Classes Grid - Assigned first, then unassigned */}
+      <div className="space-y-6">
+        {/* ✅ Already Assigned Classes */}
+        {assignedClasses.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-gray-600 mb-3 uppercase flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              Already Assigned ({assignedClasses.length})
+            </h3>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {assignedClasses.map((classItem) => (
+                <Card 
+                  key={classItem.id} 
+                  className="ring-2 ring-green-500 bg-green-50/50 border-green-200"
+                >
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0" />
+                          <Badge variant="outline" className="text-xs border-green-600 text-green-700">
+                            {classItem.code}
+                          </Badge>
+                          <Badge className="text-xs bg-green-600">
+                            Assigned
+                          </Badge>
+                        </div>
+                        <CardTitle className="text-base">{classItem.name}</CardTitle>
+                      </div>
+                    </div>
+                    {classItem.description && (
+                      <CardDescription className="text-sm">
+                        {classItem.description}
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Building className="h-4 w-4" />
+                        {classItem.department}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Clock className="h-4 w-4" />
+                        {classItem.duration_hours}h
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           </div>
+        )}
 
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          {successMessage && (
-            <Alert className="border-green-200 bg-green-50">
-              <AlertDescription className="text-green-800">{successMessage}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* Classes Grid */}
-          {isLoading ? (
-            <div className="flex justify-center items-center py-10">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-            </div>
-          ) : (
+        {/* ✅ Available to Assign Classes */}
+        {unassignedClasses.length > 0 && (
+          <div>
+            {assignedClasses.length > 0 && (
+              <h3 className="text-sm font-semibold text-gray-600 mb-3 uppercase">
+                Available to Assign ({unassignedClasses.length})
+              </h3>
+            )}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {filteredClasses.map((classItem) => {
-                const isSelected = selectedClassIds.includes(classItem.id);
-                const isAlreadySaved = savedClassIds.includes(classItem.id);
-                const isNewlySelected = isSelected && !isAlreadySaved;
+              {unassignedClasses.map((classItem) => {
+                const isNewlySelected = selectedClassIds.includes(classItem.id);
                 
                 return (
                   <Card 
@@ -412,33 +391,26 @@ const fetchClassesAndAssignments = async () => {
                     className={`transition-all ${
                       !canSelect 
                         ? 'opacity-60 cursor-not-allowed'
-                        : 'cursor-pointer'
+                        : 'cursor-pointer hover:shadow-md'
                     } ${
-                      isAlreadySaved
-                        ? 'ring-2 ring-green-500 bg-green-50/50'
-                        : isNewlySelected 
-                          ? 'ring-2 ring-blue-500 bg-blue-50/50'
-                          : 'hover:shadow-md'
+                      isNewlySelected 
+                        ? 'ring-2 ring-blue-500 bg-blue-50/50'
+                        : ''
                     }`}
-                    onClick={() => canSelect && handleClassToggle(classItem.id, !isSelected)}
+                    onClick={() => canSelect && handleClassToggle(classItem.id, !isNewlySelected)}
                   >
                     <CardHeader className="pb-3">
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
                             <Checkbox 
-                              checked={isSelected}
+                              checked={isNewlySelected}
                               disabled={!canSelect}
                               onChange={() => {}}
                             />
                             <Badge variant="outline" className="text-xs">
                               {classItem.code}
                             </Badge>
-                            {isAlreadySaved && (
-                              <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">
-                                Saved
-                              </Badge>
-                            )}
                             {isNewlySelected && (
                               <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-800">
                                 New
@@ -470,40 +442,35 @@ const fetchClassesAndAssignments = async () => {
                 );
               })}
             </div>
-          )}
+          </div>
+        )}
+      </div>
 
-          {searchTerm && filteredClasses.length === 0 && availableClasses.length > 0 && (
-            <div className="text-center py-10 text-muted-foreground">
-              <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No classes match your search for "{searchTerm}"</p>
-              <p className="text-sm">Try adjusting your search terms</p>
-            </div>
-          )}
-
-          {availableClasses.length === 0 && (
-            <div className="text-center py-10 text-muted-foreground">
-              <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No classes available yet.</p>
-              <p className="text-sm">Contact your administrator to add classes.</p>
-            </div>
-          )}
-
-          {filteredClasses.length > 0 && (
-            <div className="flex justify-end pt-4 border-t">
-              <Button 
-                onClick={handleSaveSelections}
-                disabled={isSaving || !selectedTerm || !canSelect}
-                className="min-w-[120px]"
-              >
-                {isSaving ? 'Saving...' : canSelect ? 'Save Selection' : 'Selection Disabled'}
-              </Button>
-            </div>
-          )}
-        </>
-      ) : (
+      {searchTerm && assignedClasses.length === 0 && unassignedClasses.length === 0 && (
         <div className="text-center py-10 text-muted-foreground">
-          <Calendar className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>Please select a term to view and assign classes.</p>
+          <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>No classes match your search for "{searchTerm}"</p>
+          <p className="text-sm">Try adjusting your search terms</p>
+        </div>
+      )}
+
+      {availableClasses.length === 0 && (
+        <div className="text-center py-10 text-muted-foreground">
+          <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>No classes available yet.</p>
+          <p className="text-sm">Contact your administrator to add classes.</p>
+        </div>
+      )}
+
+      {unassignedClasses.length > 0 && (
+        <div className="flex justify-end pt-4 border-t">
+          <Button 
+            onClick={handleSaveSelections}
+            disabled={isSaving || selectedClassIds.length === 0 || !canSelect}
+            className="min-w-[120px]"
+          >
+            {isSaving ? 'Saving...' : canSelect ? `Add ${selectedClassIds.length} Class${selectedClassIds.length !== 1 ? 'es' : ''}` : 'Selection Disabled'}
+          </Button>
         </div>
       )}
     </div>

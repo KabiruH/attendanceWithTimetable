@@ -72,10 +72,26 @@ export async function GET(
       );
     }
 
+    // ✅ GET term_id from query params
+    const { searchParams } = new URL(request.url);
+    const termIdParam = searchParams.get('term_id');
+
+    console.log('📚 Fetching subjects for class:', classId, 'term:', termIdParam || 'ALL');
+
+    // ✅ Build where clause with term filter
+    const whereClause: any = {
+      class_id: classId,
+    };
+
+    // ✅ CRITICAL: Add term filter if provided
+    if (termIdParam) {
+      whereClause.term_id = parseInt(termIdParam);
+    }
+
+    console.log('🔍 Where clause:', whereClause);
+
     const assignedSubjects = await db.classsubjects.findMany({
-      where: {
-        class_id: classId,
-      },
+      where: whereClause,
       include: {
         subjects: true,
         terms: {
@@ -90,6 +106,8 @@ export async function GET(
       },
     });
 
+    console.log(`✅ Found ${assignedSubjects.length} subjects for class ${classId}, term ${termIdParam || 'ALL'}`);
+
     // ✅ Transform the data to match component expectations
     const formattedSubjects = assignedSubjects.map(item => ({
       id: item.id,
@@ -102,7 +120,7 @@ export async function GET(
 
     return NextResponse.json(formattedSubjects);
   } catch (error) {
-    console.error('Error fetching assigned subjects:', error);
+    console.error('❌ Error fetching assigned subjects:', error);
     return NextResponse.json(
       { error: 'Failed to fetch assigned subjects' },
       { status: 500 }
@@ -145,7 +163,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { subjectId, term_id } = body; // ✅ ADD term_id
+    const { subjectId, term_id } = body;
 
     console.log('🔍 Admin adding subject - received:', {
       subjectId,
@@ -173,17 +191,13 @@ export async function POST(
       where: {
         class_id: classId,
         subject_id: subjectId,
-        term_id: term_id || null
+        term_id: term_id
       },
     });
 
     if (existing) {
       return NextResponse.json(
-        {
-          error: term_id
-            ? 'Subject already assigned to this class for this term'
-            : 'Subject already assigned to this class'
-        },
+        { error: 'Subject already assigned to this class for this term' },
         { status: 400 }
       );
     }
@@ -193,9 +207,9 @@ export async function POST(
       data: {
         class_id: classId,
         subject_id: subjectId,
-        term_id: term_id || null, // ✅ CRITICAL FIX: Include term_id!
+        term_id: term_id,
         assigned_by: user.email || user.name,
-        is_active: false, // Not activated yet
+        is_active: false,
       },
       include: {
         subjects: true,
@@ -222,7 +236,7 @@ export async function POST(
 
     return NextResponse.json(formattedAssignment);
   } catch (error) {
-    console.error('Error assigning subject:', error);
+    console.error('❌ Error assigning subject:', error);
     return NextResponse.json(
       { error: 'Failed to assign subject' },
       { status: 500 }
