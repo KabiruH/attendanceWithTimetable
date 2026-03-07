@@ -501,7 +501,6 @@ function generatePDF(
 // POST endpoint
 export async function POST(request: NextRequest) {
   try {
-    // Authenticate user
     const user = await authenticateUser(request);
     
     if (!user) {
@@ -511,11 +510,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Parse request body
     const body = await request.json();
     const { startDate, endDate } = body;
 
-    // Build date filter
     const dateFilter: any = {};
     if (startDate) {
       dateFilter.gte = new Date(startDate);
@@ -524,11 +521,14 @@ export async function POST(request: NextRequest) {
       dateFilter.lte = new Date(endDate);
     }
 
-    // Fetch attendance data based on role
+    const isWeekday = (date: Date) => {
+      const day = new Date(date).getDay();
+      return day !== 0 && day !== 6;
+    };
+
     let attendanceData: AttendanceRecord[];
-    
+   
     if (user.role === 'admin') {
-      // Admin sees all employees
       attendanceData = await db.attendance.findMany({
         where: Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {},
         include: {
@@ -542,7 +542,6 @@ export async function POST(request: NextRequest) {
         ],
       });
     } else {
-      // Employee sees only their own data
       attendanceData = await db.attendance.findMany({
         where: {
           employee_id: user.id,
@@ -556,6 +555,9 @@ export async function POST(request: NextRequest) {
         orderBy: { date: 'desc' },
       });
     }
+
+    // ✅ Filter out weekends before any processing
+    attendanceData = attendanceData.filter(r => isWeekday(r.date));
 
     if (attendanceData.length === 0) {
       return NextResponse.json(
@@ -579,10 +581,8 @@ export async function POST(request: NextRequest) {
         : r.sessions,
     }));
 
-    // Calculate analytics
     const analytics = calculateAnalytics(attendanceData);
 
-    // Generate PDF
     const pdfBuffer = generatePDF(
       attendanceData,
       analytics,
@@ -590,10 +590,8 @@ export async function POST(request: NextRequest) {
       user.role === 'admin' ? 'All Employees' : user.name
     );
 
-    // Return PDF
     const filename = `attendance_report_${new Date().toISOString().split('T')[0]}.pdf`;
     
-    // Convert Node.js Buffer to ArrayBuffer
     const arrayBuffer = pdfBuffer.buffer.slice(
       pdfBuffer.byteOffset,
       pdfBuffer.byteOffset + pdfBuffer.byteLength

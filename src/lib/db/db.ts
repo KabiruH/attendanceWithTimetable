@@ -5,15 +5,20 @@ declare global {
   var prisma: PrismaClient | undefined
 }
 
+// AFTER
 const createPrismaClient = () => {
+  const url = process.env.DATABASE_URL!;
+  const pooledUrl = url.includes('?') 
+    ? `${url}&connection_limit=3&pool_timeout=10`
+    : `${url}?connection_limit=3&pool_timeout=10`;
+
   return new PrismaClient({
     log: process.env.NODE_ENV === 'development' 
       ? ['query', 'error', 'warn'] 
       : ['error'],
-    // Optional: Configure connection pool
     datasources: {
       db: {
-        url: process.env.DATABASE_URL,
+        url: pooledUrl,
       },
     },
   })

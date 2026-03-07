@@ -24,9 +24,9 @@ export async function GET(request: NextRequest) {
         const userId = Number(payload.id);
 
         // Get employee data with user relation
-        const employeeData = await db.employees.findUnique({
+        const employeeData = await db.employees.findFirst({
             where: {
-                id: userId
+                employee_id: userId
             },
             include: {
                 users: true  // Include the related user data

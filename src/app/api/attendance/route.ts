@@ -47,15 +47,15 @@ interface AttendanceSession {
 // Had to push back time by 3 hours because of the time difference in the hosted server
 const TIME_CONSTRAINTS = {
   CHECK_IN_START: 4,  // 7 AM
-  WORK_START: 6,      // 9 AM
-  WORK_END: 24        // 5 PM
+  WORK_START: 5,      // 9 AM
+  WORK_END: 15        // 5 PM
 };
 
 // Geofence configuration for mobile
 const GEOFENCE = {
-  latitude: -0.0236,
-  longitude: 37.9062,
-  radius: 2_000_000,
+ latitude: -0.0284967, 
+  longitude: 37.658594, 
+  radius: 100_000,
 };
 
 // Mobile request validation schema
@@ -92,20 +92,11 @@ async function authenticateUser(request: NextRequest): Promise<{ userId: number;
   try {
     const mobileAuth = await verifyMobileJWT(request);
     if (mobileAuth.success && mobileAuth.payload) {
-      
-      // 🔧 FIX: Use the employeeId from JWT payload
-      // The mobile JWT contains employeeId which should match employees.id
-      const employeeId = mobileAuth.payload.employeeId;
-      
-      if (!employeeId) {
-        throw new Error('No employeeId in mobile JWT payload');
-      }
-      
       return { 
-        userId: employeeId,  // Use employeeId directly
-        authMethod: 'mobile_jwt' 
-      };
-    }
+    userId: mobileAuth.payload.userId,  // ✅ userId = users.id, matches employees.employee_id
+    authMethod: 'mobile_jwt' 
+  };
+}
   } catch (error) {
     console.error('Mobile JWT verification failed:', error);
   }
@@ -506,8 +497,8 @@ export async function GET(request: NextRequest) {
         if (mobileAuth.success && mobileAuth.payload) {
           // Convert mobile JWT payload to JwtPayload format
           user = {
-            employee_id: mobileAuth.payload.employeeId || mobileAuth.payload.userId,  
-            id: mobileAuth.payload.employeeId || mobileAuth.payload.userId,
+employee_id: mobileAuth.payload.userId, 
+id: mobileAuth.payload.userId,
             email: mobileAuth.payload.email || '',
             role: 'employee', // Mobile users are typically employees
             name: mobileAuth.payload.name || ''

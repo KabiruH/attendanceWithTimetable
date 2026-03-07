@@ -30,9 +30,9 @@ const mobileClassAttendanceSchema = z.object({
 
 // Geofence configuration
 const GEOFENCE = {
-  latitude: -1.2249434,
-  longitude: 36.7095401,
-  radius: 600_000, // meters
+    latitude: -0.028622,  
+    longitude: 37.658329,
+    radius: 100_000, // meters
 };
 
 // Simplified authentication
@@ -65,7 +65,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
     const mobileAuth = await verifyMobileJWT(req);
     if (mobileAuth.success && mobileAuth.payload) {
       const user = await db.users.findUnique({
-        where: { id: mobileAuth.payload.employeeId || mobileAuth.payload.userId },
+        where: { id: mobileAuth.payload.userId },
         select: { id: true, name: true, role: true, is_active: true }
       });
 
@@ -562,7 +562,7 @@ export async function POST(request: NextRequest) {
 
       workAttendance = await db.attendance.findFirst({
         where: {
-          employee_id: employee.id,
+          employee_id: employee.employee_id, 
           date: currentDate
         }
       });

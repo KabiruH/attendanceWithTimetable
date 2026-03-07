@@ -277,6 +277,7 @@ async function createAuthResponse(employee: any) {
   // Set HTTP-only cookie
   const response = NextResponse.json({
     user: {
+      id: employee.users.id,  
       employee_id: employee.users.id, 
       email: employee.email,
       name: employee.name,

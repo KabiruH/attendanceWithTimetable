@@ -37,7 +37,7 @@ export async function processAbsentRecords(date: Date = new Date()) {
       where: {
         users: { is_active: true }
       },
-      select: { id: true }
+      select: { employee_id: true } 
     });
 
     const existingRecords = await db.attendance.findMany({
@@ -52,25 +52,25 @@ export async function processAbsentRecords(date: Date = new Date()) {
     });
     const employeesWithRecords = new Set(existingRecords.map(record => record.employee_id));
     const potentialAbsentees = activeEmployees.filter(
-      employee => !employeesWithRecords.has(employee.id)
+      employee => !employeesWithRecords.has(employee.employee_id)
     );
 
     if (potentialAbsentees.length > 0) {
       const notAbsentYet = await db.attendance.findMany({
         where: {
-          employee_id: { in: potentialAbsentees.map(e => e.id) },
+          employee_id: { in: potentialAbsentees.map(e => e.employee_id) },
           date: new Date(currentDate),
           NOT: { status: 'Absent' }
         }
       });
 
       const notAbsentIds = new Set(notAbsentYet.map(r => r.employee_id));
-      const confirmedAbsentees = potentialAbsentees.filter(e => !notAbsentIds.has(e.id));
+      const confirmedAbsentees = potentialAbsentees.filter(e => !notAbsentIds.has(e.employee_id));
 
       if (confirmedAbsentees.length > 0) {
         await db.attendance.createMany({
           data: confirmedAbsentees.map(employee => ({
-            employee_id: employee.id,
+            employee_id: employee.employee_id,
             date: new Date(currentDate),
             status: 'Absent',
             check_in_time: null,

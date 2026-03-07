@@ -5,36 +5,72 @@ import { jwtVerify } from 'jose';
 import { db } from '@/lib/db/db';
 import { ensureCheckouts } from '@/lib/utils/cronUtils';
 
+interface JwtPayload {
+  id: number;
+  employee_id: number;
+  userId: number;
+  role: string;
+  name: string;
+  email: string;
+}
+
+// Supports both cookie (web) and Bearer token (mobile)
+async function getTokenPayload(request: NextRequest): Promise<JwtPayload | null> {
+  if (!process.env.JWT_SECRET) return null;
+
+  const secret = new TextEncoder().encode(process.env.JWT_SECRET);
+
+  // 1. Try Bearer token from Authorization header (mobile)
+  const authHeader = request.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.substring(7);
+      const { payload } = await jwtVerify(token, secret);
+      return payload as unknown as JwtPayload;
+    } catch (error) {
+      console.error('Bearer token verification failed:', error);
+    }
+  }
+
+  // 2. Fall back to cookie (web)
+  try {
+    const cookieStore = await cookies();
+    const tokenCookie = cookieStore.get('token');
+    if (tokenCookie) {
+      const { payload } = await jwtVerify(tokenCookie.value, secret);
+      return payload as unknown as JwtPayload;
+    }
+  } catch (error) {
+    console.error('Cookie token verification failed:', error);
+  }
+
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   try {
-    // First ensure all checkouts are processed
-    await ensureCheckouts();
-   
-    const cookieStore = await cookies();
-    const token = cookieStore.get('token');
-   
-    if (!token) {
+    // Run checkouts in background - don't block the response
+    ensureCheckouts().catch(err => console.error('Checkout processing error:', err));
+
+    const payload = await getTokenPayload(request);
+
+    if (!payload) {
       return NextResponse.json(
         { error: 'No token found' },
         { status: 401 }
       );
     }
 
-    const { payload } = await jwtVerify(
-      token.value,
-      new TextEncoder().encode(process.env.JWT_SECRET)
-    );
-
-    const userId = Number(payload.id);
+    // userId is users.id - works for both web (payload.id) and mobile (payload.userId)
+    const userId = Number(payload.id || payload.userId);
     const role = payload.role as string;
     const today = new Date().toISOString().split('T')[0];
 
-    if (role == 'admin') {
+    if (role === 'admin') {
       const [personalAttendance, todayRecord, allAttendance] = await Promise.all([
-        // Admin's personal monthly attendance
         db.attendance.findMany({
           where: {
-            employee_id: userId, // ✅ Admin's own records
+            employee_id: userId,
             date: {
               gte: new Date(new Date().setMonth(new Date().getMonth() - 1))
             }
@@ -48,24 +84,19 @@ export async function GET(request: NextRequest) {
               }
             }
           },
-          orderBy: {
-            date: 'desc'
-          }
+          orderBy: { date: 'desc' }
         }),
-        // Admin's today's attendance status
         db.attendance.findFirst({
           where: {
-            employee_id: userId, // ✅ Admin's own today record
+            employee_id: userId,
             date: {
               gte: new Date(today),
               lt: new Date(new Date(today).setDate(new Date(today).getDate() + 1))
             }
           }
         }),
-        // ✅ FIX: All employees' attendance data (NO employee_id filter!)
         db.attendance.findMany({
           where: {
-            // ❌ REMOVED: employee_id: userId,
             date: {
               gte: new Date(new Date().setDate(new Date().getDate() - 7))
             }
@@ -89,7 +120,6 @@ export async function GET(request: NextRequest) {
 
       const isCheckedIn = !!(todayRecord?.check_in_time && !todayRecord?.check_out_time);
 
-      // Process personal attendance data and calculate statistics
       const processedPersonalAttendance = personalAttendance.map(record => ({
         ...record,
         employee_name: record.users.name,
@@ -98,26 +128,19 @@ export async function GET(request: NextRequest) {
         check_out_time: record.check_out_time?.toISOString() || null
       }));
 
-      // Calculate admin's personal attendance statistics
       const totalDays = personalAttendance.length;
-      const presentDays = personalAttendance.filter(record => record.status?.toLowerCase() === 'present').length;
-      const lateDays = personalAttendance.filter(record => record.status?.toLowerCase() === 'late').length;
-      const absentDays = personalAttendance.filter(record => record.status?.toLowerCase() === 'absent').length;
+      const presentDays = personalAttendance.filter(r => r.status?.toLowerCase() === 'present').length;
+      const lateDays = personalAttendance.filter(r => r.status?.toLowerCase() === 'late').length;
+      const absentDays = personalAttendance.filter(r => r.status?.toLowerCase() === 'absent').length;
       const attendanceRate = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
-      console.log(`Admin viewing attendance: ${allAttendance.length} total records from all employees`); // ✅ Debug log
+      console.log(`Admin viewing attendance: ${allAttendance.length} total records from all employees`);
 
       return NextResponse.json({
         role: 'admin',
         isCheckedIn,
         personalAttendance: processedPersonalAttendance,
-        stats: {
-          totalDays,
-          presentDays,
-          lateDays,
-          absentDays,
-          attendanceRate
-        },
+        stats: { totalDays, presentDays, lateDays, absentDays, attendanceRate },
         attendanceData: allAttendance.map(record => ({
           ...record,
           employee_name: record.users.name,
@@ -130,9 +153,8 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Employee queries (unchanged)
+    // Employee
     const [todayRecord, monthlyRecords] = await Promise.all([
-      // Today's attendance
       db.attendance.findFirst({
         where: {
           employee_id: userId,
@@ -142,14 +164,9 @@ export async function GET(request: NextRequest) {
           }
         },
         include: {
-          users: {
-            select: {
-              name: true
-            }
-          }
+          users: { select: { name: true } }
         }
       }),
-      // Monthly attendance
       db.attendance.findMany({
         where: {
           employee_id: userId,
@@ -158,25 +175,18 @@ export async function GET(request: NextRequest) {
           }
         },
         include: {
-          users: {
-            select: {
-              name: true
-            }
-          }
+          users: { select: { name: true } }
         },
-        orderBy: {
-          date: 'desc'
-        }
+        orderBy: { date: 'desc' }
       })
     ]);
 
     const isCheckedIn = !!(todayRecord?.check_in_time && !todayRecord?.check_out_time);
 
-    // Calculate employee's attendance statistics
     const totalDays = monthlyRecords.length;
-    const presentDays = monthlyRecords.filter(record => record.status?.toLowerCase() === 'present').length;
-    const lateDays = monthlyRecords.filter(record => record.status?.toLowerCase() === 'late').length;
-    const absentDays = monthlyRecords.filter(record => record.status?.toLowerCase() === 'absent').length;
+    const presentDays = monthlyRecords.filter(r => r.status?.toLowerCase() === 'present').length;
+    const lateDays = monthlyRecords.filter(r => r.status?.toLowerCase() === 'late').length;
+    const absentDays = monthlyRecords.filter(r => r.status?.toLowerCase() === 'absent').length;
     const attendanceRate = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
     const processedMonthlyRecords = monthlyRecords.map(record => ({
@@ -190,13 +200,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       role: 'employee',
       isCheckedIn,
-      stats: {
-        totalDays,
-        presentDays,
-        lateDays,
-        absentDays,
-        attendanceRate
-      },
+      stats: { totalDays, presentDays, lateDays, absentDays, attendanceRate },
       todayRecord: todayRecord ? {
         ...todayRecord,
         employee_name: todayRecord.users.name,

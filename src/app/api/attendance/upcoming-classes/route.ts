@@ -21,9 +21,10 @@ async function getAuthenticatedUser(req: NextRequest) {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number };
-    const user = await db.users.findUnique({
-      where: { id: decoded.userId },
+  const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId?: number; id?: number };
+const userId = decoded.id || decoded.userId; // ✅ web uses 'id', mobile uses 'userId'
+const user = await db.users.findUnique({
+  where: { id: userId },
       select: { id: true, name: true, role: true, is_active: true }
     });
 
@@ -47,15 +48,25 @@ function getCheckInStatus(lessonStartTime: Date, currentTime: Date, settings: an
   
   const now = currentTime.getTime();
   
-  if (now < earliestCheckIn.getTime()) {
-    const minutesUntil = Math.ceil((earliestCheckIn.getTime() - now) / (60 * 1000));
-    return {
-      canCheckIn: false,
-      status: 'upcoming',
-      message: `Opens in ${minutesUntil} minute${minutesUntil !== 1 ? 's' : ''}`,
-      minutesUntil
-    };
-  }
+ if (now < earliestCheckIn.getTime()) {
+  const minutesUntil = Math.ceil((earliestCheckIn.getTime() - now) / (60 * 1000));
+
+  const days = Math.floor(minutesUntil / (60 * 24));
+  const hours = Math.floor((minutesUntil % (60 * 24)) / 60);
+  const mins = minutesUntil % 60;
+
+  let timeStr = '';
+  if (days > 0) timeStr += `${days}d `;
+  if (hours > 0) timeStr += `${hours}h `;
+  if (mins > 0 && days === 0) timeStr += `${mins}m`;
+
+  return {
+    canCheckIn: false,
+    status: 'upcoming',
+    message: `Opens in ${timeStr.trim()}`,
+    minutesUntil
+  };
+}
   
   if (now > latestCheckIn.getTime()) {
     return {

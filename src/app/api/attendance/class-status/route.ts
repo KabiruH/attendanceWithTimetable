@@ -3,33 +3,57 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import jwt from 'jsonwebtoken';
+import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
 
-// Helper function to verify JWT and get user
 async function getAuthenticatedUser(req: NextRequest) {
+  // 1. Try Bearer token first (mobile - both standard JWT and mobile JWT use Bearer)
+  const authHeader = req.headers.get('authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    // Try as mobile JWT first (has type: 'mobile')
+    try {
+      const mobileAuth = await verifyMobileJWT(req);
+      if (mobileAuth.success && mobileAuth.payload) {
+        const user = await db.users.findUnique({
+          where: { id: mobileAuth.payload.userId }, // ✅ userId = users.id
+          select: { id: true, name: true, role: true, is_active: true }
+        });
+        if (user?.is_active) return user;
+      }
+    } catch (error) {}
+
+    // Try as standard JWT
+    try {
+      const token = authHeader.substring(7);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number; id: number };
+      const user = await db.users.findUnique({
+        where: { id: decoded.userId || decoded.id },
+        select: { id: true, name: true, role: true, is_active: true }
+      });
+      if (user?.is_active) return user;
+    } catch (error) {}
+  }
+
+  // 2. Fall back to cookie (web)
   const token = req.cookies.get('token')?.value;
-  
-  if (!token) {
-    throw new Error('No authentication token found');
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number; id: number };
+      const user = await db.users.findUnique({
+        where: { id: decoded.userId || decoded.id },
+        select: { id: true, name: true, role: true, is_active: true }
+      });
+      if (user?.is_active) return user;
+    } catch (error) {}
   }
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number };
-    const user = await db.users.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, name: true, role: true, is_active: true }
-    });
-
-    if (!user || !user.is_active) {
-      throw new Error('User not found or inactive');
-    }
-
-    return user;
-  } catch (error) {
-    throw new Error('Invalid authentication token');
-  }
+  throw new Error('No valid authentication method provided');
 }
 
-// Helper function to calculate total hours from attendance records
+function isWeekday(date: Date): boolean {
+  const day = date.getDay();
+  return day !== 0 && day !== 6;
+}
+
 function calculateTotalHours(attendanceRecords: any[]): string {
   let totalMinutes = 0;
 
@@ -44,17 +68,16 @@ function calculateTotalHours(attendanceRecords: any[]): string {
 
   const hours = Math.floor(totalMinutes / 60);
   const minutes = Math.floor(totalMinutes % 60);
-  
+
   if (hours === 0 && minutes === 0) return '0';
   if (hours === 0) return `${minutes}m`;
   if (minutes === 0) return `${hours}h`;
   return `${hours}h ${minutes}m`;
 }
 
-// Helper function to get subject name for attendance record
 async function getSubjectNameForAttendance(timetableSlotId: string | null) {
   if (!timetableSlotId) return null;
-  
+
   const slot = await db.timetableslots.findUnique({
     where: { id: timetableSlotId },
     include: {
@@ -66,16 +89,14 @@ async function getSubjectNameForAttendance(timetableSlotId: string | null) {
       }
     }
   });
-  
+
   return slot?.subjects || null;
 }
 
-// GET - Get class attendance status and statistics
 export async function GET(req: NextRequest) {
   try {
     const user = await getAuthenticatedUser(req);
-    
-    // Get current date info in Kenya timezone
+
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentDate = nowInKenya.toJSDate().toISOString().split('T')[0];
     const startOfMonth = new Date(nowInKenya.year, nowInKenya.month - 1, 1);
@@ -103,19 +124,16 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Enrich today's attendance with subject information
+    // Enrich today's attendance with subject info
     const enrichedTodayAttendance = await Promise.all(
       todayAttendance.map(async (attendance) => {
         const subject = await getSubjectNameForAttendance(attendance.timetable_slot_id);
-        return {
-          ...attendance,
-          subject
-        };
+        return { ...attendance, subject };
       })
     );
 
-    // Get class attendance history for the current month
-    const monthlyAttendance = await db.classattendance.findMany({
+    // Get monthly attendance - weekdays only
+    const monthlyAttendanceRaw = await db.classattendance.findMany({
       where: {
         trainer_id: user.id,
         date: {
@@ -139,23 +157,22 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Enrich monthly attendance with subject information
-    const enrichedMonthlyAttendance = await Promise.all(
-      monthlyAttendance.map(async (attendance) => {
-        const subject = await getSubjectNameForAttendance(attendance.timetable_slot_id);
-        return {
-          ...attendance,
-          subject
-        };
-      })
-    );
+    // Enrich monthly attendance with subject info and filter weekends
+    const enrichedMonthlyAttendance = (
+      await Promise.all(
+        monthlyAttendanceRaw.map(async (attendance) => {
+          const subject = await getSubjectNameForAttendance(attendance.timetable_slot_id);
+          return { ...attendance, subject };
+        })
+      )
+    ).filter(record => isWeekday(new Date(record.date))); // ✅ Filter weekends
 
     // Get active term
     const activeTerm = await db.terms.findFirst({
       where: { is_active: true }
     });
 
-    // Get total number of scheduled classes in timetable for this trainer
+    // Count scheduled classes for this trainer in active term
     let scheduledClassesCount = 0;
     if (activeTerm) {
       scheduledClassesCount = await db.timetableslots.count({
@@ -167,26 +184,25 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Calculate statistics
-    const completedClassesThisMonth = monthlyAttendance.filter(
+    // Stats - weekday records only
+    const completedClassesThisMonth = enrichedMonthlyAttendance.filter(
       record => record.check_out_time !== null
     );
 
     const totalHoursThisMonth = calculateTotalHours(completedClassesThisMonth);
 
-    // Get currently active sessions (checked in but not checked out)
+    // Active sessions (checked in but not checked out today)
     const now = nowInKenya.toJSDate();
-    const activeClassSessions = enrichedTodayAttendance.filter(attendance => {
-      return !attendance.check_out_time;
-    });
+    const activeClassSessions = enrichedTodayAttendance.filter(
+      attendance => !attendance.check_out_time
+    );
 
-    // Check if user can check into a new class (no active sessions)
     const canCheckIntoNewClass = activeClassSessions.length === 0;
 
-    // Get today's schedule from timetable
+    // Today's timetable schedule
     const todayDayOfWeek = now.getDay();
     let todaySchedule: any[] = [];
-    
+
     if (activeTerm) {
       todaySchedule = await db.timetableslots.findMany({
         where: {
@@ -259,7 +275,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       todayAttendance: enrichedTodayAttendance,
-      todaySchedule, // NEW: Today's timetable schedule
+      todaySchedule,
       attendanceHistory: enrichedMonthlyAttendance,
       activeClassSessions,
       canCheckIntoNewClass,

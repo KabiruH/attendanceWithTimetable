@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    const resetLink = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${token}`;
+    const resetLink = `${process.env.APP_URL}/reset-password?token=${token}`;
     
     await sendEmail({
       to: user.email,

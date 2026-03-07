@@ -31,7 +31,19 @@ export async function PUT(request: NextRequest) {
             new TextEncoder().encode(process.env.JWT_SECRET)
         );
 
-        const userId = Number(payload.id);
+        const userId = Number(payload.id); // this is users.id
+
+        // ✅ Find employee using employee_id (which stores users.id)
+        const employee = await db.employees.findFirst({
+            where: { employee_id: userId }
+        });
+
+        if (!employee) {
+            return NextResponse.json(
+                { error: 'Employee not found' },
+                { status: 404 }
+            );
+        }
 
         // Get the update data from request body
         const data: UpdateProfileData = await request.json();
@@ -73,9 +85,9 @@ export async function PUT(request: NextRequest) {
 
         // Start a transaction to update both tables
         const updatedProfile = await db.$transaction(async (tx) => {
-            // Update employee data
+            // ✅ Use employee.id (employees PK) to update employee record
             const updatedEmployee = await tx.employees.update({
-                where: { id: userId },
+                where: { id: employee.id },
                 data: {
                     name: data.name,
                     email: data.email,
@@ -83,10 +95,10 @@ export async function PUT(request: NextRequest) {
                 }
             });
 
-            // Update user data
+            // ✅ Use userId (users.id) to update user record
             if (data.phone_number || data.gender) {
                 await tx.users.update({
-                    where: { id: updatedEmployee.employee_id },
+                    where: { id: userId },
                     data: {
                         phone_number: data.phone_number,
                         gender: data.gender,
@@ -94,9 +106,9 @@ export async function PUT(request: NextRequest) {
                 });
             }
 
-            // Fetch updated data
+            // ✅ Use employee.id (employees PK) to fetch updated record
             return await tx.employees.findUnique({
-                where: { id: userId },
+                where: { id: employee.id },
                 include: {
                     users: true
                 }
