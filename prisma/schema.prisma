@@ -287,6 +287,7 @@ model terms {
   timetableslots            timetableslots[]
   trainersubjectassignments trainersubjectassignments[]
   trainerclassassignments     trainerclassassignments[]
+  timetabledrafts  timetabledrafts[]
 }
 
 model timetableslots {
@@ -391,6 +392,7 @@ model users {
   trainersubjectassignments   trainersubjectassignments[]
   webauthncredentialchallenge webauthncredentialchallenge?
   webauthncredentials         webauthncredentials[]
+  timetabledrafts  timetabledrafts[]
   
   // Block relations - changed User to users
   blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
@@ -478,4 +480,20 @@ model subjectassignmentlog {
   @@index([subject_id], map: "SubjectAssignmentLog_subject_id_idx")
   @@index([class_id], map: "SubjectAssignmentLog_class_id_idx")
   @@index([assigned_by], map: "SubjectAssignmentLog_assigned_by_idx")
+}
+
+model timetabledrafts {
+  id           Int      @id @default(autoincrement())
+  term_id      Int
+  draft_number Int      // 1, 2, or 3
+  slots_json   Json
+  stats_json   Json
+  skipped_json Json?
+  generated_by Int
+  created_at   DateTime @default(now())
+  terms        terms    @relation(fields: [term_id], references: [id], onDelete: Cascade)
+  users        users    @relation(fields: [generated_by], references: [id], onDelete: Cascade)
+
+  @@unique([term_id, draft_number])
+  @@index([term_id])
 }

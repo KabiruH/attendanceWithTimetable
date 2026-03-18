@@ -1,6 +1,5 @@
-// app/timetable/page.tsx
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import TimetableGrid from '@/components/timetable/TimetableGrid';
 import WeekNavigator from '@/components/timetable/WeekNavigator';
 import GenerateTimetableDialog from '@/components/timetable/GenerateTimetableDialog';
@@ -12,7 +11,8 @@ import TimetableFilters from '@/components/timetable/TimetableFilters';
 import ActiveFiltersDisplay from '@/components/timetable/ActiveFiltersDisplay';
 import PrintableTimetable from '@/components/timetable/PrintableTimetable';
 import MasterTimetablePrint from '@/components/timetable/MasterTimetablePrint';
-import PrintTrainerDialog from '@/components/timetable/PrintTrainerDialog'; // Add this import
+import PrintTrainerDialog from '@/components/timetable/PrintTrainerDialog';
+import DraftSelectionDialog from '@/components/timetable/DraftSelectionDialogue';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TimetableSlot } from '@/lib/types/timetable';
-import { Printer, FileText, Building2, UserCheck, Filter } from "lucide-react"; // Add UserCheck icon
+import { Printer, FileText, Building2, UserCheck, Filter, ClipboardList, ScrollText } from "lucide-react";
 import { Button } from '@/components/ui/button';
 import PrintFilterDialog from '@/components/timetable/PrintFilterDialog';
 
@@ -34,7 +34,7 @@ interface User {
   name: string;
   role: string;
   department: string;
-  has_timetable_admin?: boolean; // Add this
+  has_timetable_admin?: boolean;
 }
 
 interface Term {
@@ -45,58 +45,71 @@ interface Term {
   is_active: boolean;
 }
 
+interface Draft {
+  draft_id: number;
+  draft_number: number;
+  stats: {
+    slots_created: number;
+    trainer_assignments_processed: number;
+    assignments_fully_scheduled: number;
+    trainers_assigned: number;
+    rooms_used: number;
+    subjects_scheduled: number;
+    assignments_partially_scheduled: number;
+  };
+  skipped_count: number;
+  skipped_assignments?: any[];
+}
+
 export default function TimetablePage() {
-  // User and auth state
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [filterRoom, setFilterRoom] = useState<number | null>(null);
   const [availableRooms, setAvailableRooms] = useState<Array<{ id: number, name: string }>>([]);
 
-  // Timetable data
   const [timetableSlots, setTimetableSlots] = useState<TimetableSlot[]>([]);
   const [terms, setTerms] = useState<Term[]>([]);
   const [selectedTerm, setSelectedTerm] = useState<number | null>(null);
 
-  // Week navigation
   const [currentWeek, setCurrentWeek] = useState(() => getCurrentWeekInfo());
 
-  // Dialog states
   const [isGenerateDialogOpen, setIsGenerateDialogOpen] = useState(false);
   const [isCreateSlotDialogOpen, setIsCreateSlotDialogOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<TimetableSlot | null>(null);
   const [isSlotDetailsOpen, setIsSlotDetailsOpen] = useState(false);
-  const [isPrintTrainerDialogOpen, setIsPrintTrainerDialogOpen] = useState(false); // Add this
+  const [isPrintTrainerDialogOpen, setIsPrintTrainerDialogOpen] = useState(false);
 
-  // Print mode state
-const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer' | 'filtered'>('none');  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null); // Add this
-const [isPrintFilterDialogOpen, setIsPrintFilterDialogOpen] = useState(false);
-const [printFilterType, setPrintFilterType] = useState<'department' | 'class' | 'combined' | null>(null);
-const [printFilterValue, setPrintFilterValue] = useState<string | number | { department: string; classIds: number[] } | null>(null);
+  // Draft selection state (for "resume pending drafts" flow)
+  const [isDraftDialogOpen, setIsDraftDialogOpen] = useState(false);
+  const [pendingDrafts, setPendingDrafts] = useState<Draft[]>([]);
+  const [pendingDraftTermName, setPendingDraftTermName] = useState('');
+  const [pendingDraftGeneratedBy, setPendingDraftGeneratedBy] = useState('');
+  const [pendingDraftGeneratedAt, setPendingDraftGeneratedAt] = useState('');
+  const [pendingDraftTermId, setPendingDraftTermId] = useState<number | null>(null);
+  const [hasPendingDrafts, setHasPendingDrafts] = useState(false);
 
-  // Delete confirmation
+  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer' | 'filtered'>('none');
+  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null);
+  const [isPrintFilterDialogOpen, setIsPrintFilterDialogOpen] = useState(false);
+  const [printFilterType, setPrintFilterType] = useState<'department' | 'class' | 'combined' | null>(null);
+  const [printFilterValue, setPrintFilterValue] = useState<string | number | { department: string; classIds: number[] } | null>(null);
+
   const [deletingSlot, setDeletingSlot] = useState<TimetableSlot | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-
-  // Error handling
   const [error, setError] = useState('');
 
-  // Filter states
   const [filterTrainer, setFilterTrainer] = useState<number | null>(null);
   const [filterDepartment, setFilterDepartment] = useState<string | null>(null);
   const [filterClass, setFilterClass] = useState<number | null>(null);
   const [filterSubject, setFilterSubject] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'mine'>('all');
 
-  // Available filter options
   const [availableTrainers, setAvailableTrainers] = useState<Array<{ id: number, name: string }>>([]);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
   const [availableClasses, setAvailableClasses] = useState<Array<{ id: number, name: string, code: string }>>([]);
   const [availableSubjects, setAvailableSubjects] = useState<Array<{ id: number, name: string, code: string }>>([]);
-
-  // All trainers for print dialog
   const [allTrainers, setAllTrainers] = useState<Array<{ id: number, name: string }>>([]);
 
-  // Computed values
   const isAdmin = user?.role === 'admin';
   const hasTimetableAdminAccess = user?.role === 'admin' || user?.has_timetable_admin === true;
 
@@ -104,84 +117,86 @@ const [printFilterValue, setPrintFilterValue] = useState<string | number | { dep
     fetchUserData();
     fetchTerms();
     fetchDepartments();
-    fetchAllTrainers(); // Add this
+    fetchAllTrainers();
   }, []);
 
   useEffect(() => {
     if (selectedTerm) {
       fetchTimetableData();
+      // Check for pending drafts whenever the selected term changes
+      if (hasTimetableAdminAccess) {
+        checkPendingDrafts(selectedTerm);
+      }
     }
   }, [selectedTerm, currentWeek, filterTrainer, filterDepartment, filterClass, filterSubject, viewMode, filterRoom]);
 
-  // Fetch current user
-const fetchUserData = async () => {
-  try {
-    const response = await fetch('/api/auth/check');
-    if (!response.ok) throw new Error('Failed to fetch user data');
-    const data = await response.json();
-    setUser(data.user);
+  // Check for pending drafts for selected term
+  const checkPendingDrafts = async (termId: number) => {
+    try {
+      const response = await fetch(`/api/timetable/drafts?term_id=${termId}`);
+      if (!response.ok) return;
+      const data = await response.json();
 
-    // Only set view to 'mine' if user is NOT admin and NOT timetable admin
-    const hasTimetableAccess = data.user.role === 'admin' || data.user.has_timetable_admin === true;
-    if (!hasTimetableAccess) {
-      setViewMode('mine');
-      setFilterTrainer(data.user.id);
+      if (data.has_drafts) {
+        const termName = terms.find(t => t.id === termId)?.name ?? '';
+        setPendingDrafts(data.drafts);
+        setPendingDraftTermName(termName);
+        setPendingDraftGeneratedBy(data.generated_by ?? '');
+        setPendingDraftGeneratedAt(data.generated_at ?? '');
+        setPendingDraftTermId(termId);
+        setHasPendingDrafts(true);
+      } else {
+        setHasPendingDrafts(false);
+        setPendingDrafts([]);
+      }
+    } catch {
+      // Silently fail — drafts check is non-critical
     }
-  } catch (error) {
-    console.error('Error fetching user:', error);
-    setError('Failed to load user data');
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
-  // Fetch departments from API
+  const fetchUserData = async () => {
+    try {
+      const response = await fetch('/api/auth/check');
+      if (!response.ok) throw new Error('Failed to fetch user data');
+      const data = await response.json();
+      setUser(data.user);
+      const hasTimetableAccess = data.user.role === 'admin' || data.user.has_timetable_admin === true;
+      if (!hasTimetableAccess) {
+        setViewMode('mine');
+        setFilterTrainer(data.user.id);
+      }
+    } catch {
+      setError('Failed to load user data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const fetchDepartments = async () => {
     try {
       const response = await fetch('/api/departments');
-      if (!response.ok) throw new Error('Failed to fetch departments');
+      if (!response.ok) return;
       const data = await response.json();
-      
-      // Filter only active departments and map to names
-      const activeDeptNames = data
-        .filter((dept: any) => dept.is_active)
-        .map((dept: any) => dept.name);
-      
-      setAvailableDepartments(activeDeptNames);
-    } catch (error) {
-      console.error('Error fetching departments:', error);
-    }
+      setAvailableDepartments(data.filter((d: any) => d.is_active).map((d: any) => d.name));
+    } catch { /* ignore */ }
   };
 
-  // Fetch all trainers for print dialog
   const fetchAllTrainers = async () => {
     try {
       const response = await fetch('/api/users?role=employee');
-      if (!response.ok) throw new Error('Failed to fetch trainers');
+      if (!response.ok) return;
       const data = await response.json();
-      
-      // Map to simple array of id and name
-      const trainerList = data.data.map((trainer: any) => ({
-        id: trainer.id,
-        name: trainer.name
-      }));
-      
-      setAllTrainers(trainerList);
-    } catch (error) {
-      console.error('Error fetching trainers:', error);
-      // Fallback to availableTrainers if API call fails
-    }
+      setAllTrainers(data.data.map((t: any) => ({ id: t.id, name: t.name })));
+    } catch { /* ignore */ }
   };
 
-  // Fetch all terms
   const fetchTerms = async () => {
     try {
       const response = await fetch('/api/terms');
-      if (!response.ok) throw new Error('Failed to fetch terms');
+      if (!response.ok) return;
       const data = await response.json();
       setTerms(data.data);
 
-      // Try to get active term
       const activeResponse = await fetch('/api/terms/active');
       if (activeResponse.ok) {
         const activeData = await activeResponse.json();
@@ -189,20 +204,15 @@ const fetchUserData = async () => {
       } else if (data.data.length > 0) {
         setSelectedTerm(data.data[0].id);
       }
-    } catch (error) {
-      console.error('Error fetching terms:', error);
-    }
+    } catch { /* ignore */ }
   };
 
-  // Fetch timetable data
   const fetchTimetableData = async () => {
     try {
       setIsLoading(true);
-
       const params = new URLSearchParams();
       if (selectedTerm) params.append('term_id', selectedTerm.toString());
 
-      // Apply filters based on view mode
       if (viewMode === 'mine' && user) {
         params.append('trainer_id', user.id.toString());
       } else if (viewMode === 'all') {
@@ -215,117 +225,72 @@ const fetchUserData = async () => {
 
       const response = await fetch(`/api/timetable?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to fetch timetable');
-
       const data = await response.json();
       setTimetableSlots(data.data);
 
-      // Extract unique trainers, classes, subjects, and rooms for filters
-     if (viewMode === 'all' && hasTimetableAdminAccess) {
-  extractFilterOptions(data.data);
-}
-    } catch (error) {
-      console.error('Error fetching timetable:', error);
+      if (viewMode === 'all' && hasTimetableAdminAccess) {
+        extractFilterOptions(data.data);
+      }
+    } catch {
       setError('Failed to load timetable data');
     } finally {
       setIsLoading(false);
     }
   };
 
-// Handle filtered print
-// Update the handleFilteredPrint function
-const handleFilteredPrint = (
-  filterType: 'department' | 'class' | 'combined', 
-  filterValue: string | number | { department: string; classIds: number[] }
-) => {
-  setPrintFilterType(filterType);
-  setPrintFilterValue(filterValue);
-  setPrintMode('filtered');
-  
-  setTimeout(() => {
-    window.print();
+  const handleFilteredPrint = (
+    filterType: 'department' | 'class' | 'combined',
+    filterValue: string | number | { department: string; classIds: number[] }
+  ) => {
+    setPrintFilterType(filterType);
+    setPrintFilterValue(filterValue);
+    setPrintMode('filtered');
     setTimeout(() => {
-      setPrintMode('none');
-      setPrintFilterType(null);
-      setPrintFilterValue(null);
-    }, 500);
-  }, 100);
-};
+      window.print();
+      setTimeout(() => {
+        setPrintMode('none');
+        setPrintFilterType(null);
+        setPrintFilterValue(null);
+      }, 500);
+    }, 100);
+  };
 
-// Update getFilteredPrintSlots function
-const getFilteredPrintSlots = () => {
-  if (!printFilterType || !printFilterValue) return [];
-  
-  if (printFilterType === 'department') {
-    return timetableSlots.filter(slot => slot.subjects?.department === printFilterValue);
-  } else if (printFilterType === 'class') {
-    return timetableSlots.filter(slot => slot.class_id === printFilterValue);
-  } else if (printFilterType === 'combined' && typeof printFilterValue === 'object') {
-    const { department, classIds } = printFilterValue as { department: string; classIds: number[] };
-    return timetableSlots.filter(
-      slot => 
-        slot.subjects?.department === department && 
-        classIds.includes(slot.class_id)
-    );
-  }
-  
-  return [];
-};
+  const getFilteredPrintSlots = () => {
+    if (!printFilterType || !printFilterValue) return [];
+    if (printFilterType === 'department') return timetableSlots.filter(s => s.subjects?.department === printFilterValue);
+    if (printFilterType === 'class') return timetableSlots.filter(s => s.class_id === printFilterValue);
+    if (printFilterType === 'combined' && typeof printFilterValue === 'object') {
+      const { department, classIds } = printFilterValue as { department: string; classIds: number[] };
+      return timetableSlots.filter(s => s.subjects?.department === department && classIds.includes(s.class_id));
+    }
+    return [];
+  };
 
-  // Extract filter options from timetable data
   const extractFilterOptions = (slots: TimetableSlot[]) => {
     const trainers = new Map<number, string>();
-  const classes = new Map<number, { name: string, code: string, department: string }>();
-  const subjects = new Map<number, { name: string, code: string }>();
+    const classes = new Map<number, { name: string, code: string, department: string }>();
+    const subjects = new Map<number, { name: string, code: string }>();
     const rooms = new Map<number, string>();
 
     slots.forEach((slot: TimetableSlot) => {
-      if (slot.users) {
-        trainers.set(slot.users.id, slot.users.name);
-      }
-      if (slot.classes) {
-        classes.set(slot.classes.id, {
-          name: slot.classes.name,
-          code: slot.classes.code,
-          department: slot.classes.department 
-        });
-      }
-      if (slot.subjects) {
-        subjects.set(slot.subjects.id, {
-          name: slot.subjects.name,
-          code: slot.subjects.code
-        });
-      }
-      if (slot.rooms) { 
-        rooms.set(slot.rooms.id, slot.rooms.name);
-      }
+      if (slot.users) trainers.set(slot.users.id, slot.users.name);
+      if (slot.classes) classes.set(slot.classes.id, { name: slot.classes.name, code: slot.classes.code, department: slot.classes.department });
+      if (slot.subjects) subjects.set(slot.subjects.id, { name: slot.subjects.name, code: slot.subjects.code });
+      if (slot.rooms) rooms.set(slot.rooms.id, slot.rooms.name);
     });
 
-    setAvailableTrainers(
-      Array.from(trainers.entries()).map(([id, name]) => ({ id, name }))
-    );
-    setAvailableClasses(
-      Array.from(classes.entries()).map(([id, data]) => ({ id, ...data }))
-    );
-    setAvailableSubjects(
-      Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data }))
-    );
-    setAvailableRooms( 
-      Array.from(rooms.entries()).map(([id, name]) => ({ id, name }))
-    );
+    setAvailableTrainers(Array.from(trainers.entries()).map(([id, name]) => ({ id, name })));
+    setAvailableClasses(Array.from(classes.entries()).map(([id, data]) => ({ id, ...data })));
+    setAvailableSubjects(Array.from(subjects.entries()).map(([id, data]) => ({ id, ...data })));
+    setAvailableRooms(Array.from(rooms.entries()).map(([id, name]) => ({ id, name })));
   };
 
-  // Handle view mode change
   const handleViewModeChange = (mode: 'all' | 'mine') => {
     setViewMode(mode);
-    if (mode === 'mine' && user) {
-      setFilterTrainer(user.id);
-      clearFilters();
-    } else {
-      setFilterTrainer(null);
-    }
+    if (mode === 'mine' && user) { setFilterTrainer(user.id); clearFilters(); }
+    else setFilterTrainer(null);
   };
 
-  // Clear all filters
   const clearFilters = () => {
     setFilterTrainer(null);
     setFilterDepartment(null);
@@ -334,80 +299,50 @@ const getFilteredPrintSlots = () => {
     setFilterRoom(null);
   };
 
-  // Handle printing
   const handlePrint = (mode: 'master' | 'grouped' | 'department') => {
     setPrintMode(mode);
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setPrintMode('none'), 500);
-    }, 100);
+    setTimeout(() => { window.print(); setTimeout(() => setPrintMode('none'), 500); }, 100);
   };
 
-  // Handle trainer print
   const handlePrintTrainer = async (trainerId: number) => {
     setPrintTrainerId(trainerId);
     setPrintMode('trainer');
-    
-    // Small delay to ensure state is set before printing
     setTimeout(() => {
       window.print();
-      setTimeout(() => {
-        setPrintMode('none');
-        setPrintTrainerId(null);
-      }, 500);
+      setTimeout(() => { setPrintMode('none'); setPrintTrainerId(null); }, 500);
     }, 100);
   };
 
-  // Handle slot drag and drop
   const handleSlotMove = async (slotId: string, newDayOfWeek: number, newPeriodId: number) => {
     try {
       const response = await fetch(`/api/timetable/${slotId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          day_of_week: newDayOfWeek,
-          lesson_period_id: newPeriodId
-        })
+        body: JSON.stringify({ day_of_week: newDayOfWeek, lesson_period_id: newPeriodId })
       });
-
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.details || error.error || 'Failed to move slot');
+        const err = await response.json();
+        throw new Error(err.details || err.error || 'Failed to move slot');
       }
-
       await fetchTimetableData();
       setError('');
-    } catch (error) {
-      console.error('Error moving slot:', error);
-      setError(error instanceof Error ? error.message : 'Failed to move slot');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to move slot');
       await fetchTimetableData();
     }
   };
 
-  // Handle slot click for details
-  const handleSlotClick = (slot: TimetableSlot) => {
-    setSelectedSlot(slot);
-    setIsSlotDetailsOpen(true);
-  };
-
-  // Handle delete slot
-  const handleDeleteSlot = async (slot: TimetableSlot) => {
-    setDeletingSlot(slot);
-  };
+  const handleSlotClick = (slot: TimetableSlot) => { setSelectedSlot(slot); setIsSlotDetailsOpen(true); };
+  const handleDeleteSlot = (slot: TimetableSlot) => setDeletingSlot(slot);
 
   const confirmDelete = async () => {
     if (!deletingSlot) return;
-
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/timetable/${deletingSlot.id}`, {
-        method: 'DELETE',
-      });
-
+      const response = await fetch(`/api/timetable/${deletingSlot.id}`, { method: 'DELETE' });
       if (!response.ok) throw new Error('Failed to delete slot');
       await fetchTimetableData();
-    } catch (error) {
-      console.error('Error deleting slot:', error);
+    } catch {
       setError('Failed to delete slot');
     } finally {
       setIsDeleting(false);
@@ -415,7 +350,6 @@ const getFilteredPrintSlots = () => {
     }
   };
 
-  // Week navigation
   const handleWeekChange = (direction: 'prev' | 'next') => {
     const newWeek = { ...currentWeek };
     const offset = direction === 'next' ? 7 : -7;
@@ -425,13 +359,41 @@ const getFilteredPrintSlots = () => {
     setCurrentWeek(newWeek);
   };
 
-  // Get filtered slots for trainer print
   const getTrainerPrintSlots = () => {
     if (!printTrainerId) return [];
     return timetableSlots.filter(slot => slot.employee_id === printTrainerId);
   };
 
-  if (isLoading) {
+  // Draft flow handlers (for the "resume" path from the banner)
+  const handleConfirmDraft = async (draftId: number) => {
+    const response = await fetch('/api/timetable/drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ draft_id: draftId }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to confirm timetable');
+
+    setIsDraftDialogOpen(false);
+    setHasPendingDrafts(false);
+    setPendingDrafts([]);
+    fetchTimetableData();
+  };
+
+  const handleDiscardDrafts = async () => {
+    if (!pendingDraftTermId) return;
+    const response = await fetch(`/api/timetable/drafts?term_id=${pendingDraftTermId}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Failed to discard drafts');
+    }
+    setIsDraftDialogOpen(false);
+    setHasPendingDrafts(false);
+    setPendingDrafts([]);
+    setIsGenerateDialogOpen(true); // Open generate dialog to start fresh
+  };
+
+  if (isLoading && !timetableSlots.length) {
     return (
       <div className="flex justify-center items-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
@@ -442,10 +404,39 @@ const getFilteredPrintSlots = () => {
   return (
     <div className="container mx-auto py-6 space-y-6">
       <TimetableHeader
-  isAdmin={hasTimetableAdminAccess} // Changed from isAdmin
-  onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
-  onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
-/>
+        isAdmin={hasTimetableAdminAccess}
+        onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
+        onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
+      />
+
+      {/* Pending Drafts Button — shown when drafts exist, as a persistent entry point */}
+      {hasTimetableAdminAccess && hasPendingDrafts && (
+        <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-300 rounded-lg">
+          <div className="flex items-center gap-2 text-amber-800 text-sm">
+            <ScrollText className="h-4 w-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>3 draft timetables</strong> are pending review for{' '}
+              <strong>{pendingDraftTermName}</strong>
+              {pendingDraftGeneratedBy && (
+                <span className="text-amber-700"> · Generated by {pendingDraftGeneratedBy}</span>
+              )}
+              {pendingDraftGeneratedAt && (
+                <span className="text-amber-600 text-xs ml-1">
+                  · {new Date(pendingDraftGeneratedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </span>
+              )}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            className="ml-4 bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+            onClick={() => setIsDraftDialogOpen(true)}
+          >
+            <ClipboardList className="h-4 w-4 mr-1" />
+            Review & Select
+          </Button>
+        </div>
+      )}
 
       {error && (
         <Alert variant="destructive">
@@ -453,56 +444,30 @@ const getFilteredPrintSlots = () => {
         </Alert>
       )}
 
-      {/* Print Buttons - Updated */}
-      <div className="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          onClick={() => handlePrint('master')}
-        >
-          <Printer className="mr-2 h-4 w-4" />
-          Print Master Timetable
+      {/* Print Buttons */}
+      <div className="flex justify-end gap-2 flex-wrap">
+        <Button variant="outline" onClick={() => handlePrint('master')}>
+          <Printer className="mr-2 h-4 w-4" />Print Master Timetable
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => handlePrint('grouped')}
-        >
-          <FileText className="mr-2 h-4 w-4" />
-          Print by Class
+        <Button variant="outline" onClick={() => handlePrint('grouped')}>
+          <FileText className="mr-2 h-4 w-4" />Print by Class
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => handlePrint('department')}
-        >
-          <Building2 className="mr-2 h-4 w-4" />
-          Print by Department
+        <Button variant="outline" onClick={() => handlePrint('department')}>
+          <Building2 className="mr-2 h-4 w-4" />Print by Department
         </Button>
-        <Button
-          variant="outline"
-          onClick={() => setIsPrintTrainerDialogOpen(true)}
-        >
-          <UserCheck className="mr-2 h-4 w-4" />
-          Print Trainer Schedule
+        <Button variant="outline" onClick={() => setIsPrintTrainerDialogOpen(true)}>
+          <UserCheck className="mr-2 h-4 w-4" />Print Trainer Schedule
         </Button>
-
-          <Button
-    variant="outline"
-    onClick={() => setIsPrintFilterDialogOpen(true)}
-  >
-    <Filter className="mr-2 h-4 w-4" />
-    Print Filtered
-  </Button>
+        <Button variant="outline" onClick={() => setIsPrintFilterDialogOpen(true)}>
+          <Filter className="mr-2 h-4 w-4" />Print Filtered
+        </Button>
       </div>
 
       <div className="flex items-center gap-4 p-4 bg-white rounded-lg border">
-        <TermSelector
-          terms={terms}
-          selectedTerm={selectedTerm}
-          onTermChange={setSelectedTerm}
-        />
-
+        <TermSelector terms={terms} selectedTerm={selectedTerm} onTermChange={setSelectedTerm} />
         <TimetableFilters
-  isAdmin={hasTimetableAdminAccess}         
-  viewMode={viewMode}
+          isAdmin={hasTimetableAdminAccess}
+          viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
           filterTrainer={filterTrainer}
           filterDepartment={filterDepartment}
@@ -513,7 +478,7 @@ const getFilteredPrintSlots = () => {
           onDepartmentChange={setFilterDepartment}
           onClassChange={setFilterClass}
           onSubjectChange={setFilterSubject}
-          onRoomChange={setFilterRoom} 
+          onRoomChange={setFilterRoom}
           onClearFilters={clearFilters}
           availableTrainers={availableTrainers}
           availableDepartments={availableDepartments}
@@ -524,22 +489,22 @@ const getFilteredPrintSlots = () => {
       </div>
 
       <ActiveFiltersDisplay
-isAdmin={hasTimetableAdminAccess}        
-viewMode={viewMode}
+        isAdmin={hasTimetableAdminAccess}
+        viewMode={viewMode}
         filterTrainer={filterTrainer}
         filterClass={filterClass}
         filterSubject={filterSubject}
         filterDepartment={filterDepartment}
-        filterRoom={filterRoom} 
+        filterRoom={filterRoom}
         availableTrainers={availableTrainers}
         availableClasses={availableClasses}
         availableSubjects={availableSubjects}
-        availableRooms={availableRooms} 
+        availableRooms={availableRooms}
         onRemoveTrainer={() => setFilterTrainer(null)}
         onRemoveClass={() => setFilterClass(null)}
         onRemoveSubject={() => setFilterSubject(null)}
         onRemoveDepartment={() => setFilterDepartment(null)}
-        onRemoveRoom={() => setFilterRoom(null)} 
+        onRemoveRoom={() => setFilterRoom(null)}
       />
 
       <WeekNavigator
@@ -557,51 +522,22 @@ viewMode={viewMode}
         userId={user?.id || 0}
       />
 
-      {/* Print Views - Conditionally Rendered */}
+      {/* Print Views */}
       {printMode === 'master' && (
-        <MasterTimetablePrint
-          slots={timetableSlots}
-          currentWeek={currentWeek}
-          termName={terms.find(t => t.id === selectedTerm)?.name}
-        />
+        <MasterTimetablePrint slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} />
       )}
-
       {printMode === 'grouped' && (
-        <PrintableTimetable
-          slots={timetableSlots}
-          currentWeek={currentWeek}
-          termName={terms.find(t => t.id === selectedTerm)?.name}
-          groupBy={viewMode === 'mine' || filterTrainer ? 'trainer' : 'class'}
-        />
+        <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={viewMode === 'mine' || filterTrainer ? 'trainer' : 'class'} />
       )}
-
       {printMode === 'department' && (
-        <PrintableTimetable
-          slots={timetableSlots}
-          currentWeek={currentWeek}
-          termName={terms.find(t => t.id === selectedTerm)?.name}
-          groupBy="department"
-        />
+        <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="department" />
       )}
-
       {printMode === 'trainer' && printTrainerId && (
-        <PrintableTimetable
-          slots={getTrainerPrintSlots()}
-          currentWeek={currentWeek}
-          termName={terms.find(t => t.id === selectedTerm)?.name}
-          groupBy="trainer"
-        />
+        <PrintableTimetable slots={getTrainerPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="trainer" />
       )}
-
-      {/* Add after printMode === 'trainer' section */}
-{printMode === 'filtered' && printFilterType && printFilterValue && (
-  <PrintableTimetable
-    slots={getFilteredPrintSlots()}
-    currentWeek={currentWeek}
-    termName={terms.find(t => t.id === selectedTerm)?.name}
-    groupBy={printFilterType === 'class' ? 'class' : 'department'}
-  />
-)}
+      {printMode === 'filtered' && printFilterType && printFilterValue && (
+        <PrintableTimetable slots={getFilteredPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={printFilterType === 'class' ? 'class' : 'department'} />
+      )}
 
       <GenerateTimetableDialog
         open={isGenerateDialogOpen}
@@ -624,11 +560,10 @@ viewMode={viewMode}
           slot={selectedSlot}
           onDelete={() => handleDeleteSlot(selectedSlot)}
           onUpdate={fetchTimetableData}
-  isAdmin={hasTimetableAdminAccess}
+          isAdmin={hasTimetableAdminAccess}
         />
       )}
 
-      {/* Print Trainer Dialog */}
       <PrintTrainerDialog
         open={isPrintTrainerDialogOpen}
         onOpenChange={setIsPrintTrainerDialogOpen}
@@ -636,14 +571,26 @@ viewMode={viewMode}
         onPrint={handlePrintTrainer}
       />
 
-      {/* Add after PrintTrainerDialog */}
-<PrintFilterDialog
-  open={isPrintFilterDialogOpen}
-  onOpenChange={setIsPrintFilterDialogOpen}
-  departments={availableDepartments}
-  classes={availableClasses}
-  onPrint={handleFilteredPrint}
-/>
+      <PrintFilterDialog
+        open={isPrintFilterDialogOpen}
+        onOpenChange={setIsPrintFilterDialogOpen}
+        departments={availableDepartments}
+        classes={availableClasses}
+        onPrint={handleFilteredPrint}
+      />
+
+      {/* Draft Selection Dialog (resume pending drafts) */}
+      <DraftSelectionDialog
+        open={isDraftDialogOpen}
+        onOpenChange={setIsDraftDialogOpen}
+        drafts={pendingDrafts}
+        termName={pendingDraftTermName}
+        termId={pendingDraftTermId ?? undefined}
+        generatedBy={pendingDraftGeneratedBy}
+        generatedAt={pendingDraftGeneratedAt}
+        onConfirm={handleConfirmDraft}
+        onDiscard={handleDiscardDrafts}
+      />
 
       <AlertDialog open={!!deletingSlot} onOpenChange={() => setDeletingSlot(null)}>
         <AlertDialogContent>
@@ -657,11 +604,7 @@ viewMode={viewMode}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700"
-              disabled={isDeleting}
-            >
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700" disabled={isDeleting}>
               {isDeleting ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -677,16 +620,10 @@ function getCurrentWeekInfo() {
   const start = new Date(today);
   start.setDate(today.getDate() - dayOfWeek);
   start.setHours(0, 0, 0, 0);
-
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   end.setHours(23, 59, 59, 999);
-
-  return {
-    start,
-    end,
-    weekNumber: getWeekNumber(start)
-  };
+  return { start, end, weekNumber: getWeekNumber(start) };
 }
 
 function getWeekNumber(date: Date): number {
