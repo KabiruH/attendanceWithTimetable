@@ -43,13 +43,13 @@ function hasTimetableAdminAccess(user: any): boolean {
   return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
-// ─── Core scheduling algorithm ────────────────────────────────────────────────
-// Extracted so we can run it 3 times with different random seeds
+// ─── Core scheduling algorithm ─────────────────────────────────────────────────
 function generateSlots(
   trainerAssignments: any[],
   workingDaysArray: number[],
   lessonPeriods: any[],
   rooms: any[],
+  subjectRoomMap: Map<number, number[]>,
   sessions_per_week: number,
   term_id: number
 ) {
@@ -128,6 +128,10 @@ function generateSlots(
     const classId = classData.id;
     const subjectId = subject.id;
 
+    // ── Only consider rooms mapped to this subject ───────────────────────────
+    const allowedRoomIds = new Set(subjectRoomMap.get(subjectId) ?? []);
+    const allowedRooms = rooms.filter(r => allowedRoomIds.has(r.id));
+
     const possibleSlots: Array<{ day: number; periodId: number }> = [];
     for (const day of workingDaysArray) {
       for (const period of lessonPeriods) {
@@ -147,7 +151,7 @@ function generateSlots(
         scheduledDays.size < Math.min(sessions_per_week, workingDaysArray.length)
       ) continue;
 
-      const availableRooms = rooms.filter(room =>
+      const availableRooms = allowedRooms.filter(room =>
         isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
       );
       if (availableRooms.length === 0) continue;
@@ -182,7 +186,7 @@ function generateSlots(
       for (const slot of shuffledSlots) {
         if (sessionsScheduled >= sessions_per_week) break;
 
-        const availableRooms = rooms.filter(room =>
+        const availableRooms = allowedRooms.filter(room =>
           isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
         );
         if (availableRooms.length === 0) continue;
@@ -221,7 +225,7 @@ function generateSlots(
         trainer_name: trainer.name,
         scheduled: sessionsScheduled,
         requested: sessions_per_week,
-        reason: `Only ${sessionsScheduled}/${sessions_per_week} sessions scheduled (no available slots)`
+        reason: `Only ${sessionsScheduled}/${sessions_per_week} sessions scheduled — not enough available slots in assigned rooms`
       });
     }
   }
@@ -239,7 +243,7 @@ function generateSlots(
   return { slots: slotsToCreate, stats, skipped: skippedAssignments };
 }
 
-// ─── POST /api/timetable/generate ────────────────────────────────────────────
+// ─── POST /api/timetable/generate ─────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -256,18 +260,28 @@ export async function POST(request: NextRequest) {
     const body: GenerationSettings = await request.json();
     const { term_id, sessions_per_week, min_classes_per_day, regenerate } = body;
 
-    if (!term_id) return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
+    if (!term_id) {
+      return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
+    }
     if (!sessions_per_week || sessions_per_week < 1 || sessions_per_week > 5) {
-      return NextResponse.json({ error: 'sessions_per_week must be between 1 and 5' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'sessions_per_week must be between 1 and 5' },
+        { status: 400 }
+      );
     }
     if (!min_classes_per_day || min_classes_per_day < 1) {
-      return NextResponse.json({ error: 'min_classes_per_day must be at least 1' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'min_classes_per_day must be at least 1' },
+        { status: 400 }
+      );
     }
 
     const term = await db.terms.findUnique({ where: { id: term_id } });
-    if (!term) return NextResponse.json({ error: 'Term not found' }, { status: 404 });
+    if (!term) {
+      return NextResponse.json({ error: 'Term not found' }, { status: 404 });
+    }
 
-    // Parse working days
+    // ── Parse working days ───────────────────────────────────────────────────
     let workingDaysArray: number[] = [1, 2, 3, 4, 5];
     try {
       if (term.working_days) {
@@ -279,7 +293,7 @@ export async function POST(request: NextRequest) {
       console.warn('Failed to parse working_days, using default Mon-Fri');
     }
 
-    // Check if confirmed timetable already exists
+    // ── Regenerate guard ─────────────────────────────────────────────────────
     if (regenerate) {
       const now = new Date();
       const termStart = new Date(term.start_date);
@@ -292,42 +306,54 @@ export async function POST(request: NextRequest) {
           { status: 403 }
         );
       }
-      // Delete confirmed timetable slots
       await db.timetableslots.deleteMany({ where: { term_id } });
     } else {
       const existingSlots = await db.timetableslots.count({ where: { term_id } });
       if (existingSlots > 0) {
         return NextResponse.json(
-          { error: 'A confirmed timetable already exists. Use regenerate option if within 2 weeks of term start.' },
+          {
+            error: 'A confirmed timetable already exists. Use regenerate option if within 2 weeks of term start.'
+          },
           { status: 409 }
         );
       }
     }
 
-    // Delete any existing drafts for this term (fresh generation)
+    // ── Clear existing drafts ────────────────────────────────────────────────
     await db.timetabledrafts.deleteMany({ where: { term_id } });
 
-    // Fetch shared data once
+    // ── Active classes in term ───────────────────────────────────────────────
     const termClasses = await db.termclasses.findMany({
       where: { term_id },
-      include: { classes: { select: { id: true, name: true, code: true, is_active: true } } }
+      include: {
+        classes: { select: { id: true, name: true, code: true, is_active: true } }
+      }
     });
 
     const activeTermClasses = termClasses.filter(tc => tc.classes.is_active);
     const classIds = activeTermClasses.map(tc => tc.class_id);
 
     if (classIds.length === 0) {
-      return NextResponse.json({ error: 'No active classes assigned to this term' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'No active classes assigned to this term' },
+        { status: 400 }
+      );
     }
 
+    // ── Class subjects ───────────────────────────────────────────────────────
     const allClassSubjects = await db.classsubjects.findMany({
       where: { class_id: { in: classIds }, term_id },
       select: { id: true }
     });
     const classSubjectIds = allClassSubjects.map(cs => cs.id);
 
+    // ── Trainer assignments ──────────────────────────────────────────────────
     const trainerAssignments = await db.trainersubjectassignments.findMany({
-      where: { term_id, is_active: true, class_subject_id: { in: classSubjectIds } },
+      where: {
+        term_id,
+        is_active: true,
+        class_subject_id: { in: classSubjectIds }
+      },
       include: {
         classsubjects: {
           include: {
@@ -346,17 +372,71 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const rooms = await db.rooms.findMany({ where: { is_active: true } });
+    // ── Rooms with subject mappings ──────────────────────────────────────────
+    const rooms = await db.rooms.findMany({
+      where: { is_active: true },
+      include: {
+        subjectrooms: { select: { subject_id: true } }
+      }
+    });
+
     if (rooms.length === 0) {
-      return NextResponse.json({ error: 'No active rooms available' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'No active rooms available' },
+        { status: 400 }
+      );
     }
 
+    // ── Build subject → room[] map ───────────────────────────────────────────
+    const subjectRoomMap = new Map<number, number[]>();
+    rooms.forEach(room => {
+      room.subjectrooms.forEach(sr => {
+        const existing = subjectRoomMap.get(sr.subject_id) ?? [];
+        existing.push(room.id);
+        subjectRoomMap.set(sr.subject_id, existing);
+      });
+    });
+
+    // ── Hard block: any scheduled subject missing a room mapping ────────────
+    const subjectIdsToSchedule = new Set(
+      trainerAssignments.map(ta => ta.classsubjects.subjects.id)
+    );
+
+    const subjectsBlockingGeneration = [...subjectIdsToSchedule].filter(
+      id => !subjectRoomMap.has(id) || (subjectRoomMap.get(id)?.length ?? 0) === 0
+    );
+
+    if (subjectsBlockingGeneration.length > 0) {
+      const blockingSubjects = await db.subjects.findMany({
+        where: { id: { in: subjectsBlockingGeneration } },
+        select: { id: true, name: true, code: true }
+      });
+
+      return NextResponse.json(
+        {
+          error: `Cannot generate: ${blockingSubjects.length} subject(s) have no room assigned.`,
+          blocking_subjects: blockingSubjects.map(s => ({
+            id: s.id,
+            name: s.name,
+            code: s.code
+          })),
+          hint: 'Go to Timetable Setup → Subject — Room Assignments and assign at least one room to each subject.'
+        },
+        { status: 422 }
+      );
+    }
+
+    // ── Lesson periods ───────────────────────────────────────────────────────
     const lessonPeriods = await db.lessonperiods.findMany({
       where: { is_active: true },
       orderBy: { start_time: 'asc' }
     });
+
     if (lessonPeriods.length === 0) {
-      return NextResponse.json({ error: 'No active lesson periods configured' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'No active lesson periods configured' },
+        { status: 400 }
+      );
     }
 
     // ── Generate 3 independent draft timetables ──────────────────────────────
@@ -369,13 +449,14 @@ export async function POST(request: NextRequest) {
         workingDaysArray,
         lessonPeriods,
         rooms,
+        subjectRoomMap,
         sessions_per_week,
         term_id
       );
       draftsData.push({ draftNumber, slots, stats, skipped });
     }
 
-    // Save all 3 drafts to DB
+    // ── Save all 3 drafts ────────────────────────────────────────────────────
     const savedDrafts = await Promise.all(
       draftsData.map(({ draftNumber, slots, stats, skipped }) =>
         db.timetabledrafts.create({
@@ -408,10 +489,14 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
+
   } catch (error) {
     console.error('Error generating timetable:', error);
     return NextResponse.json(
-      { error: 'Failed to generate timetable', details: error instanceof Error ? error.message : String(error) },
+      {
+        error: 'Failed to generate timetable',
+        details: error instanceof Error ? error.message : String(error)
+      },
       { status: 500 }
     );
   }

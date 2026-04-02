@@ -100,7 +100,7 @@ export function DashboardSidebar() {
       setIsAdminOpen(true);
     }
 
-    const timetablePaths = ['/timetable', '/rooms', '/term', '/subjects', '/lesson-periods', '/classes'];
+    const timetablePaths = ['/timetable', '/rooms', '/term', '/subjects', '/lesson-periods', '/classes', '/timetable/subject-rooms',];
     if (timetablePaths.some(path => pathname.startsWith(path))) {
       setIsTimetableSetupOpen(true);
     }
@@ -201,6 +201,11 @@ export function DashboardSidebar() {
       icon: <BookOpen size={18} />,
       href: '/subjects'
     },
+    {
+    label: 'Subject — Rooms',       
+    icon: <DoorOpen size={18} />,    
+    href: '/timetable/subject-rooms' 
+  },
     {
       label: 'Classes',
       icon: <GraduationCap size={18} />,

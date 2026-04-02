@@ -77,7 +77,9 @@ async function handlePasswordLogin(body: any, clientIP: string, userAgent: strin
           id: true,
           is_active: true,
           role: true,
-          id_number: true
+          id_number: true,
+          has_timetable_admin: true,
+          is_blocked: true 
         }
       }
     },
@@ -174,7 +176,8 @@ async function handleBiometricLogin(body: any, clientIP: string, userAgent: stri
           is_active: true,
           role: true,
           id_number: true,
-          has_timetable_admin: true
+          has_timetable_admin: true,
+          is_blocked: true  
         }
       }
     },

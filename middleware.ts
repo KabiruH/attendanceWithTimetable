@@ -26,6 +26,7 @@ const timetableSetupPaths = [
   '/term',
   '/subjects',
   '/lesson-periods',
+  '/timetable/subject-rooms',
 ];
 
 // Paths only accessible by full admin (not timetable admins)
