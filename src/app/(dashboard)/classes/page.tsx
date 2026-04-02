@@ -48,6 +48,7 @@ interface User {
     name: string;
     role: string;
     department: string;
+    has_timetable_admin: boolean;
 }
 
 interface Term {
@@ -85,13 +86,15 @@ export default function ClassesPage() {
 
     const isAdmin = userRole === 'admin';
     const isTrainer = userRole === 'employee';
+    const isTimetableAdmin = user?.has_timetable_admin === true;
+    const hasManageAccess = isAdmin || isTimetableAdmin;
 
     // Filtered classes based on search term
     const filteredClasses = useMemo(() => {
         if (!searchTerm.trim()) return classes;
-        
+
         const term = searchTerm.toLowerCase();
-        return classes.filter(classItem => 
+        return classes.filter(classItem =>
             classItem.name.toLowerCase().includes(term) ||
             classItem.code.toLowerCase().includes(term) ||
             classItem.department.toLowerCase().includes(term)
@@ -155,24 +158,24 @@ export default function ClassesPage() {
     // Set default tab based on role
     useEffect(() => {
         if (userRole) {
-            if (isAdmin) {
+            if (hasManageAccess) {
                 setActiveTab('manage');
             } else {
                 setActiveTab('select');
             }
         }
-    }, [userRole, isAdmin]);
+    }, [userRole, hasManageAccess]);
 
     // Fetch classes on component mount
     useEffect(() => {
         if (userRole) {
-            if (isAdmin) {
+            if (hasManageAccess) {
                 fetchClasses();
             } else {
                 setIsLoading(false);
             }
         }
-    }, [userRole, isAdmin]);
+    }, [userRole, hasManageAccess]);
 
     // API Functions
     const fetchClasses = async () => {
@@ -374,14 +377,14 @@ export default function ClassesPage() {
             <div className="flex justify-between items-center mb-6">
                 <div>
                     <h1 className="text-2xl font-bold">
-                        {isAdmin ? 'Classes Management' : 'My Training Classes'}
+                        {hasManageAccess ? 'Classes Management' : 'My Training Classes'}
                     </h1>
                     <div className="flex items-center gap-2 mt-1">
                         <Badge variant="outline">
                             {user.name}
                         </Badge>
-                        <Badge variant={isAdmin ? "default" : "secondary"}>
-                            {isAdmin ? 'Administrator' : 'Trainer'}
+                        <Badge variant={isAdmin ? "default" : isTimetableAdmin ? "secondary" : "outline"}>
+                            {isAdmin ? 'Administrator' : isTimetableAdmin ? 'Timetable Admin' : 'Trainer'}
                         </Badge>
                     </div>
                 </div>
@@ -432,7 +435,7 @@ export default function ClassesPage() {
             {/* Role-based content - Only show if term is selected */}
             {selectedTerm && (
                 <>
-                    {isAdmin ? (
+                    {hasManageAccess ? (
                         // ADMIN VIEW
                         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
                             <TabsList>
@@ -468,7 +471,7 @@ export default function ClassesPage() {
                                             </Button>
                                         )}
                                     </div>
-                                    
+
                                     {searchTerm && (
                                         <div className="text-sm text-gray-500">
                                             {filteredClasses.length} of {classes.length} classes found
@@ -517,7 +520,7 @@ export default function ClassesPage() {
                                 {(!searchTerm || filteredClasses.length > 0) && (
                                     <ClassesTable
                                         classes={filteredClasses}
-                                        termId={selectedTerm} 
+                                        termId={selectedTerm}
                                         onEdit={handleEdit}
                                         onDeactivate={handleDeactivate}
                                     />
@@ -577,7 +580,7 @@ export default function ClassesPage() {
                                             </Button>
                                         )}
                                     </div>
-                                    
+
                                     {searchTerm && classes.length > 0 && (
                                         <div className="text-sm text-gray-500">
                                             {filteredClasses.length} of {classes.length} classes found
@@ -617,7 +620,7 @@ export default function ClassesPage() {
                 className="hidden"
             />
 
-            {isAdmin && (
+            {hasManageAccess && (
                 <>
                     <ClassesForm
                         isOpen={isFormOpen}

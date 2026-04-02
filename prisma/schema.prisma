@@ -234,6 +234,7 @@ model rooms {
   created_at     DateTime         @default(now())
   updated_at     DateTime
   timetableslots timetableslots[]
+  subjectrooms    subjectrooms[]
 }
 
 model subjects {
@@ -250,12 +251,27 @@ model subjects {
   classsubjects             classsubjects[]
   timetableslots            timetableslots[]
   trainersubjectassignments trainersubjectassignments[]
-  subjectassignmentlog      subjectassignmentlog[]      // ADD THIS
+  subjectassignmentlog      subjectassignmentlog[]   
+  subjectrooms              subjectrooms[]   
   can_be_online             Boolean                     @default(true)
 
   @@index([code], map: "Subjects_code_idx")
   @@index([department], map: "Subjects_department_idx")
   @@index([is_active], map: "Subjects_is_active_idx")
+}
+
+model subjectrooms {
+  id         Int      @id @default(autoincrement())
+  subject_id Int
+  room_id    Int
+  assigned_at DateTime @default(now())
+  assigned_by String   @db.VarChar(100)
+  subjects   subjects @relation(fields: [subject_id], references: [id], onDelete: Cascade, map: "SubjectRooms_subject_id_fkey")
+  rooms      rooms    @relation(fields: [room_id], references: [id], onDelete: Cascade, map: "SubjectRooms_room_id_fkey")
+
+  @@unique([subject_id, room_id], map: "SubjectRooms_subject_id_room_id_key")
+  @@index([subject_id], map: "SubjectRooms_subject_id_idx")
+  @@index([room_id], map: "SubjectRooms_room_id_idx")
 }
 
 model termclasses {

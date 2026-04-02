@@ -193,9 +193,9 @@ export async function GET(req: NextRequest) {
 
     // Active sessions (checked in but not checked out today)
     const now = nowInKenya.toJSDate();
-    const activeClassSessions = enrichedTodayAttendance.filter(
-      attendance => !attendance.check_out_time
-    );
+  const activeClassSessions = enrichedTodayAttendance.filter(
+  attendance => !attendance.check_out_time && attendance.check_in_time !== null
+);
 
     const canCheckIntoNewClass = activeClassSessions.length === 0;
 
