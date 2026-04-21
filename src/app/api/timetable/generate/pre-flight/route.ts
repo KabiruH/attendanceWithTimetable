@@ -72,6 +72,18 @@ export async function GET(request: NextRequest) {
     );
     const canRegenerate = daysSinceStart <= 14;
 
+    // ── Parse working days ────────────────────────────────────────────────────
+    let workingDaysArray: number[] = [1, 2, 3, 4, 5];
+    try {
+      if (term.working_days) {
+        workingDaysArray = Array.isArray(term.working_days)
+          ? term.working_days
+          : JSON.parse(term.working_days as string);
+      }
+    } catch {
+      console.warn('Failed to parse working_days, using default Mon-Fri');
+    }
+
     // ── Term classes ──────────────────────────────────────────────────────────
     const termClasses = await db.termclasses.findMany({
       where: { term_id: termId },
@@ -97,11 +109,21 @@ export async function GET(request: NextRequest) {
       where: { class_id: { in: classIds }, term_id: termId },
       include: {
         classes: { select: { id: true, name: true, code: true, department: true } },
-        subjects: { select: { id: true, name: true, code: true, department: true, credit_hours: true } }
+        subjects: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            credit_hours: true,
+            sessions_per_week: true,
+            lesson_type: true
+          }
+        }
       }
     });
 
-    // ── Trainer assignments ───────────────────────────────────────────────────
+    // ── Trainer assignments with scheduling config ─────────────────────────────
     const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
         term_id: termId,
@@ -112,53 +134,108 @@ export async function GET(request: NextRequest) {
         classsubjects: {
           include: {
             classes: { select: { id: true, name: true, code: true, department: true } },
-            subjects: { select: { id: true, name: true, code: true, department: true, credit_hours: true } }
+            subjects: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                department: true,
+                credit_hours: true,
+                sessions_per_week: true,
+                lesson_type: true
+              }
+            }
           }
         },
         users: { select: { id: true, name: true, department: true } }
       }
     });
 
-    // ── Room mapping check (GLOBAL — not per term) ────────────────────────────
-    // Fetch every active subject in the system
+    // ── Lesson periods ────────────────────────────────────────────────────────
+    const lessonPeriods = await db.lessonperiods.findMany({
+      where: { is_active: true },
+      orderBy: { start_time: 'asc' }
+    });
+
+    // ── Subject combinations for this term ────────────────────────────────────
+    const assignmentIds = trainerAssignments.map(ta => ta.id);
+
+    const subjectCombinations = await db.subjectcombinations.findMany({
+      where: {
+        OR: [
+          { primary_assignment_id: { in: assignmentIds } },
+          { combined_assignment_id: { in: assignmentIds } }
+        ]
+      },
+      include: {
+        subjects: { select: { id: true, name: true, code: true } },
+        primary_assignment: {
+          include: {
+            users: { select: { id: true, name: true } },
+            classsubjects: {
+              include: {
+                classes: { select: { id: true, name: true, code: true } }
+              }
+            }
+          }
+        },
+        combined_assignment: {
+          include: {
+            users: { select: { id: true, name: true } },
+            classsubjects: {
+              include: {
+                classes: { select: { id: true, name: true, code: true } }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // ── Room mapping check (global) ───────────────────────────────────────────
     const allActiveSubjects = await db.subjects.findMany({
       where: { is_active: true },
       select: { id: true, name: true, code: true, department: true }
     });
 
-    // Fetch all existing subject-room mappings
     const allSubjectRoomMappings = await db.subjectrooms.findMany({
       select: { subject_id: true }
     });
 
     const mappedSubjectIds = new Set(allSubjectRoomMappings.map(m => m.subject_id));
-
-    const subjectsWithoutRooms = allActiveSubjects.filter(
-      s => !mappedSubjectIds.has(s.id)
-    );
+    const subjectsWithoutRooms = allActiveSubjects.filter(s => !mappedSubjectIds.has(s.id));
 
     // ── Build trainer map ─────────────────────────────────────────────────────
     const classSubjectIdsWithTrainer = new Set(
       trainerAssignments.map(ta => ta.class_subject_id)
     );
 
-    const subjectsWithTrainer = trainerAssignments.map(ta => ({
-      id: ta.classsubjects.id,
-      trainer_assignment_id: ta.id,
-      subject_id: ta.classsubjects.subjects.id,
-      subject_name: ta.classsubjects.subjects.name,
-      subject_code: ta.classsubjects.subjects.code,
-      class_id: ta.classsubjects.classes.id,
-      class_name: ta.classsubjects.classes.name,
-      class_code: ta.classsubjects.classes.code,
-      department: ta.classsubjects.classes.department,
-      credit_hours: ta.classsubjects.subjects.credit_hours,
-      trainer: {
-        id: ta.users.id,
-        name: ta.users.name,
-        department: ta.users.department
-      }
-    }));
+    // ── Effective sessions and lesson type per assignment ─────────────────────
+    // (assignment-level override takes priority, falls back to subject default)
+    const subjectsWithTrainer = trainerAssignments.map(ta => {
+      const effectiveSessions = ta.sessions_per_week ?? ta.classsubjects.subjects.sessions_per_week;
+      const effectiveLessonType = ta.lesson_type ?? ta.classsubjects.subjects.lesson_type;
+      return {
+        id: ta.classsubjects.id,
+        trainer_assignment_id: ta.id,
+        subject_id: ta.classsubjects.subjects.id,
+        subject_name: ta.classsubjects.subjects.name,
+        subject_code: ta.classsubjects.subjects.code,
+        class_id: ta.classsubjects.classes.id,
+        class_name: ta.classsubjects.classes.name,
+        class_code: ta.classsubjects.classes.code,
+        department: ta.classsubjects.classes.department,
+        credit_hours: ta.classsubjects.subjects.credit_hours,
+        sessions_per_week: effectiveSessions,
+        lesson_type: effectiveLessonType,
+        is_override: ta.sessions_per_week !== null || ta.lesson_type !== null,
+        trainer: {
+          id: ta.users.id,
+          name: ta.users.name,
+          department: ta.users.department
+        }
+      };
+    });
 
     const subjectsWithoutTrainer = allClassSubjects
       .filter(cs => !classSubjectIdsWithTrainer.has(cs.id))
@@ -171,25 +248,40 @@ export async function GET(request: NextRequest) {
         class_name: cs.classes.name,
         class_code: cs.classes.code,
         department: cs.classes.department,
-        credit_hours: cs.subjects.credit_hours
+        credit_hours: cs.subjects.credit_hours,
+        sessions_per_week: cs.subjects.sessions_per_week,
+        lesson_type: cs.subjects.lesson_type
       }));
 
+    // ── Trainer summary map ───────────────────────────────────────────────────
     const trainerMap = new Map<number, {
       id: number;
       name: string;
       department: string | null;
       subjects_count: number;
-      subjects: Array<{ code: string; name: string; class_code: string }>;
+      total_sessions_per_week: number;
+      subjects: Array<{
+        code: string;
+        name: string;
+        class_code: string;
+        sessions_per_week: number;
+        lesson_type: string;
+      }>;
     }>();
 
     trainerAssignments.forEach(ta => {
+      const effectiveSessions = ta.sessions_per_week ?? ta.classsubjects.subjects.sessions_per_week;
+      const effectiveLessonType = ta.lesson_type ?? ta.classsubjects.subjects.lesson_type;
       const existing = trainerMap.get(ta.users.id);
       if (existing) {
         existing.subjects_count++;
+        existing.total_sessions_per_week += effectiveSessions;
         existing.subjects.push({
           code: ta.classsubjects.subjects.code,
           name: ta.classsubjects.subjects.name,
-          class_code: ta.classsubjects.classes.code
+          class_code: ta.classsubjects.classes.code,
+          sessions_per_week: effectiveSessions,
+          lesson_type: effectiveLessonType
         });
       } else {
         trainerMap.set(ta.users.id, {
@@ -197,10 +289,13 @@ export async function GET(request: NextRequest) {
           name: ta.users.name,
           department: ta.users.department,
           subjects_count: 1,
+          total_sessions_per_week: effectiveSessions,
           subjects: [{
             code: ta.classsubjects.subjects.code,
             name: ta.classsubjects.subjects.name,
-            class_code: ta.classsubjects.classes.code
+            class_code: ta.classsubjects.classes.code,
+            sessions_per_week: effectiveSessions,
+            lesson_type: effectiveLessonType
           }]
         });
       }
@@ -208,29 +303,54 @@ export async function GET(request: NextRequest) {
 
     const trainerList = Array.from(trainerMap.values());
 
-    // ── Rooms & periods ───────────────────────────────────────────────────────
+    // ── Rooms ─────────────────────────────────────────────────────────────────
     const rooms = await db.rooms.findMany({
       where: { is_active: true },
       select: { id: true, name: true, capacity: true, room_type: true }
     });
 
-    const lessonPeriods = await db.lessonperiods.findMany({
-      where: { is_active: true },
-      orderBy: { start_time: 'asc' }
-    });
-
     const existingSlots = await db.timetableslots.count({ where: { term_id: termId } });
 
-    let workingDaysArray: number[] = [1, 2, 3, 4, 5];
-    try {
-      if (term.working_days) {
-        workingDaysArray = Array.isArray(term.working_days)
-          ? term.working_days
-          : JSON.parse(term.working_days as string);
-      }
-    } catch {
-      console.warn('Failed to parse working_days, using default Mon-Fri');
-    }
+    // ── Combination summary ───────────────────────────────────────────────────
+    const combinationsBySubject = new Map<number, typeof subjectCombinations>();
+    subjectCombinations.forEach(combo => {
+      const subjectId = combo.subject_id;
+      const existing = combinationsBySubject.get(subjectId) ?? [];
+      existing.push(combo);
+      combinationsBySubject.set(subjectId, existing);
+    });
+
+    const combinationSummary = Array.from(combinationsBySubject.entries()).map(
+      ([subjectId, combos]) => ({
+        subject_id: subjectId,
+        subject_name: combos[0].subjects.name,
+        subject_code: combos[0].subjects.code,
+        combination_count: combos.length,
+        combinations: combos.map(c => ({
+          id: c.id,
+          session_number: c.session_number,
+          class_a: c.primary_assignment.classsubjects.classes.name,
+          class_a_code: c.primary_assignment.classsubjects.classes.code,
+          trainer_a: c.primary_assignment.users.name,
+          class_b: c.combined_assignment.classsubjects.classes.name,
+          class_b_code: c.combined_assignment.classsubjects.classes.code,
+          trainer_b: c.combined_assignment.users.name,
+        }))
+      })
+    );
+
+    // ── Scheduling config summary ─────────────────────────────────────────────
+    // Group subjects by lesson_type for the summary
+    const lessonTypeCounts = { single: 0, double: 0, triple: 0 };
+    subjectsWithTrainer.forEach(s => {
+      const lt = s.lesson_type as 'single' | 'double' | 'triple';
+      if (lt in lessonTypeCounts) lessonTypeCounts[lt]++;
+    });
+
+    const totalSlotsNeeded = subjectsWithTrainer.reduce((sum, s) => {
+      const periodsPerSession = s.lesson_type === 'triple' ? 3 : s.lesson_type === 'double' ? 2 : 1;
+      return sum + s.sessions_per_week * periodsPerSession;
+    }, 0);
 
     // ── Errors & warnings ─────────────────────────────────────────────────────
     const errors: string[] = [];
@@ -250,7 +370,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ── Room mapping error — hard block, term-agnostic ────────────────────────
     if (subjectsWithoutRooms.length > 0) {
       errors.push(
         `${subjectsWithoutRooms.length} active subject(s) have no room assigned. ` +
@@ -276,6 +395,43 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // ── Double/triple consecutive period warnings ──────────────────────────────
+    const doubleTripleSubjects = subjectsWithTrainer.filter(
+      s => s.lesson_type === 'double' || s.lesson_type === 'triple'
+    );
+
+    if (doubleTripleSubjects.length > 0) {
+      const periodsNeededForDouble = 2;
+      const periodsNeededForTriple = 3;
+
+      // Check if there are enough consecutive periods in the configured periods
+      // A simple check: if lesson_type is double, we need at least 2 periods per day
+      const hasEnoughForDouble = lessonPeriods.length >= periodsNeededForDouble;
+      const hasEnoughForTriple = lessonPeriods.length >= periodsNeededForTriple;
+
+      const doubleCount = doubleTripleSubjects.filter(s => s.lesson_type === 'double').length;
+      const tripleCount = doubleTripleSubjects.filter(s => s.lesson_type === 'triple').length;
+
+      if (doubleCount > 0 && !hasEnoughForDouble) {
+        errors.push(
+          `${doubleCount} subject(s) require double periods but only ${lessonPeriods.length} lesson period(s) are configured. Add at least 2 lesson periods.`
+        );
+      }
+
+      if (tripleCount > 0 && !hasEnoughForTriple) {
+        errors.push(
+          `${tripleCount} subject(s) require triple periods but only ${lessonPeriods.length} lesson period(s) are configured. Add at least 3 lesson periods.`
+        );
+      }
+
+      if (hasEnoughForDouble || hasEnoughForTriple) {
+        warnings.push(
+          `${doubleTripleSubjects.length} subject(s) require consecutive periods (${doubleCount} double, ${tripleCount} triple). ` +
+          `The generator will find back-to-back slots for these — scheduling may be tighter.`
+        );
+      }
+    }
+
     if (rooms.length < trainerList.length) {
       warnings.push(
         `Only ${rooms.length} room(s) for ${trainerList.length} trainer(s). Some sessions may conflict.`
@@ -288,14 +444,23 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // ── Per-trainer slot availability check ───────────────────────────────────
     const totalSlotsPerWeek = workingDaysArray.length * lessonPeriods.length;
     trainerList.forEach(trainer => {
-      if (trainer.subjects_count > totalSlotsPerWeek) {
+      if (trainer.total_sessions_per_week > totalSlotsPerWeek) {
         warnings.push(
-          `${trainer.name} has ${trainer.subjects_count} subjects but only ${totalSlotsPerWeek} slots/week available.`
+          `${trainer.name} needs ${trainer.total_sessions_per_week} period(s)/week across ${trainer.subjects_count} subject(s), ` +
+          `but only ${totalSlotsPerWeek} slots/week are available.`
         );
       }
     });
+
+    if (subjectCombinations.length > 0) {
+      warnings.push(
+        `${subjectCombinations.length} class combination(s) configured across ${combinationsBySubject.size} subject(s). ` +
+        `Combined sessions will share one room and one slot.`
+      );
+    }
 
     const result = {
       passed: errors.length === 0,
@@ -323,7 +488,16 @@ export async function GET(request: NextRequest) {
         details_with_trainer: subjectsWithTrainer,
         details_without_trainer: subjectsWithoutTrainer
       },
-      // ── Room mapping summary (global) ─────────────────────────────────────
+      scheduling_config: {
+        lesson_type_breakdown: lessonTypeCounts,
+        total_period_slots_needed_per_week: totalSlotsNeeded,
+        subjects_with_overrides: subjectsWithTrainer.filter(s => s.is_override).length
+      },
+      combinations: {
+        total: subjectCombinations.length,
+        subjects_with_combinations: combinationsBySubject.size,
+        details: combinationSummary
+      },
       subject_room_mappings: {
         total_active_subjects: allActiveSubjects.length,
         mapped: allActiveSubjects.length - subjectsWithoutRooms.length,

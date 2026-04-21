@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 interface Department {
@@ -39,7 +38,7 @@ interface Subject {
   credit_hours: number | null;
   description: string | null;
   is_active: boolean;
-  created_at: string; // ADD THIS LINE
+  created_at: string;
 }
 
 interface EditSubjectDialogProps {
@@ -63,11 +62,6 @@ export default function EditSubjectDialog({
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loadingDepartments, setLoadingDepartments] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [showAddDepartment, setShowAddDepartment] = useState(false);
-  const [newDepartment, setNewDepartment] = useState({
-    name: "",
-    code: "",
-  });
 
   useEffect(() => {
     fetchDepartments();
@@ -91,40 +85,7 @@ export default function EditSubjectDialog({
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
   ) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
-  };
-
-  const handleAddDepartment = async () => {
-    if (!newDepartment.name || !newDepartment.code) {
-      toast.error("Department name and code are required");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/departments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newDepartment),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to create department");
-      }
-
-      const department = await response.json();
-      setDepartments((prev) => [...prev, department]);
-      setFormData({ ...formData, department: department.name });
-      setShowAddDepartment(false);
-      setNewDepartment({ name: "", code: "" });
-      toast.success("Department created successfully");
-    } catch (error: any) {
-      console.error("Error creating department:", error);
-      toast.error(error.message || "Failed to create department");
-    }
+    setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -146,7 +107,9 @@ export default function EditSubjectDialog({
           name: formData.name,
           code: formData.code,
           department: formData.department,
-          credit_hours: formData.credit_hours ? parseInt(formData.credit_hours) : null,
+          credit_hours: formData.credit_hours
+            ? parseInt(formData.credit_hours)
+            : null,
           description: formData.description || null,
         }),
       });
@@ -171,9 +134,7 @@ export default function EditSubjectDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Edit Subject</DialogTitle>
-          <DialogDescription>
-            Update the subject information
-          </DialogDescription>
+          <DialogDescription>Update the subject information</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 py-4">
@@ -226,34 +187,23 @@ export default function EditSubjectDialog({
             {loadingDepartments ? (
               <Input placeholder="Loading departments..." disabled />
             ) : (
-              <div className="flex gap-2">
-                <Select
-                  value={formData.department}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, department: value })
-                  }
-                >
-                  <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Select a department" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {departments.map((dept) => (
-                      <SelectItem key={dept.id} value={dept.name}>
-                        {dept.name} ({dept.code})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setShowAddDepartment(true)}
-                  title="Add new department"
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-              </div>
+              <Select
+                value={formData.department}
+                onValueChange={value =>
+                  setFormData({ ...formData, department: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a department" />
+                </SelectTrigger>
+                <SelectContent>
+                  {departments.map(dept => (
+                    <SelectItem key={dept.id} value={dept.name}>
+                      {dept.name} ({dept.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
           </div>
 
@@ -283,65 +233,6 @@ export default function EditSubjectDialog({
             </Button>
           </DialogFooter>
         </form>
-
-        {/* Add Department Mini Dialog */}
-        {showAddDepartment && (
-          <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-background border rounded-lg p-4 w-full max-w-sm shadow-lg">
-              <h3 className="font-semibold mb-4">Add New Department</h3>
-              <div className="space-y-3">
-                <div>
-                  <Label htmlFor="dept-name" className="text-xs">
-                    Department Name *
-                  </Label>
-                  <Input
-                    id="dept-name"
-                    placeholder="e.g., Information Technology"
-                    value={newDepartment.name}
-                    onChange={(e) =>
-                      setNewDepartment({ ...newDepartment, name: e.target.value })
-                    }
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="dept-code" className="text-xs">
-                    Department Code *
-                  </Label>
-                  <Input
-                    id="dept-code"
-                    placeholder="e.g., IT"
-                    value={newDepartment.code}
-                    onChange={(e) =>
-                      setNewDepartment({ ...newDepartment, code: e.target.value })
-                    }
-                  />
-                </div>
-              </div>
-              <div className="flex gap-2 mt-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setShowAddDepartment(false);
-                    setNewDepartment({ name: "", code: "" });
-                  }}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleAddDepartment}
-                  className="flex-1"
-                >
-                  Add
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
       </DialogContent>
     </Dialog>
   );

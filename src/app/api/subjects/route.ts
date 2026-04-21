@@ -93,8 +93,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, code, department, credit_hours, description, can_be_online } = body; // ✅ Added can_be_online
-
+    const { name, code, department, credit_hours, description, can_be_online, classification, lesson_type, sessions_per_week } = body;
     // Validation
     if (!name || !code || !department) {
       return NextResponse.json(
@@ -124,7 +123,10 @@ export async function POST(request: NextRequest) {
         credit_hours: credit_hours ? parseInt(credit_hours) : null,
         description: description || null,
         is_active: true,
-        can_be_online: can_be_online !== undefined ? can_be_online : true, // ✅ Default to true
+        can_be_online: can_be_online !== undefined ? can_be_online : true,
+        classification: classification || 'core',
+        lesson_type: lesson_type || 'single',
+        sessions_per_week: sessions_per_week ? parseInt(sessions_per_week) : 1,
         created_by: user.email || user.name,
         updated_at: now
       },
@@ -163,8 +165,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { id, name, code, department, credit_hours, description, is_active, can_be_online } = body; // ✅ Added can_be_online
-
+const { id, name, code, department, credit_hours, description, is_active, can_be_online, classification, lesson_type, sessions_per_week } = body;
     // Validation
     if (!id) {
       return NextResponse.json(
@@ -215,7 +216,10 @@ export async function PUT(request: NextRequest) {
         credit_hours: credit_hours ? parseInt(credit_hours) : null,
         description: description || null,
         is_active: is_active !== undefined ? is_active : existingSubject.is_active,
-        can_be_online: can_be_online !== undefined ? can_be_online : existingSubject.can_be_online, // ✅ Update can_be_online
+        can_be_online: can_be_online !== undefined ? can_be_online : existingSubject.can_be_online,
+        classification: classification || existingSubject.classification,
+        lesson_type: lesson_type || existingSubject.lesson_type,
+        sessions_per_week: sessions_per_week ? parseInt(sessions_per_week) : existingSubject.sessions_per_week,
         updated_at: new Date(),
       },
     });

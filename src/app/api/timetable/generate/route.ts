@@ -7,7 +7,6 @@ import { randomUUID } from 'crypto';
 
 interface GenerationSettings {
   term_id: number;
-  sessions_per_week: number;
   min_classes_per_day: number;
   regenerate: boolean;
 }
@@ -32,7 +31,6 @@ async function verifyAuth() {
     });
 
     if (!user || !user.is_active) return { error: 'User not found or inactive', status: 401 };
-
     return { user: { ...user, id: userId, role } };
   } catch {
     return { error: 'Invalid token', status: 401 };
@@ -43,58 +41,107 @@ function hasTimetableAdminAccess(user: any): boolean {
   return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface SlotToCreate {
+  id: string;
+  term_id: number;
+  class_id: number;
+  subject_id: number;
+  employee_id: number;
+  room_id: number;
+  lesson_period_id: number;
+  day_of_week: number;
+  status: string;
+  is_online_session: boolean;
+  created_at: Date;
+  updated_at: Date;
+  // Extra metadata stored in draft JSON for combination handling at confirm time
+  combined_class_ids?: number[];
+  session_group_id?: string; // links double/triple slots that belong to same session
+}
+
+interface SkippedAssignment {
+  trainer_assignment_id: number;
+  subject_code: string;
+  subject_name: string;
+  class_code: string;
+  trainer_name: string;
+  scheduled: number;
+  requested: number;
+  reason: string;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 // ─── Core scheduling algorithm ─────────────────────────────────────────────────
 function generateSlots(
   trainerAssignments: any[],
   workingDaysArray: number[],
-  lessonPeriods: any[],
+  lessonPeriods: any[],  // already sorted by start_time asc
   rooms: any[],
   subjectRoomMap: Map<number, number[]>,
-  sessions_per_week: number,
+  subjectCombinations: any[], // from db.subjectcombinations
   term_id: number
 ) {
-  const slotsToCreate: Array<{
-    id: string;
-    term_id: number;
-    class_id: number;
-    subject_id: number;
-    employee_id: number;
-    room_id: number;
-    lesson_period_id: number;
-    day_of_week: number;
-    status: string;
-    is_online_session: boolean;
-    created_at: Date;
-    updated_at: Date;
-  }> = [];
+  const slotsToCreate: SlotToCreate[] = [];
+  const skippedAssignments: SkippedAssignment[] = [];
 
-  const skippedAssignments: Array<{
-    trainer_assignment_id: number;
-    subject_code: string;
-    subject_name: string;
-    class_code: string;
-    trainer_name: string;
-    scheduled: number;
-    requested: number;
-    reason: string;
-  }> = [];
-
+  // slot availability tracking
+  // keys: `room-{day}-{periodId}-{roomId}`, `trainer-{day}-{periodId}-{trainerId}`, `class-{day}-{periodId}-{classId}`
   const scheduledSlots = new Map<string, boolean>();
   const usedRooms = new Set<number>();
   const usedTrainers = new Set<number>();
 
+  // ── Build combination lookup ──────────────────────────────────────────────
+  // Map: assignment_id → Map<session_number, paired_assignment_id>
+  const combinationMap = new Map<number, Map<number, number>>();
+
+  // Set of assignment IDs that appear as "combined" (secondary) — 
+  // these will be handled when their primary is processed
+  const secondaryAssignmentIds = new Set<number>();
+
+  subjectCombinations.forEach(combo => {
+    // primary side
+    if (!combinationMap.has(combo.primary_assignment_id)) {
+      combinationMap.set(combo.primary_assignment_id, new Map());
+    }
+    combinationMap.get(combo.primary_assignment_id)!.set(
+      combo.session_number,
+      combo.combined_assignment_id
+    );
+
+    // mark combined as secondary so we skip it in the main loop
+    secondaryAssignmentIds.add(combo.combined_assignment_id);
+  });
+
+  // ── Build assignment lookup by ID ─────────────────────────────────────────
+  const assignmentById = new Map<number, any>();
+  trainerAssignments.forEach(ta => assignmentById.set(ta.id, ta));
+
+  // ── Slot availability helpers ─────────────────────────────────────────────
   const isSlotAvailable = (
     day: number,
     periodId: number,
     roomId: number,
     trainerId: number,
-    classId: number
+    classIds: number[]
   ): boolean => {
-    return (
-      !scheduledSlots.has(`room-${day}-${periodId}-${roomId}`) &&
-      !scheduledSlots.has(`trainer-${day}-${periodId}-${trainerId}`) &&
-      !scheduledSlots.has(`class-${day}-${periodId}-${classId}`)
-    );
+    if (scheduledSlots.has(`room-${day}-${periodId}-${roomId}`)) return false;
+    if (scheduledSlots.has(`trainer-${day}-${periodId}-${trainerId}`)) return false;
+    for (const classId of classIds) {
+      if (scheduledSlots.has(`class-${day}-${periodId}-${classId}`)) return false;
+    }
+    return true;
   };
 
   const markSlotUsed = (
@@ -102,121 +149,207 @@ function generateSlots(
     periodId: number,
     roomId: number,
     trainerId: number,
-    classId: number
+    classIds: number[]
   ) => {
     scheduledSlots.set(`room-${day}-${periodId}-${roomId}`, true);
     scheduledSlots.set(`trainer-${day}-${periodId}-${trainerId}`, true);
-    scheduledSlots.set(`class-${day}-${periodId}-${classId}`, true);
-  };
-
-  const shuffleArray = <T,>(array: T[]): T[] => {
-    const shuffled = [...array];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    for (const classId of classIds) {
+      scheduledSlots.set(`class-${day}-${periodId}-${classId}`, true);
     }
-    return shuffled;
   };
 
+  // ── Find consecutive period groups ────────────────────────────────────────
+  // Returns arrays of period IDs that are consecutive in the lessonPeriods array
+  // e.g. for double: [[p1,p2],[p2,p3]] — each group is a valid consecutive pair
+  const getConsecutivePeriodGroups = (count: number): number[][] => {
+    const groups: number[][] = [];
+    for (let i = 0; i <= lessonPeriods.length - count; i++) {
+      const group = lessonPeriods.slice(i, i + count).map((p: any) => p.id);
+      groups.push(group);
+    }
+    return groups;
+  };
+
+  // ── Create a single-period slot object ────────────────────────────────────
+  const makeSlot = (
+    termId: number,
+    classId: number,
+    subjectId: number,
+    trainerId: number,
+    roomId: number,
+    periodId: number,
+    day: number,
+    combinedClassIds?: number[],
+    sessionGroupId?: string
+  ): SlotToCreate => ({
+    id: randomUUID(),
+    term_id: termId,
+    class_id: classId,
+    subject_id: subjectId,
+    employee_id: trainerId,
+    room_id: roomId,
+    lesson_period_id: periodId,
+    day_of_week: day,
+    status: 'scheduled',
+    is_online_session: false,
+    created_at: new Date(),
+    updated_at: new Date(),
+    ...(combinedClassIds && combinedClassIds.length > 0 ? { combined_class_ids: combinedClassIds } : {}),
+    ...(sessionGroupId ? { session_group_id: sessionGroupId } : {})
+  });
+
+  // ── Main scheduling loop ──────────────────────────────────────────────────
   for (const assignment of trainerAssignments) {
+    // Skip secondary assignments — they are handled when their primary is processed
+    if (secondaryAssignmentIds.has(assignment.id)) continue;
+
     const classSubject = assignment.classsubjects;
     const subject = classSubject.subjects;
     const classData = classSubject.classes;
     const trainer = assignment.users;
 
     const trainerId = trainer.id;
-    const classId = classData.id;
+    const primaryClassId = classData.id;
     const subjectId = subject.id;
 
-    // ── Only consider rooms mapped to this subject ───────────────────────────
+    // Effective sessions and lesson type — assignment override or subject default
+    const sessionsPerWeek: number = assignment.sessions_per_week ?? subject.sessions_per_week ?? 1;
+    const lessonType: string = assignment.lesson_type ?? subject.lesson_type ?? 'single';
+    const periodsPerSession = lessonType === 'triple' ? 3 : lessonType === 'double' ? 2 : 1;
+
+    // Rooms allowed for this subject
     const allowedRoomIds = new Set(subjectRoomMap.get(subjectId) ?? []);
     const allowedRooms = rooms.filter(r => allowedRoomIds.has(r.id));
 
-    const possibleSlots: Array<{ day: number; periodId: number }> = [];
-    for (const day of workingDaysArray) {
-      for (const period of lessonPeriods) {
-        possibleSlots.push({ day, periodId: period.id });
-      }
-    }
+    // Check if this assignment has any combinations configured
+    const combosBySession = combinationMap.get(assignment.id); // Map<session_number, combined_assignment_id> | undefined
 
-    const shuffledSlots = shuffleArray(possibleSlots);
     let sessionsScheduled = 0;
     const scheduledDays = new Set<number>();
 
-    // First pass: spread across different days
-    for (const slot of shuffledSlots) {
-      if (sessionsScheduled >= sessions_per_week) break;
-      if (
-        scheduledDays.has(slot.day) &&
-        scheduledDays.size < Math.min(sessions_per_week, workingDaysArray.length)
-      ) continue;
+    const shuffledDays = shuffleArray([...workingDaysArray]);
 
-      const availableRooms = allowedRooms.filter(room =>
-        isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
-      );
-      if (availableRooms.length === 0) continue;
+    for (let sessionNum = 1; sessionNum <= sessionsPerWeek; sessionNum++) {
+      if (sessionsScheduled >= sessionsPerWeek) break;
 
-      const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
-      const now = new Date();
+      // Is this session combined with another class?
+      const combinedAssignmentId = combosBySession?.get(sessionNum);
+      const combinedAssignment = combinedAssignmentId ? assignmentById.get(combinedAssignmentId) : null;
+      const combinedClassId = combinedAssignment?.classsubjects?.classes?.id ?? null;
 
-      slotsToCreate.push({
-        id: randomUUID(),
-        term_id,
-        class_id: classId,
-        subject_id: subjectId,
-        employee_id: trainerId,
-        room_id: selectedRoom.id,
-        lesson_period_id: slot.periodId,
-        day_of_week: slot.day,
-        status: 'scheduled',
-        is_online_session: false,
-        created_at: now,
-        updated_at: now
-      });
+      // All class IDs that must be free for this slot
+      const allClassIds = combinedClassId
+        ? [primaryClassId, combinedClassId]
+        : [primaryClassId];
 
-      markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
-      scheduledDays.add(slot.day);
-      usedRooms.add(selectedRoom.id);
-      usedTrainers.add(trainerId);
-      sessionsScheduled++;
-    }
+      // Also check combined trainer if different
+      // In most cases it's the same trainer, but handle it properly
+      const combinedTrainerId = combinedAssignment?.users?.id ?? null;
 
-    // Second pass: fill remaining (allow same day)
-    if (sessionsScheduled < sessions_per_week) {
-      for (const slot of shuffledSlots) {
-        if (sessionsScheduled >= sessions_per_week) break;
+      let placed = false;
 
-        const availableRooms = allowedRooms.filter(room =>
-          isSlotAvailable(slot.day, slot.periodId, room.id, trainerId, classId)
-        );
-        if (availableRooms.length === 0) continue;
+      // Try to spread across different days first
+      const daysToTry = [
+        ...shuffledDays.filter(d => !scheduledDays.has(d)),
+        ...shuffledDays.filter(d => scheduledDays.has(d))
+      ];
 
-        const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
-        const now = new Date();
+      for (const day of daysToTry) {
+        if (placed) break;
 
-        slotsToCreate.push({
-          id: randomUUID(),
-          term_id,
-          class_id: classId,
-          subject_id: subjectId,
-          employee_id: trainerId,
-          room_id: selectedRoom.id,
-          lesson_period_id: slot.periodId,
-          day_of_week: slot.day,
-          status: 'scheduled',
-          is_online_session: false,
-          created_at: now,
-          updated_at: now
-        });
+        if (periodsPerSession === 1) {
+          // ── Single period ──────────────────────────────────────────────────
+          const shuffledPeriods = shuffleArray(lessonPeriods);
+          for (const period of shuffledPeriods) {
+            const availableRooms = allowedRooms.filter(room =>
+              isSlotAvailable(day, period.id, room.id, trainerId, allClassIds) &&
+              // If combined trainer is different, check their availability too
+              (!combinedTrainerId || combinedTrainerId === trainerId ||
+                !scheduledSlots.has(`trainer-${day}-${period.id}-${combinedTrainerId}`))
+            );
+            if (availableRooms.length === 0) continue;
 
-        markSlotUsed(slot.day, slot.periodId, selectedRoom.id, trainerId, classId);
-        usedRooms.add(selectedRoom.id);
-        usedTrainers.add(trainerId);
-        sessionsScheduled++;
+            const selectedRoom = availableRooms[Math.floor(Math.random() * availableRooms.length)];
+
+            slotsToCreate.push(makeSlot(
+              term_id, primaryClassId, subjectId, trainerId,
+              selectedRoom.id, period.id, day,
+              combinedClassId ? [combinedClassId] : undefined
+            ));
+
+            markSlotUsed(day, period.id, selectedRoom.id, trainerId, allClassIds);
+            if (combinedTrainerId && combinedTrainerId !== trainerId) {
+              scheduledSlots.set(`trainer-${day}-${period.id}-${combinedTrainerId}`, true);
+            }
+
+            usedRooms.add(selectedRoom.id);
+            usedTrainers.add(trainerId);
+            scheduledDays.add(day);
+            sessionsScheduled++;
+            placed = true;
+            break;
+          }
+        } else {
+          // ── Double or Triple: need consecutive periods ──────────────────────
+          const consecutiveGroups = shuffleArray(getConsecutivePeriodGroups(periodsPerSession));
+          const sessionGroupId = randomUUID(); // links slots from this session together
+
+          for (const periodGroup of consecutiveGroups) {
+            // Check all periods in the group are available
+            const allPeriodsAvailable = periodGroup.every(periodId => {
+              const availableRooms = allowedRooms.filter(room =>
+                isSlotAvailable(day, periodId, room.id, trainerId, allClassIds) &&
+                (!combinedTrainerId || combinedTrainerId === trainerId ||
+                  !scheduledSlots.has(`trainer-${day}-${periodId}-${combinedTrainerId}`))
+              );
+              return availableRooms.length > 0;
+            });
+
+            if (!allPeriodsAvailable) continue;
+
+            // Find a room that's free for ALL periods in the group
+            const roomFreeForAll = allowedRooms.find(room =>
+              periodGroup.every(periodId =>
+                isSlotAvailable(day, periodId, room.id, trainerId, allClassIds) &&
+                (!combinedTrainerId || combinedTrainerId === trainerId ||
+                  !scheduledSlots.has(`trainer-${day}-${periodId}-${combinedTrainerId}`))
+              )
+            );
+
+            if (!roomFreeForAll) continue;
+
+            // Create one slot per period in the group, all linked by sessionGroupId
+            for (const periodId of periodGroup) {
+              slotsToCreate.push(makeSlot(
+                term_id, primaryClassId, subjectId, trainerId,
+                roomFreeForAll.id, periodId, day,
+                combinedClassId ? [combinedClassId] : undefined,
+                sessionGroupId
+              ));
+
+              markSlotUsed(day, periodId, roomFreeForAll.id, trainerId, allClassIds);
+              if (combinedTrainerId && combinedTrainerId !== trainerId) {
+                scheduledSlots.set(`trainer-${day}-${periodId}-${combinedTrainerId}`, true);
+              }
+            }
+
+            usedRooms.add(roomFreeForAll.id);
+            usedTrainers.add(trainerId);
+            scheduledDays.add(day);
+            sessionsScheduled++;
+            placed = true;
+            break;
+          }
+        }
+      }
+
+      if (!placed) {
+        // Could not place this session — record partial skip
+        // We continue trying remaining sessions rather than giving up entirely
       }
     }
 
-    if (sessionsScheduled < sessions_per_week) {
+    if (sessionsScheduled < sessionsPerWeek) {
       skippedAssignments.push({
         trainer_assignment_id: assignment.id,
         subject_code: subject.code,
@@ -224,20 +357,51 @@ function generateSlots(
         class_code: classData.code,
         trainer_name: trainer.name,
         scheduled: sessionsScheduled,
-        requested: sessions_per_week,
-        reason: `Only ${sessionsScheduled}/${sessions_per_week} sessions scheduled — not enough available slots in assigned rooms`
+        requested: sessionsPerWeek,
+        reason: sessionsScheduled === 0
+          ? `No available slots found — check room assignments and period availability for ${lessonType} sessions`
+          : `Only ${sessionsScheduled}/${sessionsPerWeek} sessions placed — insufficient consecutive slots for ${lessonType} sessions`
+      });
+    }
+  }
+
+  // ── Also record skipped secondary assignments that had no primary ─────────
+  // (edge case: secondary whose primary was also skipped)
+  for (const assignmentId of secondaryAssignmentIds) {
+    const assignment = assignmentById.get(assignmentId);
+    if (!assignment) continue;
+
+    // Check if any slot was created for this class+subject
+    const hasSlot = slotsToCreate.some(
+      s => s.class_id === assignment.classsubjects.classes.id &&
+           s.subject_id === assignment.classsubjects.subjects.id
+    );
+
+    if (!hasSlot) {
+      skippedAssignments.push({
+        trainer_assignment_id: assignment.id,
+        subject_code: assignment.classsubjects.subjects.code,
+        subject_name: assignment.classsubjects.subjects.name,
+        class_code: assignment.classsubjects.classes.code,
+        trainer_name: assignment.users.name,
+        scheduled: 0,
+        requested: assignment.sessions_per_week ?? assignment.classsubjects.subjects.sessions_per_week ?? 1,
+        reason: 'Combined class — primary assignment could not be scheduled'
       });
     }
   }
 
   const stats = {
     slots_created: slotsToCreate.length,
-    trainer_assignments_processed: trainerAssignments.length,
+    trainer_assignments_processed: trainerAssignments.length - secondaryAssignmentIds.size,
+    combined_assignments: secondaryAssignmentIds.size,
     assignments_fully_scheduled: trainerAssignments.length - skippedAssignments.length,
     trainers_assigned: usedTrainers.size,
     rooms_used: usedRooms.size,
     subjects_scheduled: new Set(slotsToCreate.map(s => s.subject_id)).size,
-    assignments_partially_scheduled: skippedAssignments.length
+    assignments_partially_scheduled: skippedAssignments.length,
+    double_triple_sessions: slotsToCreate.filter(s => s.session_group_id).length,
+    combined_slots: slotsToCreate.filter(s => s.combined_class_ids && s.combined_class_ids.length > 0).length
   };
 
   return { slots: slotsToCreate, stats, skipped: skippedAssignments };
@@ -258,16 +422,10 @@ export async function POST(request: NextRequest) {
     }
 
     const body: GenerationSettings = await request.json();
-    const { term_id, sessions_per_week, min_classes_per_day, regenerate } = body;
+    const { term_id, min_classes_per_day, regenerate } = body;
 
     if (!term_id) {
       return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
-    }
-    if (!sessions_per_week || sessions_per_week < 1 || sessions_per_week > 5) {
-      return NextResponse.json(
-        { error: 'sessions_per_week must be between 1 and 5' },
-        { status: 400 }
-      );
     }
     if (!min_classes_per_day || min_classes_per_day < 1) {
       return NextResponse.json(
@@ -347,7 +505,7 @@ export async function POST(request: NextRequest) {
     });
     const classSubjectIds = allClassSubjects.map(cs => cs.id);
 
-    // ── Trainer assignments ──────────────────────────────────────────────────
+    // ── Trainer assignments with scheduling config ────────────────────────────
     const trainerAssignments = await db.trainersubjectassignments.findMany({
       where: {
         term_id,
@@ -358,7 +516,16 @@ export async function POST(request: NextRequest) {
         classsubjects: {
           include: {
             classes: { select: { id: true, name: true, code: true } },
-            subjects: { select: { id: true, name: true, code: true, credit_hours: true } }
+            subjects: {
+              select: {
+                id: true,
+                name: true,
+                code: true,
+                credit_hours: true,
+                sessions_per_week: true,
+                lesson_type: true
+              }
+            }
           }
         },
         users: { select: { id: true, name: true } }
@@ -371,6 +538,27 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // ── Load subject combinations for this term's assignments ─────────────────
+    const assignmentIds = trainerAssignments.map(ta => ta.id);
+
+    const subjectCombinations = await db.subjectcombinations.findMany({
+      where: {
+        OR: [
+          { primary_assignment_id: { in: assignmentIds } },
+          { combined_assignment_id: { in: assignmentIds } }
+        ]
+      },
+      select: {
+        id: true,
+        subject_id: true,
+        session_number: true,
+        primary_assignment_id: true,
+        combined_assignment_id: true
+      }
+    });
+
+    console.log(`📎 Found ${subjectCombinations.length} combination(s) for this term`);
 
     // ── Rooms with subject mappings ──────────────────────────────────────────
     const rooms = await db.rooms.findMany({
@@ -397,7 +585,7 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    // ── Hard block: any scheduled subject missing a room mapping ────────────
+    // ── Hard block: subjects missing room mapping ─────────────────────────────
     const subjectIdsToSchedule = new Set(
       trainerAssignments.map(ta => ta.classsubjects.subjects.id)
     );
@@ -415,11 +603,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: `Cannot generate: ${blockingSubjects.length} subject(s) have no room assigned.`,
-          blocking_subjects: blockingSubjects.map(s => ({
-            id: s.id,
-            name: s.name,
-            code: s.code
-          })),
+          blocking_subjects: blockingSubjects.map(s => ({ id: s.id, name: s.name, code: s.code })),
           hint: 'Go to Timetable Setup → Subject — Room Assignments and assign at least one room to each subject.'
         },
         { status: 422 }
@@ -450,7 +634,7 @@ export async function POST(request: NextRequest) {
         lessonPeriods,
         rooms,
         subjectRoomMap,
-        sessions_per_week,
+        subjectCombinations,
         term_id
       );
       draftsData.push({ draftNumber, slots, stats, skipped });

@@ -405,7 +405,8 @@ export default function TimetablePage() {
   return (
     <div className="container mx-auto py-6 space-y-6">
       <TimetableHeader
-        isAdmin={hasTimetableAdminAccess}
+        isAdmin={user?.role === 'admin'}
+        isTimetableAdmin={user?.role !== 'admin' && user?.has_timetable_admin === true}
         onGenerateTimetable={() => setIsGenerateDialogOpen(true)}
         onCreateSlot={() => setIsCreateSlotDialogOpen(true)}
       />
@@ -540,12 +541,14 @@ export default function TimetablePage() {
         <PrintableTimetable slots={getFilteredPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={printFilterType === 'class' ? 'class' : 'department'} />
       )}
 
-      <GenerateTimetableDialog
-        open={isGenerateDialogOpen}
-        onOpenChange={setIsGenerateDialogOpen}
-        onSuccess={fetchTimetableData}
-        terms={terms}
-      />
+      {user?.role === 'admin' && (
+        <GenerateTimetableDialog
+          open={isGenerateDialogOpen}
+          onOpenChange={setIsGenerateDialogOpen}
+          onSuccess={fetchTimetableData}
+          terms={terms}
+        />
+      )}
 
       <CreateSlotDialog
         open={isCreateSlotDialogOpen}

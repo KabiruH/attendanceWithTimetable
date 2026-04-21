@@ -103,7 +103,7 @@ model classattendance {
 model classes {
   id                      Int                       @id @default(autoincrement())
   name                    String                    @db.VarChar(100)
-  code                    String                    @unique(map: "Classes_code_key") @db.VarChar(20)
+  code                    String                    @unique(map: "Classes_code_key") @db.VarChar(50)
   description             String?                   @db.Text
   department              String                    @db.VarChar(50)
   duration_hours          Int                       @default(2)
@@ -116,7 +116,8 @@ model classes {
   termclasses             termclasses[]
   timetableslots          timetableslots[]
   trainerclassassignments trainerclassassignments[]
-  subjectassignmentlog    subjectassignmentlog[]    // ADD THIS
+  subjectassignmentlog    subjectassignmentlog[]   
+  timetableslotclasses timetableslotclasses[]
 
   @@index([code], map: "Classes_code_idx")
   @@index([department], map: "Classes_department_idx")
@@ -240,7 +241,7 @@ model rooms {
 model subjects {
   id                        Int                         @id @default(autoincrement())
   name                      String                      @db.VarChar(100)
-  code                      String                      @unique(map: "Subjects_code_key") @db.VarChar(20)
+  code                      String                      @unique(map: "Subjects_code_key") @db.VarChar(100)
   department                String                      @db.VarChar(50)
   credit_hours              Int?
   description               String?                     @db.Text
@@ -253,7 +254,11 @@ model subjects {
   trainersubjectassignments trainersubjectassignments[]
   subjectassignmentlog      subjectassignmentlog[]   
   subjectrooms              subjectrooms[]   
+  subjectcombinations       subjectcombinations[]
   can_be_online             Boolean                     @default(true)
+  classification            String  @default("core")    @db.VarChar(20)  // basic, common, core
+  lesson_type               String  @default("single")  @db.VarChar(20) // single, double, triple
+  sessions_per_week Int     @default(1)
 
   @@index([code], map: "Subjects_code_idx")
   @@index([department], map: "Subjects_department_idx")
@@ -326,6 +331,7 @@ model timetableslots {
   subjects         subjects      @relation(fields: [subject_id], references: [id], map: "TimetableSlots_subject_id_fkey")
   terms            terms         @relation(fields: [term_id], references: [id], map: "TimetableSlots_term_id_fkey")
   classattendance  classattendance[] // ✅ NEW: Relation to class attendance records
+  timetableslotclasses timetableslotclasses[]
 
   @@unique([term_id, day_of_week, lesson_period_id, employee_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_employee_key")
   @@unique([term_id, day_of_week, lesson_period_id, room_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_room_id_key")
@@ -337,7 +343,19 @@ model timetableslots {
   @@index([term_id], map: "TimetableSlots_term_id_idx")
   @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // Index for day queries
   @@index([is_online_session], map: "TimetableSlots_is_online_session_idx") // Index for online session queries
+}
 
+model timetableslotclasses {
+  id               Int            @id @default(autoincrement())
+  slot_id          String
+  class_id         Int
+  created_at       DateTime       @default(now())
+  timetableslots   timetableslots @relation(fields: [slot_id], references: [id], onDelete: Cascade)
+  classes          classes        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+
+  @@unique([slot_id, class_id])
+  @@index([slot_id])
+  @@index([class_id])
 }
 
 model trainerclassassignments {
@@ -367,12 +385,16 @@ model trainersubjectassignments {
   class_subject_id Int
   assigned_at      DateTime      @default(now())
   is_active        Boolean       @default(true)
+  sessions_per_week Int?                                          // nullable override
+  lesson_type      String?       @db.VarChar(20)                 // nullable override
   classsubjects    classsubjects @relation(fields: [class_subject_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_class_subject_id_fkey")
   subjects         subjects      @relation(fields: [subject_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_subject_id_fkey")
   terms            terms         @relation(fields: [term_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_term_id_fkey")
   users            users         @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "TrainerSubjectAssignments_trainer_id_fkey")
+  primary_combinations   subjectcombinations[] @relation("PrimaryCombination")
+  combined_combinations  subjectcombinations[] @relation("CombinedAssignment")
 
-  @@unique([trainer_id, subject_id, term_id], map: "TrainerSubjectAssignments_trainer_subject_term_key")
+  @@unique([trainer_id, subject_id, term_id, class_subject_id], map: "TrainerSubjectAssignments_trainer_subject_term_key")
   @@index([class_subject_id], map: "TrainerSubjectAssignments_class_subject_id_idx")
   @@index([subject_id], map: "TrainerSubjectAssignments_subject_id_fkey")
   @@index([term_id], map: "TrainerSubjectAssignments_term_id_idx")
@@ -390,7 +412,7 @@ model users {
   blocked_by                  Int?
   blocked_reason              String?
   phone_number                String                       @db.VarChar(20)
-  department                  String?                      @db.VarChar(20)
+  department                  String?                      @db.VarChar(100)
   gender                      String                       @db.VarChar(10)
   email                       String?                      @unique(map: "Users_email_key") @db.VarChar(100)
   is_active                   Boolean                      @default(true)
@@ -449,17 +471,16 @@ model webauthncredentials {
   @@index([userId], map: "WebAuthnCredentials_userId_fkey")
 }
 
- model userblocklog {
+model userblocklog {
   id              Int       @id @default(autoincrement())
   user_id         Int
   blocked_by      Int
-  action          String    // 'blocked' or 'unblocked'
+  action          String
   reason          String?
   created_at      DateTime  @default(now())
   
-  // Changed User to users
-  user            users     @relation("BlockedUser", fields: [user_id], references: [id], onDelete: Cascade)
-  blocked_by_user users     @relation("BlockerUser", fields: [blocked_by], references: [id], onDelete: Cascade)
+  user            users     @relation("BlockedUser", fields: [user_id], references: [id], onDelete: Cascade, map: "userblocklog_user_id_fkey")
+  blocked_by_user users     @relation("BlockerUser", fields: [blocked_by], references: [id], onDelete: Cascade, map: "userblocklog_blocked_by_fkey")
 }
 
 model timetablesettings {
@@ -512,4 +533,23 @@ model timetabledrafts {
 
   @@unique([term_id, draft_number])
   @@index([term_id])
+}
+
+model subjectcombinations {
+  id                    Int      @id @default(autoincrement())
+  subject_id            Int
+  session_number        Int      // 1, 2, 3, or 4 — which session of the week
+  primary_assignment_id Int      // the "anchor" trainersubjectassignment
+  combined_assignment_id Int     // the one being combined with it
+  created_at            DateTime @default(now())
+  created_by            String   @db.VarChar(100)
+
+  subjects                        subjects                  @relation(fields: [subject_id], references: [id], onDelete: Cascade)
+  primary_assignment              trainersubjectassignments @relation("PrimaryCombination", fields: [primary_assignment_id], references: [id], onDelete: Cascade)
+  combined_assignment             trainersubjectassignments @relation("CombinedAssignment", fields: [combined_assignment_id], references: [id], onDelete: Cascade)
+
+  @@unique([session_number, primary_assignment_id, combined_assignment_id])
+  @@index([subject_id])
+  @@index([primary_assignment_id])
+  @@index([combined_assignment_id])
 }

@@ -41,7 +41,7 @@ interface Class {
   name: string;
   code: string;
   department: string;
-  is_assigned?: boolean; 
+  is_assigned?: boolean;
 }
 
 interface Term {
@@ -57,7 +57,7 @@ interface Subject {
   code: string;
   class_subject_id: number;
   is_assigned?: boolean;
-  is_assigned_elsewhere?: boolean; 
+  is_assigned_elsewhere?: boolean;
 }
 
 interface TrainerAssignment {
@@ -76,13 +76,13 @@ export default function TimetableAdminAssignmentSection() {
   const [availableSubjects, setAvailableSubjects] = useState<Subject[]>([]);
   const [trainerAssignments, setTrainerAssignments] = useState<TrainerAssignment[]>([]);
   const [classesWithSubjects, setClassesWithSubjects] = useState<Set<number>>(new Set());
-  
+
   const [selectedTrainer, setSelectedTrainer] = useState<string>('');
   const [selectedTerm, setSelectedTerm] = useState<string>('');
   const [selectedClasses, setSelectedClasses] = useState<number[]>([]);
   const [selectedClass, setSelectedClass] = useState<string>(''); // For subject selection
   const [selectedSubjects, setSelectedSubjects] = useState<number[]>([]);
-  
+
   const [isLoadingTrainers, setIsLoadingTrainers] = useState(false);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
   const [isLoadingTerms, setIsLoadingTerms] = useState(false);
@@ -127,18 +127,18 @@ export default function TimetableAdminAssignmentSection() {
     if (!hasAccess) return;
 
     fetchTrainers();
-    fetchClasses();  
-    fetchTerms(); 
+    fetchClasses();
+    fetchTerms();
   }, [authUser, authLoading]);
 
   const fetchTrainers = async () => {
     setIsLoadingTrainers(true);
     try {
-      const response = await fetch('/api/trainers'); 
+      const response = await fetch('/api/trainers');
       if (!response.ok) throw new Error('Failed to fetch trainers');
-      
+
       const result = await response.json();
-      
+
       const trainerList = result.data.map((trainer: any) => ({
         id: trainer.id,
         name: trainer.name,
@@ -230,7 +230,7 @@ export default function TimetableAdminAssignmentSection() {
       if (!response.ok) throw new Error('Failed to fetch assignments');
       const data = await response.json();
       setTrainerAssignments(Array.isArray(data) ? data : []);
-      
+
       // Mark classes as assigned
       const assignedClassIds = Array.isArray(data) ? data.map((a: TrainerAssignment) => a.class_id) : [];
       setClasses(prev => prev.map(cls => ({
@@ -252,7 +252,7 @@ export default function TimetableAdminAssignmentSection() {
       const response = await fetch(`/api/class-subjects/${classId}?term_id=${termId}&trainer_id=${selectedTrainer}`);
       if (!response.ok) throw new Error('Failed to fetch subjects');
       const data = await response.json();
-      
+
       // Transform the data to include class_subject_id
       const subjects = data.data.map((item: any) => ({
         id: item.id, // subject_id
@@ -262,7 +262,7 @@ export default function TimetableAdminAssignmentSection() {
         is_assigned: item.is_assigned || false,
         is_assigned_elsewhere: item.is_assigned_elsewhere || false
       }));
-      
+
       setAvailableSubjects(subjects);
     } catch (error) {
       console.error('Error fetching subjects:', error);
@@ -279,17 +279,17 @@ export default function TimetableAdminAssignmentSection() {
   // ✅ NEW: Check if a single class has assigned subjects
   const checkClassHasAssignedSubjects = async (classId: number): Promise<boolean> => {
     if (!selectedTrainer || !selectedTerm) return false;
-    
+
     try {
       const response = await fetch(
         `/api/class-subjects/${classId}?term_id=${selectedTerm}&trainer_id=${selectedTrainer}`
       );
-      
+
       if (!response.ok) return false;
-      
+
       const data = await response.json();
       const assignedSubjects = data.data.filter((subject: any) => subject.is_assigned);
-      
+
       return assignedSubjects.length > 0;
     } catch (error) {
       console.error('Error checking assigned subjects:', error);
@@ -300,16 +300,16 @@ export default function TimetableAdminAssignmentSection() {
   // ✅ NEW: Check all assigned classes for subjects
   const checkAllClassesForSubjects = async () => {
     if (!selectedTrainer || !selectedTerm) return;
-    
+
     const classesWithAssignedSubjects = new Set<number>();
-    
+
     for (const assignment of trainerAssignments) {
       const hasSubjects = await checkClassHasAssignedSubjects(assignment.class_id);
       if (hasSubjects) {
         classesWithAssignedSubjects.add(assignment.class_id);
       }
     }
-    
+
     setClassesWithSubjects(classesWithAssignedSubjects);
   };
 
@@ -334,10 +334,10 @@ export default function TimetableAdminAssignmentSection() {
 
     // ✅ NEW: Check if class has assigned subjects
     const hasAssignedSubjects = await checkClassHasAssignedSubjects(classId);
-    
+
     if (hasAssignedSubjects) {
       const className = classes.find(c => c.id === classId)?.name || 'this class';
-      
+
       toast({
         title: "Cannot Remove Class",
         description: `${className} has subjects currently assigned to this trainer. Please remove all assigned subjects from this class first before unassigning the class. 💡 Go to Step 3 below to unassign subjects for this class.`,
@@ -493,7 +493,7 @@ export default function TimetableAdminAssignmentSection() {
     }
 
     setIsAssigningSubjects(true);
-    
+
     try {
       // Assign each subject individually
       const promises = selectedSubjects.map(async (subjectId) => {
@@ -528,12 +528,12 @@ export default function TimetableAdminAssignmentSection() {
 
       // Reset subject selection
       setSelectedSubjects([]);
-      
+
       // Refresh subjects to show updated assignment status
       if (selectedClass && selectedTerm) {
         await fetchSubjectsForClass(parseInt(selectedClass), parseInt(selectedTerm));
       }
-      
+
       // Refresh class subject indicators
       await checkAllClassesForSubjects();
     } catch (error) {
@@ -586,7 +586,7 @@ export default function TimetableAdminAssignmentSection() {
       <Alert>
         <UserCog className="h-4 w-4" />
         <AlertDescription>
-          As a Timetable Admin, you can assign classes and subjects to trainers on their behalf. 
+          As a Timetable Admin, you can assign classes and subjects to trainers on their behalf.
           This is useful when trainers are unavailable or when managing bulk assignments.
         </AlertDescription>
       </Alert>
@@ -692,11 +692,10 @@ export default function TimetableAdminAssignmentSection() {
                   {classes.map((cls) => (
                     <div
                       key={cls.id}
-                      className={`flex items-center justify-between p-3 transition-colors ${
-                        cls.is_assigned
-                          ? 'bg-green-50 hover:bg-green-100'
-                          : 'hover:bg-gray-50'
-                      }`}
+                      className={`flex items-center justify-between p-3 transition-colors ${cls.is_assigned
+                        ? 'bg-green-50 hover:bg-green-100'
+                        : 'hover:bg-gray-50'
+                        }`}
                     >
                       <div className="flex items-center space-x-3 flex-1">
                         {!cls.is_assigned && (
@@ -734,7 +733,7 @@ export default function TimetableAdminAssignmentSection() {
                           </div>
                         </Label>
                       </div>
-                      
+
                       {cls.is_assigned && (
                         <Button
                           variant="ghost"
@@ -800,7 +799,7 @@ export default function TimetableAdminAssignmentSection() {
               <AlertDescription>
                 After assigning classes, select which subjects within each class the trainer will teach.
                 <span className="block mt-1 text-xs">
-                  🟢 Green = Already assigned to this class | 🟡 Yellow = Assigned to another class
+                  🟢 Green = Already assigned to this class | 🔵 Blue = Also assigned in another class (allowed)
                 </span>
               </AlertDescription>
             </Alert>
@@ -851,16 +850,15 @@ export default function TimetableAdminAssignmentSection() {
                       {availableSubjects.map((subject) => (
                         <div
                           key={subject.id}
-                          className={`flex items-center justify-between p-3 transition-colors ${
-                            subject.is_assigned
-                              ? 'bg-green-50 hover:bg-green-100'
-                              : subject.is_assigned_elsewhere
-                              ? 'bg-yellow-50 hover:bg-yellow-100'
+                          className={`flex items-center justify-between p-3 transition-colors ${subject.is_assigned
+                            ? 'bg-green-50 hover:bg-green-100'
+                            : subject.is_assigned_elsewhere
+                              ? 'bg-blue-50 hover:bg-blue-100'
                               : 'hover:bg-gray-50'
-                          }`}
+                            }`}
                         >
                           <div className="flex items-center space-x-3 flex-1">
-                            {!subject.is_assigned && !subject.is_assigned_elsewhere && (
+                            {!subject.is_assigned && (
                               <Checkbox
                                 id={`subject-${subject.id}`}
                                 checked={selectedSubjects.includes(subject.id)}
@@ -869,9 +867,7 @@ export default function TimetableAdminAssignmentSection() {
                             )}
                             <Label
                               htmlFor={`subject-${subject.id}`}
-                              className={`flex-1 ${
-                                subject.is_assigned || subject.is_assigned_elsewhere ? 'ml-3' : 'cursor-pointer'
-                              }`}
+                              className={`flex-1 ${subject.is_assigned ? 'ml-3' : 'cursor-pointer'}`}
                             >
                               <div className="flex items-center justify-between">
                                 <div>
@@ -887,15 +883,15 @@ export default function TimetableAdminAssignmentSection() {
                                     </Badge>
                                   )}
                                   {subject.is_assigned_elsewhere && (
-                                    <Badge variant="default" className="bg-yellow-600">
-                                      Assigned to Another Class
+                                    <Badge variant="outline" className="text-blue-600 border-blue-400">
+                                      Also in Another Class
                                     </Badge>
                                   )}
                                 </div>
                               </div>
                             </Label>
                           </div>
-                          
+
                           {subject.is_assigned && (
                             <Button
                               variant="ghost"

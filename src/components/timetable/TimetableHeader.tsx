@@ -5,12 +5,14 @@ import { PlusCircle, Calendar, BookOpen } from "lucide-react";
 
 interface TimetableHeaderProps {
   isAdmin: boolean;
+  isTimetableAdmin?: boolean;
   onGenerateTimetable: () => void;
   onCreateSlot: () => void;
 }
 
 export default function TimetableHeader({
   isAdmin,
+  isTimetableAdmin = false,
   onGenerateTimetable,
   onCreateSlot,
 }: TimetableHeaderProps) {
@@ -26,18 +28,20 @@ export default function TimetableHeader({
         </p>
       </div>
       
-      {isAdmin && (
-        <div className="flex gap-2">
-          <Button onClick={onGenerateTimetable}>
-            <Calendar className="mr-2 h-4 w-4" />
-            Generate Timetable
-          </Button>
-          <Button onClick={onCreateSlot}>
-            <PlusCircle className="mr-2 h-4 w-4" />
-            Add Slot
-          </Button>
-        </div>
-      )}
+     {(isAdmin || isTimetableAdmin) && (
+  <div className="flex gap-2">
+    {isAdmin && (
+      <Button onClick={onGenerateTimetable}>
+        <Calendar className="mr-2 h-4 w-4" />
+        Generate Timetable
+      </Button>
+    )}
+    <Button onClick={onCreateSlot}>
+      <PlusCircle className="mr-2 h-4 w-4" />
+      Add Slot
+    </Button>
+  </div>
+)}
     </div>
   );
 }

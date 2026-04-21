@@ -7,15 +7,15 @@ import {
   SidebarGroup,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { 
-  LayoutDashboard, 
-  ClipboardCheck, 
-  FileBarChart, 
-  User as UserIcon, 
-  Users, 
-  LogOut, 
-  Shield, 
-  Calendar, 
+import {
+  LayoutDashboard,
+  ClipboardCheck,
+  FileBarChart,
+  User as UserIcon,
+  Users,
+  LogOut,
+  Shield,
+  Calendar,
   Settings,
   ChevronDown,
   ChevronRight,
@@ -100,7 +100,7 @@ export function DashboardSidebar() {
       setIsAdminOpen(true);
     }
 
-    const timetablePaths = ['/timetable', '/rooms', '/term', '/subjects', '/lesson-periods', '/classes', '/timetable/subject-rooms',];
+    const timetablePaths = ['/timetable', '/rooms', '/term', '/subjects', '/lesson-periods', '/classes', '/timetable/subject-rooms', '/timetable/subject-scheduling'];
     if (timetablePaths.some(path => pathname.startsWith(path))) {
       setIsTimetableSetupOpen(true);
     }
@@ -158,7 +158,7 @@ export function DashboardSidebar() {
       href: '/reports',
       type: 'link'
     },
-     {
+    {
       label: 'Classes',
       icon: <GraduationCap size={20} />,
       href: '/classes',
@@ -181,7 +181,7 @@ export function DashboardSidebar() {
 
   // Timetable Setup menu items (for admin and timetable admins)
   const timetableSetupItems: SubMenuItem[] = [
-       {
+    {
       label: 'Terms',
       icon: <Calendar size={18} />,
       href: '/term'
@@ -202,17 +202,22 @@ export function DashboardSidebar() {
       href: '/subjects'
     },
     {
-    label: 'Subject — Rooms',       
-    icon: <DoorOpen size={18} />,    
-    href: '/timetable/subject-rooms' 
-  },
+      label: 'Subject — Rooms',
+      icon: <DoorOpen size={18} />,
+      href: '/timetable/subject-rooms'
+    },
+    {
+      label: 'Subject Scheduling',
+      icon: <BookOpen size={18} />,
+      href: '/timetable/subject-scheduling'
+    },
     {
       label: 'Classes',
       icon: <GraduationCap size={18} />,
       href: '/classes'
     },
-     {
-      label: 'Online Classes', 
+    {
+      label: 'Online Classes',
       icon: <Laptop size={18} />,
       href: '/timetable/online-classes'
     },
@@ -221,12 +226,12 @@ export function DashboardSidebar() {
       icon: <CalendarDays size={18} />,
       href: '/timetable/adminAssignment'
     },
-     {
+    {
       label: 'Timetable',
       icon: <CalendarDays size={18} />,
       href: '/timetable'
     },
-     
+
   ];
 
   // Admin-only menu items

@@ -1,4 +1,3 @@
-// app/classes/page.tsx
 'use client';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Button } from "@/components/ui/button";
@@ -78,6 +77,10 @@ export default function ClassesPage() {
     const [isDeactivating, setIsDeactivating] = useState(false);
     const [activeTab, setActiveTab] = useState<string>('');
 
+    // Pagination state
+    const [pageSize, setPageSize] = useState<number>(20);
+    const [currentPage, setCurrentPage] = useState<number>(1);
+
     // Add refresh triggers for child components
     const [refreshMyClasses, setRefreshMyClasses] = useState(0);
     const [refreshClassSelection, setRefreshClassSelection] = useState(0);
@@ -92,7 +95,6 @@ export default function ClassesPage() {
     // Filtered classes based on search term
     const filteredClasses = useMemo(() => {
         if (!searchTerm.trim()) return classes;
-
         const term = searchTerm.toLowerCase();
         return classes.filter(classItem =>
             classItem.name.toLowerCase().includes(term) ||
@@ -101,17 +103,29 @@ export default function ClassesPage() {
         );
     }, [classes, searchTerm]);
 
+    // Reset to page 1 when search changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchTerm]);
+
+    // Pagination derived values
+    const totalClasses = filteredClasses.length;
+    const totalPages = Math.ceil(totalClasses / pageSize);
+    const paginatedClasses = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return filteredClasses.slice(start, start + pageSize);
+    }, [filteredClasses, currentPage, pageSize]);
+
     // Clear search function
     const clearSearch = () => {
         setSearchTerm('');
+        setCurrentPage(1);
     };
 
-    // Fetch current user using your auth pattern
     useEffect(() => {
         authenticateUser();
     }, []);
 
-    // ✅ Fetch terms on mount
     useEffect(() => {
         fetchTerms();
     }, []);
@@ -119,13 +133,9 @@ export default function ClassesPage() {
     const authenticateUser = async () => {
         try {
             const authResponse = await fetch("/api/auth/check", { method: "GET" });
-            if (!authResponse.ok) {
-                throw new Error("Authentication failed");
-            }
-
+            if (!authResponse.ok) throw new Error("Authentication failed");
             const authData = await authResponse.json();
             const { user } = authData;
-
             setUser(user);
             setUserRole(user.role);
         } catch (error) {
@@ -133,7 +143,6 @@ export default function ClassesPage() {
         }
     };
 
-    // ✅ Fetch available terms
     const fetchTerms = async () => {
         try {
             const response = await fetch('/api/terms');
@@ -141,13 +150,11 @@ export default function ClassesPage() {
             const data = await response.json();
             setTerms(data.data || []);
 
-            // Try to get active term
             const activeResponse = await fetch('/api/terms/active');
             if (activeResponse.ok) {
                 const activeData = await activeResponse.json();
                 setSelectedTerm(activeData.data.id);
             } else if (data.data.length > 0) {
-                // Default to first term if no active term
                 setSelectedTerm(data.data[0].id);
             }
         } catch (error) {
@@ -155,7 +162,6 @@ export default function ClassesPage() {
         }
     };
 
-    // Set default tab based on role
     useEffect(() => {
         if (userRole) {
             if (hasManageAccess) {
@@ -166,7 +172,6 @@ export default function ClassesPage() {
         }
     }, [userRole, hasManageAccess]);
 
-    // Fetch classes on component mount
     useEffect(() => {
         if (userRole) {
             if (hasManageAccess) {
@@ -177,7 +182,6 @@ export default function ClassesPage() {
         }
     }, [userRole, hasManageAccess]);
 
-    // API Functions
     const fetchClasses = async () => {
         try {
             const response = await fetch('/api/classes');
@@ -191,7 +195,6 @@ export default function ClassesPage() {
         }
     };
 
-    // Form handlers (Admin only)
     const handleOpenForm = () => {
         setEditingClass(null);
         setError('');
@@ -207,27 +210,19 @@ export default function ClassesPage() {
     const handleSaveClass = async (formData: any) => {
         setError('');
         setIsSubmitting(true);
-
         try {
             const url = '/api/classes';
             const method = editingClass ? 'PUT' : 'POST';
-            const body = editingClass
-                ? { ...formData, id: editingClass.id }
-                : formData;
+            const body = editingClass ? { ...formData, id: editingClass.id } : formData;
 
             const response = await fetch(url, {
                 method,
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
             });
 
             const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'Failed to save class');
-            }
+            if (!response.ok) throw new Error(data.error || 'Failed to save class');
 
             await fetchClasses();
             setIsFormOpen(false);
@@ -245,24 +240,18 @@ export default function ClassesPage() {
         setError('');
     };
 
-    // Deactivation handlers (Admin only)
     const handleDeactivate = async (classItem: Class) => {
         setDeactivatingClass(classItem);
     };
 
     const confirmDeactivate = async () => {
         if (!deactivatingClass) return;
-
         setIsDeactivating(true);
         try {
             const response = await fetch(`/api/classes/${deactivatingClass.id}/toggle-status`, {
                 method: 'POST',
             });
-
-            if (!response.ok) {
-                throw new Error('Failed to update class status');
-            }
-
+            if (!response.ok) throw new Error('Failed to update class status');
             await fetchClasses();
         } catch (error) {
             console.error('Error updating class:', error);
@@ -272,7 +261,6 @@ export default function ClassesPage() {
         }
     };
 
-    // Excel import/export handlers (Admin only)
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -289,11 +277,9 @@ export default function ClassesPage() {
             const formattedClasses = jsonData.map((row: any, index: number) => {
                 const requiredFields = ['name', 'code', 'department'];
                 const missingFields = requiredFields.filter(field => !row[field]);
-
                 if (missingFields.length > 0) {
                     throw new Error(`Row ${index + 2}: Missing required fields: ${missingFields.join(', ')}`);
                 }
-
                 return {
                     name: row.name,
                     code: row.code.toString().toUpperCase(),
@@ -307,17 +293,12 @@ export default function ClassesPage() {
 
             const response = await fetch('/api/classes/import', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ classes: formattedClasses }),
             });
 
             const result = await response.json();
-
-            if (!response.ok) {
-                throw new Error(result.error || 'Failed to import classes');
-            }
+            if (!response.ok) throw new Error(result.error || 'Failed to import classes');
 
             await fetchClasses();
             alert(`Successfully imported ${result.imported} classes!`);
@@ -325,9 +306,7 @@ export default function ClassesPage() {
             setImportError(error instanceof Error ? error.message : 'Failed to import file');
         } finally {
             setIsImporting(false);
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
-            }
+            if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
 
@@ -342,22 +321,14 @@ export default function ClassesPage() {
                 is_active: true
             }
         ];
-
         const worksheet = XLSX.utils.json_to_sheet(template);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Classes');
         XLSX.writeFile(workbook, 'classes_template.xlsx');
     };
 
-    // Callback functions to handle component synchronization
-    const handleClassSelectionSaved = () => {
-        setRefreshMyClasses(prev => prev + 1);
-    };
-
-    const handleClassRemoved = () => {
-        setRefreshClassSelection(prev => prev + 1);
-    };
-
+    const handleClassSelectionSaved = () => setRefreshMyClasses(prev => prev + 1);
+    const handleClassRemoved = () => setRefreshClassSelection(prev => prev + 1);
     const handleClassesLoaded = (loadedClasses: Class[]) => {
         setClasses(loadedClasses);
         setIsLoading(false);
@@ -380,9 +351,7 @@ export default function ClassesPage() {
                         {hasManageAccess ? 'Classes Management' : 'My Training Classes'}
                     </h1>
                     <div className="flex items-center gap-2 mt-1">
-                        <Badge variant="outline">
-                            {user.name}
-                        </Badge>
+                        <Badge variant="outline">{user.name}</Badge>
                         <Badge variant={isAdmin ? "default" : isTimetableAdmin ? "secondary" : "outline"}>
                             {isAdmin ? 'Administrator' : isTimetableAdmin ? 'Timetable Admin' : 'Trainer'}
                         </Badge>
@@ -397,7 +366,7 @@ export default function ClassesPage() {
                 </Alert>
             )}
 
-            {/* ✅ Term Selection - Show for both admin and trainers */}
+            {/* Term Selection */}
             <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                 <Label htmlFor="term" className="flex items-center gap-2 mb-2">
                     <Calendar className="h-4 w-4" />
@@ -432,7 +401,7 @@ export default function ClassesPage() {
                 </Alert>
             )}
 
-            {/* Role-based content - Only show if term is selected */}
+            {/* Role-based content */}
             {selectedTerm && (
                 <>
                     {hasManageAccess ? (
@@ -450,7 +419,8 @@ export default function ClassesPage() {
                             </TabsList>
 
                             <TabsContent value="manage" className="space-y-6">
-                                {/* Search Section */}
+
+                                {/* Search + Counter + Page Size */}
                                 <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
                                     <div className="relative flex-1 max-w-md">
                                         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
@@ -472,19 +442,35 @@ export default function ClassesPage() {
                                         )}
                                     </div>
 
-                                    {searchTerm && (
-                                        <div className="text-sm text-gray-500">
-                                            {filteredClasses.length} of {classes.length} classes found
+                                    <div className="flex items-center gap-3 text-sm text-gray-600">
+                                        <span className="font-medium">
+                                            {searchTerm
+                                                ? `${filteredClasses.length} of ${classes.length} classes`
+                                                : `${classes.length} total class${classes.length !== 1 ? 'es' : ''}`
+                                            }
+                                        </span>
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="text-gray-400">Show:</span>
+                                            <Select
+                                                value={pageSize.toString()}
+                                                onValueChange={v => { setPageSize(parseInt(v)); setCurrentPage(1); }}
+                                            >
+                                                <SelectTrigger className="h-8 w-20 text-xs">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="20">20</SelectItem>
+                                                    <SelectItem value="50">50</SelectItem>
+                                                    <SelectItem value="100">100</SelectItem>
+                                                </SelectContent>
+                                            </Select>
                                         </div>
-                                    )}
+                                    </div>
                                 </div>
 
                                 {/* Admin Controls */}
                                 <div className="flex justify-end gap-2">
-                                    <Button
-                                        variant="outline"
-                                        onClick={downloadTemplate}
-                                    >
+                                    <Button variant="outline" onClick={downloadTemplate}>
                                         <Download className="mr-2 h-4 w-4" />
                                         Download Template
                                     </Button>
@@ -502,28 +488,79 @@ export default function ClassesPage() {
                                     </Button>
                                 </div>
 
+                                {/* Empty search state */}
                                 {searchTerm && filteredClasses.length === 0 && (
                                     <div className="text-center py-8 text-gray-500">
                                         <Search className="mx-auto h-12 w-12 text-gray-300 mb-4" />
                                         <p className="text-lg font-medium">No classes found</p>
                                         <p className="text-sm">Try adjusting your search terms</p>
-                                        <Button
-                                            variant="outline"
-                                            onClick={clearSearch}
-                                            className="mt-3"
-                                        >
+                                        <Button variant="outline" onClick={clearSearch} className="mt-3">
                                             Clear search
                                         </Button>
                                     </div>
                                 )}
 
+                                {/* Table */}
                                 {(!searchTerm || filteredClasses.length > 0) && (
-                                    <ClassesTable
-                                        classes={filteredClasses}
-                                        termId={selectedTerm}
-                                        onEdit={handleEdit}
-                                        onDeactivate={handleDeactivate}
-                                    />
+                                    <>
+                                        <ClassesTable
+                                            classes={paginatedClasses}
+                                            termId={selectedTerm}
+                                            onEdit={handleEdit}
+                                            onDeactivate={handleDeactivate}
+                                            startIndex={(currentPage - 1) * pageSize}
+                                        />
+
+                                        {/* Pagination controls */}
+                                        {totalPages > 1 && (
+                                            <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+                                                <span>
+                                                    Showing {((currentPage - 1) * pageSize) + 1}–{Math.min(currentPage * pageSize, totalClasses)} of {totalClasses} classes
+                                                </span>
+                                                <div className="flex items-center gap-1">
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setCurrentPage(1)}
+                                                        disabled={currentPage === 1}
+                                                        className="h-8 px-2 text-xs"
+                                                    >
+                                                        «
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setCurrentPage(p => p - 1)}
+                                                        disabled={currentPage === 1}
+                                                        className="h-8 px-2 text-xs"
+                                                    >
+                                                        ‹ Prev
+                                                    </Button>
+                                                    <span className="px-3 py-1 rounded border bg-white font-medium">
+                                                        {currentPage} / {totalPages}
+                                                    </span>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setCurrentPage(p => p + 1)}
+                                                        disabled={currentPage === totalPages}
+                                                        className="h-8 px-2 text-xs"
+                                                    >
+                                                        Next ›
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        onClick={() => setCurrentPage(totalPages)}
+                                                        disabled={currentPage === totalPages}
+                                                        className="h-8 px-2 text-xs"
+                                                    >
+                                                        »
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
                                 )}
                             </TabsContent>
 
@@ -546,7 +583,7 @@ export default function ClassesPage() {
                             </TabsContent>
                         </Tabs>
                     ) : (
-                        // TRAINER VIEW  
+                        // TRAINER VIEW
                         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
                             <TabsList>
                                 <TabsTrigger value="select" className="flex items-center gap-2">
@@ -580,7 +617,6 @@ export default function ClassesPage() {
                                             </Button>
                                         )}
                                     </div>
-
                                     {searchTerm && classes.length > 0 && (
                                         <div className="text-sm text-gray-500">
                                             {filteredClasses.length} of {classes.length} classes found

@@ -17,7 +17,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Zap, Upload, Loader2, AlertTriangle, CheckCircle2, Info, BookOpen } from "lucide-react";
+import {
+  Zap, Upload, Loader2, AlertTriangle, CheckCircle2,
+  Info, BookOpen, ChevronDown, ChevronUp, Combine
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -26,7 +29,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronDown, ChevronUp } from "lucide-react";
 import { format } from 'date-fns';
 import DraftSelectionDialog from './DraftSelectionDialogue';
 
@@ -73,9 +75,29 @@ interface PreFlightCheckResult {
     without_trainer: number;
     details_without_trainer: SubjectWithoutTrainer[];
   };
+  scheduling_config: {
+    lesson_type_breakdown: { single: number; double: number; triple: number };
+    total_period_slots_needed_per_week: number;
+    subjects_with_overrides: number;
+  };
+  combinations: {
+    total: number;
+    subjects_with_combinations: number;
+    details: Array<{
+      subject_id: number;
+      subject_name: string;
+      subject_code: string;
+      combination_count: number;
+    }>;
+  };
   trainers: {
     total: number;
-    list: Array<{ id: number; name: string; subjects_count: number }>;
+    list: Array<{
+      id: number;
+      name: string;
+      subjects_count: number;
+      total_sessions_per_week: number;
+    }>;
   };
   rooms: { active: number };
   lesson_periods: { active: number };
@@ -100,6 +122,9 @@ interface Draft {
     rooms_used: number;
     subjects_scheduled: number;
     assignments_partially_scheduled: number;
+    combined_assignments: number;
+    double_triple_sessions: number;
+    combined_slots: number;
   };
   skipped_count: number;
   skipped_assignments?: any[];
@@ -114,14 +139,13 @@ export default function GenerateTimetableDialog({
   const [selectedTerm, setSelectedTerm] = useState<string>('');
   const [method, setMethod] = useState<'auto' | 'manual'>('auto');
   const [error, setError] = useState('');
-
-  const [sessionsPerWeek, setSessionsPerWeek] = useState(1);
   const [minClassesPerDay, setMinClassesPerDay] = useState(3);
 
   const [isCheckingPreFlight, setIsCheckingPreFlight] = useState(false);
   const [preFlightResults, setPreFlightResults] = useState<PreFlightCheckResult | null>(null);
   const [showPreFlight, setShowPreFlight] = useState(false);
   const [showSubjectsWithoutTrainer, setShowSubjectsWithoutTrainer] = useState(false);
+  const [showCombinations, setShowCombinations] = useState(false);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [canGenerate, setCanGenerate] = useState(true);
@@ -131,6 +155,7 @@ export default function GenerateTimetableDialog({
   const [isDraftDialogOpen, setIsDraftDialogOpen] = useState(false);
   const [generatedDrafts, setGeneratedDrafts] = useState<Draft[]>([]);
   const [draftTermName, setDraftTermName] = useState('');
+  const [draftTermId, setDraftTermId] = useState<number | null>(null);
 
   useEffect(() => {
     if (open) checkGenerationDeadline();
@@ -166,6 +191,7 @@ export default function GenerateTimetableDialog({
     setShowPreFlight(false);
     setError('');
     setShowSubjectsWithoutTrainer(false);
+    setShowCombinations(false);
   };
 
   const runPreFlightChecks = async () => {
@@ -202,7 +228,6 @@ export default function GenerateTimetableDialog({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           term_id: parseInt(selectedTerm),
-          sessions_per_week: sessionsPerWeek,
           min_classes_per_day: minClassesPerDay,
           regenerate: preFlightResults.existing_timetable.exists,
         }),
@@ -211,13 +236,12 @@ export default function GenerateTimetableDialog({
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to generate timetable');
 
-      // ✅ Open draft selection instead of closing
       const termName = terms.find(t => t.id === parseInt(selectedTerm))?.name ?? '';
       setGeneratedDrafts(data.drafts);
       setDraftTermName(termName);
       setDraftTermId(parseInt(selectedTerm));
-      onOpenChange(false); // Close generate dialog
-      setIsDraftDialogOpen(true); // Open draft selection dialog
+      onOpenChange(false);
+      setIsDraftDialogOpen(true);
       resetForm();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate timetable');
@@ -226,7 +250,6 @@ export default function GenerateTimetableDialog({
     }
   };
 
-  // Called when user confirms a draft
   const handleConfirmDraft = async (draftId: number) => {
     const response = await fetch('/api/timetable/drafts', {
       method: 'POST',
@@ -241,10 +264,6 @@ export default function GenerateTimetableDialog({
     onSuccess();
   };
 
-  // The term id associated with the currently generated drafts
-  const [draftTermId, setDraftTermId] = useState<number | null>(null);
-
-  // Called when user clicks "Discard & Regenerate"
   const handleDiscardDrafts = async () => {
     if (!draftTermId) return;
     const deleteRes = await fetch(`/api/timetable/drafts?term_id=${draftTermId}`, {
@@ -257,24 +276,25 @@ export default function GenerateTimetableDialog({
     setIsDraftDialogOpen(false);
     setGeneratedDrafts([]);
     setDraftTermId(null);
-    // Re-open generate dialog so they can generate fresh
     onOpenChange(true);
-  };
-
-  const handleAutoGenerateWithTermId = async () => {
-    await handleAutoGenerate();
   };
 
   const resetForm = () => {
     setSelectedTerm('');
     setMethod('auto');
-    setSessionsPerWeek(1);
     setMinClassesPerDay(3);
     setError('');
     setPreFlightResults(null);
     setShowPreFlight(false);
     setShowSubjectsWithoutTrainer(false);
+    setShowCombinations(false);
   };
+
+  const lessonTypeLabel = (type: string) => ({
+    single: 'Single',
+    double: 'Double',
+    triple: 'Triple',
+  }[type] ?? type);
 
   return (
     <>
@@ -288,6 +308,7 @@ export default function GenerateTimetableDialog({
           </DialogHeader>
 
           <div className="space-y-4">
+
             {/* Term Selection */}
             <div className="space-y-2">
               <Label htmlFor="term">Select Term *</Label>
@@ -333,22 +354,12 @@ export default function GenerateTimetableDialog({
             {/* Auto Generate Section */}
             {method === 'auto' && (
               <div className="space-y-4">
+
+                {/* Settings */}
                 <div className="space-y-3 p-4 bg-gray-50 rounded-lg border">
                   <h3 className="font-semibold text-sm">Generation Settings</h3>
                   <div className="space-y-2">
-                    <Label htmlFor="sessionsPerWeek">Sessions per Week</Label>
-                    <Input
-                      id="sessionsPerWeek"
-                      type="number"
-                      min="1"
-                      max="5"
-                      value={sessionsPerWeek}
-                      onChange={(e) => setSessionsPerWeek(parseInt(e.target.value) || 1)}
-                    />
-                    <p className="text-xs text-gray-500">How many times each subject meets per week (1-5)</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="minClassesPerDay">Minimum Subjects per Trainer/Day</Label>
+                    <Label htmlFor="minClassesPerDay">Minimum Subjects per Trainer / Day</Label>
                     <Input
                       id="minClassesPerDay"
                       type="number"
@@ -357,19 +368,30 @@ export default function GenerateTimetableDialog({
                       value={minClassesPerDay}
                       onChange={(e) => setMinClassesPerDay(parseInt(e.target.value) || 3)}
                     />
-                    <p className="text-xs text-gray-500">Minimum number of subjects a trainer should teach per day</p>
+                    <p className="text-xs text-gray-500">
+                      Minimum number of subjects a trainer should teach per day
+                    </p>
                   </div>
+                  <Alert className="bg-blue-50 border-blue-200 mt-2">
+                    <Info className="h-4 w-4 text-blue-600" />
+                    <AlertDescription className="text-blue-800 text-xs">
+                      Sessions per week and lesson type (single / double / triple) are now configured
+                      per subject in <strong>Subject Scheduling Configuration</strong>. The generator
+                      will read those settings automatically.
+                    </AlertDescription>
+                  </Alert>
                 </div>
 
                 {/* Generation info banner */}
                 <Alert className="bg-blue-50 border-blue-200">
                   <Info className="h-4 w-4 text-blue-600" />
                   <AlertDescription className="text-blue-800 text-sm">
-                    Generation will produce <strong>3 timetable options</strong> for you to compare and select from.
-                    You can take your time reviewing — drafts are saved until you make a choice.
+                    Generation produces <strong>3 timetable options</strong> for you to compare and
+                    select from. Drafts are saved until you make a choice.
                   </AlertDescription>
                 </Alert>
 
+                {/* Pre-flight trigger */}
                 {selectedTerm && !showPreFlight && (
                   <Button
                     onClick={runPreFlightChecks}
@@ -385,6 +407,7 @@ export default function GenerateTimetableDialog({
                   </Button>
                 )}
 
+                {/* Pre-flight results */}
                 {showPreFlight && preFlightResults && (
                   <div className="space-y-3 p-4 bg-white rounded-lg border">
                     <div className="flex items-center justify-between">
@@ -398,6 +421,7 @@ export default function GenerateTimetableDialog({
 
                     <Separator />
 
+                    {/* Summary grid */}
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-gray-500">Classes</p>
@@ -405,7 +429,7 @@ export default function GenerateTimetableDialog({
                       </div>
                       <div>
                         <p className="text-gray-500 flex items-center gap-1">
-                          <BookOpen className="h-3 w-3" />Subjects
+                          <BookOpen className="h-3 w-3" /> Subjects
                         </p>
                         <p className="font-semibold">
                           {preFlightResults.subjects.total} total
@@ -424,12 +448,79 @@ export default function GenerateTimetableDialog({
                         <p className="text-gray-500">Rooms</p>
                         <p className="font-semibold">{preFlightResults.rooms.active} available</p>
                       </div>
-                      <div className="col-span-2">
+                      <div>
                         <p className="text-gray-500">Lesson Periods</p>
                         <p className="font-semibold">{preFlightResults.lesson_periods.active}</p>
                       </div>
+                      <div>
+                        <p className="text-gray-500">Period Slots / Week</p>
+                        <p className="font-semibold">
+                          {preFlightResults.scheduling_config?.total_period_slots_needed_per_week ?? '—'}
+                        </p>
+                      </div>
                     </div>
 
+                    {/* Lesson type breakdown */}
+                    {preFlightResults.scheduling_config && (
+                      <div className="rounded-md border p-3 bg-muted/30 space-y-2">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          Lesson Type Breakdown
+                        </p>
+                        <div className="flex gap-3 flex-wrap">
+                          {Object.entries(preFlightResults.scheduling_config.lesson_type_breakdown).map(
+                            ([type, count]) => (
+                              <div key={type} className="flex items-center gap-1.5 text-sm">
+                                <Badge variant="outline" className="capitalize">{lessonTypeLabel(type)}</Badge>
+                                <span className="font-medium">{count as number}</span>
+                                <span className="text-muted-foreground text-xs">subject{(count as number) !== 1 ? 's' : ''}</span>
+                              </div>
+                            )
+                          )}
+                          {preFlightResults.scheduling_config.subjects_with_overrides > 0 && (
+                            <div className="flex items-center gap-1.5 text-sm">
+                              <Badge variant="outline" className="text-amber-600 border-amber-300">
+                                Overrides
+                              </Badge>
+                              <span className="font-medium">{preFlightResults.scheduling_config.subjects_with_overrides}</span>
+                              <span className="text-muted-foreground text-xs">assignment{preFlightResults.scheduling_config.subjects_with_overrides !== 1 ? 's' : ''}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Combinations summary */}
+                    {preFlightResults.combinations && preFlightResults.combinations.total > 0 && (
+                      <Collapsible open={showCombinations} onOpenChange={setShowCombinations}>
+                        <CollapsibleTrigger asChild>
+                          <Button variant="outline" size="sm" className="w-full justify-between text-xs">
+                            <span className="flex items-center gap-1.5">
+                              <Combine className="h-3.5 w-3.5 text-indigo-500" />
+                              {preFlightResults.combinations.total} combination{preFlightResults.combinations.total !== 1 ? 's' : ''} across{' '}
+                              {preFlightResults.combinations.subjects_with_combinations} subject{preFlightResults.combinations.subjects_with_combinations !== 1 ? 's' : ''}
+                            </span>
+                            {showCombinations ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2">
+                          <div className="rounded-md border divide-y text-xs">
+                            {preFlightResults.combinations.details.map(detail => (
+                              <div key={detail.subject_id} className="px-3 py-2 flex items-center justify-between">
+                                <div>
+                                  <span className="font-mono font-semibold">{detail.subject_code}</span>
+                                  <span className="text-muted-foreground ml-2">{detail.subject_name}</span>
+                                </div>
+                                <Badge variant="secondary" className="text-xs">
+                                  {detail.combination_count} session{detail.combination_count !== 1 ? 's' : ''} combined
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+
+                    {/* Existing timetable warning */}
                     {preFlightResults.existing_timetable.exists && (
                       <Alert className="bg-amber-50 border-amber-200">
                         <AlertTriangle className="h-4 w-4 text-amber-600" />
@@ -447,6 +538,7 @@ export default function GenerateTimetableDialog({
                       </Alert>
                     )}
 
+                    {/* Errors */}
                     {preFlightResults.errors.length > 0 && (
                       <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
@@ -455,18 +547,25 @@ export default function GenerateTimetableDialog({
                           <ul className="list-disc list-inside mt-1 text-sm space-y-1">
                             {preFlightResults.errors.map((err, idx) => <li key={idx}>{err}</li>)}
                           </ul>
+
+                          {/* Subjects without trainer expandable */}
                           {preFlightResults.subjects.without_trainer > 0 &&
                             preFlightResults.subjects.details_without_trainer.length > 0 && (
-                              <Collapsible open={showSubjectsWithoutTrainer} onOpenChange={setShowSubjectsWithoutTrainer} className="mt-3">
+                              <Collapsible
+                                open={showSubjectsWithoutTrainer}
+                                onOpenChange={setShowSubjectsWithoutTrainer}
+                                className="mt-3"
+                              >
                                 <CollapsibleTrigger asChild>
                                   <Button variant="outline" size="sm" className="w-full justify-between text-xs">
                                     <span className="flex items-center gap-1">
-                                      <BookOpen className="h-3 w-3" />View Subjects Without Trainer
+                                      <BookOpen className="h-3 w-3" />
+                                      View Subjects Without Trainer
                                     </span>
                                     {showSubjectsWithoutTrainer ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                                   </Button>
                                 </CollapsibleTrigger>
-                                <CollapsibleContent className="mt-2 space-y-2">
+                                <CollapsibleContent className="mt-2">
                                   <div className="max-h-48 overflow-y-auto border rounded-lg">
                                     <table className="w-full text-xs">
                                       <thead className="bg-gray-50 sticky top-0">
@@ -495,7 +594,7 @@ export default function GenerateTimetableDialog({
                                       </tbody>
                                     </table>
                                   </div>
-                                  <p className="text-xs text-gray-600 italic">
+                                  <p className="text-xs text-gray-600 italic mt-1">
                                     💡 Assign trainers to these subjects before generating the timetable.
                                   </p>
                                 </CollapsibleContent>
@@ -505,6 +604,7 @@ export default function GenerateTimetableDialog({
                       </Alert>
                     )}
 
+                    {/* Warnings */}
                     {preFlightResults.warnings.length > 0 && (
                       <Alert className="bg-yellow-50 border-yellow-200">
                         <Info className="h-4 w-4 text-yellow-600" />
@@ -517,7 +617,13 @@ export default function GenerateTimetableDialog({
                       </Alert>
                     )}
 
-                    <Button onClick={runPreFlightChecks} variant="outline" size="sm" className="w-full" disabled={isCheckingPreFlight}>
+                    <Button
+                      onClick={runPreFlightChecks}
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      disabled={isCheckingPreFlight}
+                    >
                       Re-run Checks
                     </Button>
                   </div>
@@ -525,6 +631,7 @@ export default function GenerateTimetableDialog({
               </div>
             )}
 
+            {/* Deadline block */}
             {!canGenerate && (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
@@ -532,6 +639,7 @@ export default function GenerateTimetableDialog({
               </Alert>
             )}
 
+            {/* Manual entry */}
             {method === 'manual' && (
               <div className="p-4 bg-gray-50 rounded-lg">
                 <p className="text-sm text-gray-600 mb-3">
@@ -543,6 +651,7 @@ export default function GenerateTimetableDialog({
               </div>
             )}
 
+            {/* Error */}
             {error && (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
@@ -550,13 +659,18 @@ export default function GenerateTimetableDialog({
               </Alert>
             )}
 
+            {/* Action buttons */}
             {method === 'auto' && showPreFlight && (
               <div className="flex justify-end gap-2 pt-4">
-                <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isGenerating}>
+                <Button
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                  disabled={isGenerating}
+                >
                   Cancel
                 </Button>
                 <Button
-                  onClick={handleAutoGenerateWithTermId}
+                  onClick={handleAutoGenerate}
                   disabled={isGenerating || !selectedTerm || !canGenerate || !preFlightResults?.passed}
                 >
                   {isGenerating ? (

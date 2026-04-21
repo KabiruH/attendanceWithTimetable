@@ -126,69 +126,56 @@ return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status:
     }
 
     // Check if trainer already has this subject assigned in this term (Option A constraint)
-    const existingAssignment = await db.trainersubjectassignments.findFirst({
-      where: {
-        trainer_id: trainerUserId,
-        subject_id: numericSubjectId,
-        term_id: numericTermId
-      },
-      include: {
-        classsubjects: {
-          select: { class_id: true, classes: { select: { name: true } } }
-        }
-      }
-    });
+   // Replace the entire existingAssignment block with this:
 
-    if (existingAssignment) {
-      // If trying to activate and assignment exists for a DIFFERENT class, block it
-      if (is_active && existingAssignment.class_subject_id !== numericClassSubjectId) {
-        const existingClassName = existingAssignment.classsubjects?.classes?.name || 'another class';
-        return NextResponse.json({
-          error: `You are already assigned to this subject in ${existingClassName} for this term. A subject can only be taught once per term.`
-        }, { status: 400 });
-      }
+const existingAssignment = await db.trainersubjectassignments.findFirst({
+  where: {
+    trainer_id: trainerUserId,
+    subject_id: numericSubjectId,
+    term_id: numericTermId,
+    class_subject_id: numericClassSubjectId  // now scoped to this specific class-subject
+  }
+});
 
-      // Update existing assignment (same class_subject or deactivating)
-      await db.trainersubjectassignments.update({
-        where: { id: existingAssignment.id },
-        data: { 
-          is_active,
-          class_subject_id: numericClassSubjectId // Update to new class if switching
-        }
-      });
+if (existingAssignment) {
+  // Just update is_active — no more cross-class blocking
+  await db.trainersubjectassignments.update({
+    where: { id: existingAssignment.id },
+    data: { is_active }
+  });
 
-      return NextResponse.json({ 
-        success: true, 
-        action: 'updated',
-        message: is_active ? 'Subject activated' : 'Subject deactivated'
-      });
+  return NextResponse.json({
+    success: true,
+    action: 'updated',
+    message: is_active ? 'Subject activated' : 'Subject deactivated'
+  });
+}
+
+// No existing assignment - create new one if activating
+if (is_active) {
+  await db.trainersubjectassignments.create({
+    data: {
+      trainer_id: trainerUserId,
+      subject_id: numericSubjectId,
+      term_id: numericTermId,
+      class_subject_id: numericClassSubjectId,
+      is_active: true
     }
+  });
 
-    // No existing assignment - create new one if activating
-    if (is_active) {
-      await db.trainersubjectassignments.create({
-        data: {
-          trainer_id: trainerUserId,
-          subject_id: numericSubjectId,
-          term_id: numericTermId,
-          class_subject_id: numericClassSubjectId,
-          is_active: true
-        }
-      });
+  return NextResponse.json({
+    success: true,
+    action: 'created',
+    message: 'Subject assignment created and activated'
+  });
+}
 
-      return NextResponse.json({ 
-        success: true, 
-        action: 'created',
-        message: 'Subject assignment created and activated'
-      });
-    }
-
-    // Trying to deactivate something that doesn't exist - no-op
-    return NextResponse.json({ 
-      success: true, 
-      action: 'none',
-      message: 'No assignment to deactivate'
-    });
+// Trying to deactivate something that doesn't exist - no-op
+return NextResponse.json({
+  success: true,
+  action: 'none',
+  message: 'No assignment to deactivate'
+});
 
   } catch (error) {
     console.error('Error updating subject assignment:', error);
