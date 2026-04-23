@@ -21,12 +21,6 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
 
     const checkLocationPeriodically = async () => {
       try {
-        // Check if this is a development environment
-        if (isDevEnvironment) {
-          // We'll still try to get location, but won't log out on failure
-        }
-
-        // First, check if the Geolocation API is available
         if (!navigator.geolocation) {
           console.warn('Geolocation is not supported by this browser');
           if (!isDevEnvironment) {
@@ -35,12 +29,10 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
           return;
         }
 
-        // Check if we have permission to access location
         if (navigator.permissions) {
           const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
           
           if (permissionStatus.state === 'prompt' && !initialCheckDone) {
-            // Show a custom prompt before the browser's prompt
             setShowLocationPrompt(true);
             return;
           } else if (permissionStatus.state === 'denied') {
@@ -57,20 +49,8 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
           }
         }
 
-        // Now actually check the location
-        const isLocationAllowed = await checkLocation();
-        
-        if (!isLocationAllowed && !isDevEnvironment) {
-          toast({
-            title: "Access Denied",
-            description: "You've left the allowed area. You will be logged out.",
-            variant: "destructive"
-          });
-          
-          // Logout user
-          await fetch('/api/auth/logout', { method: 'POST' });
-          router.push('/login');
-        }
+        // Location check result is noted but no action is taken
+        await checkLocation();
 
         initialCheckDone = true;
         setCheckFailed(false);
@@ -88,12 +68,10 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
       }
     };
 
-    // Initial check with a slight delay to let UI render first
     const initialCheckTimeout = setTimeout(() => {
       checkLocationPeriodically();
     }, 1000);
 
-    // Check location every 5 minutes
     intervalId = setInterval(checkLocationPeriodically, 5 * 60 * 1000);
 
     return () => {
@@ -104,7 +82,6 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
 
   const handleAllowLocation = async () => {
     setShowLocationPrompt(false);
-    // This will trigger the browser's location permission prompt
     try {
       await checkLocation();
     } catch (error) {
@@ -147,25 +124,6 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
           </div>
         </div>
       )}
-
-      {/* <AlertDialog open={showLocationPrompt}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <MapPin className="h-5 w-5" />
-              Location Access Required
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This app needs access to your location to verify you're in an allowed area.
-              Please click "Allow" when prompted by your browser.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => router.push('/login')}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleAllowLocation}>Continue</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog> */}
 
       {(!checkFailed || isDevEnvironment) && children}
     </>
