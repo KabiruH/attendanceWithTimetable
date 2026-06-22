@@ -61,7 +61,7 @@ export default function SignupPage() {
                             </span>
               </div>
 
-              <h1 className="text-2xl font-bold">Optimum Systems</h1>  
+              <h1 className="text-2xl font-bold">P.C Kinyanjui TTI</h1>  
                          </div>
                        
             {/* Signup Form Component */}

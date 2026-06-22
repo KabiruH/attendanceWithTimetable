@@ -53,10 +53,11 @@ const TIME_CONSTRAINTS = {
 
 // Geofence configuration for mobile
 const GEOFENCE = {
- latitude: -0.0284967, 
-  longitude: 37.658594, 
-  radius: 100_000,
+    latitude: -1.295926,
+    longitude: 36.734582,
+    radius: 130,
 };
+
 
 // Mobile request validation schema
 const mobileAttendanceSchema = z.object({
@@ -549,9 +550,6 @@ id: mobileAuth.payload.userId,
           { users: { name: 'asc' } },
         ],
       });
-
-      console.log(`Admin fetched ${attendanceData.length} attendance records`);
-
       return NextResponse.json({
         success: true,
         role: 'admin',

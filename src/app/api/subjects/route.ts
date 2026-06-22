@@ -233,3 +233,68 @@ const { id, name, code, department, credit_hours, description, is_active, can_be
     );
   }
 }
+
+// DELETE /api/subjects - Delete a subject (Admin only)
+export async function DELETE(request: NextRequest) {
+  try {
+    const authResult = await verifyAuth();
+    if (authResult.error) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+    }
+
+    if (!authResult.user) {
+      return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+    }
+
+    const { user } = authResult;
+
+    // Admin only — timetable admins are not permitted to delete subjects
+    if (user.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Unauthorized. Admin access required.' },
+        { status: 403 }
+      );
+    }
+
+    const url = new URL(request.url);
+    const id = Number(url.searchParams.get('id'));
+
+    if (!id || isNaN(id)) {
+      return NextResponse.json(
+        { error: 'Valid subject ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Check if subject exists
+    const existingSubject = await db.subjects.findUnique({
+      where: { id },
+      include: { _count: { select: { classsubjects: true } } }
+    });
+
+    if (!existingSubject) {
+      return NextResponse.json(
+        { error: 'Subject not found' },
+        { status: 404 }
+      );
+    }
+
+    // Guard against deleting subjects assigned to classes
+    if (existingSubject._count.classsubjects > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete subject assigned to one or more classes. Remove class assignments first.' },
+        { status: 409 }
+      );
+    }
+
+    await db.subjects.delete({ where: { id } });
+
+    return NextResponse.json({ message: 'Subject deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting subject:', error);
+    return NextResponse.json(
+      { error: 'Failed to delete subject' },
+      { status: 500 }
+    );
+  }
+}

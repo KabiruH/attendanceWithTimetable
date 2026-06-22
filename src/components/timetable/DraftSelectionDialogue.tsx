@@ -282,10 +282,7 @@ export default function DraftSelectionDialog({
                       <StatRow icon={<DoorOpen className="h-4 w-4 text-gray-500" />} label="Rooms Used" value={draft.stats.rooms_used} />
 
                       <div className="pt-1">
-                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                          <span>Schedule Coverage</span>
-                          <span className="font-semibold">{coveragePercent}%</span>
-                        </div>
+                     
                         <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${coveragePercent === 100 ? 'bg-emerald-500' : coveragePercent >= 80 ? 'bg-amber-400' : 'bg-red-400'}`}

@@ -111,15 +111,9 @@ export async function GET(
       }
     });
 
-    console.log('📚 Found class assignments:', assignments.map(a => ({
-      class_id: a.class_id,
-      class_name: a.classes.name
-    })));
-
     // For each assignment, get subjects
     const assignmentsWithDetails = await Promise.all(
       assignments.map(async (assignment) => {
-        console.log(`\n🔍 Processing class: ${assignment.classes.name} (ID: ${assignment.class_id})`);
 
         // ✅ Step 1: Get ALL ClassSubjects for this class
         const allClassSubjects = await db.classsubjects.findMany({
@@ -139,13 +133,9 @@ export async function GET(
           }
         });
 
-        console.log(`  📋 Found ${allClassSubjects.length} subjects for this class`);
-
         // ✅ Step 2: Get trainer's subject assignments for this term
         // We need to check which class_subject_ids belong to this class
         const classSubjectIds = allClassSubjects.map(cs => cs.id);
-
-        console.log(`  🔑 ClassSubject IDs for this class:`, classSubjectIds);
 
         const trainerSubjectAssignments = await db.trainersubjectassignments.findMany({
           where: {
@@ -162,9 +152,6 @@ export async function GET(
           }
         });
 
-        console.log(`  ✅ Trainer assigned to ${trainerSubjectAssignments.length} subjects in this class`);
-        console.log(`  📝 Assigned subject IDs:`, trainerSubjectAssignments.map(tsa => tsa.subject_id));
-
         // ✅ Step 3: Create a set of assigned subject IDs
         const assignedSubjectIds = new Set(
           trainerSubjectAssignments.map(tsa => tsa.subject_id)
@@ -173,7 +160,6 @@ export async function GET(
         // ✅ Step 4: Map all subjects with their assignment status
         const subjects = allClassSubjects.map(cs => {
           const isAssigned = assignedSubjectIds.has(cs.subjects.id);
-          console.log(`    • ${cs.subjects.name} (ID: ${cs.subjects.id}): ${isAssigned ? '✓ Assigned' : '✗ Not assigned'}`);
           
           return {
             id: cs.subjects.id,
@@ -184,8 +170,6 @@ export async function GET(
             is_assigned: isAssigned
           };
         });
-
-        console.log(`  📊 Final subjects array: ${subjects.length} total, ${subjects.filter(s => s.is_assigned).length} assigned`);
 
         // Get the most recent attendance for this class
         const lastAttendance = await db.classattendance.findFirst({
@@ -230,7 +214,6 @@ export async function GET(
       })
     );
 
-    console.log('\n✅ Returning assignments with subjects');
     return NextResponse.json(assignmentsWithDetails);
 
   } catch (error) {

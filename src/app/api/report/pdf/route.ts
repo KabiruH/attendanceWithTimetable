@@ -130,14 +130,6 @@ function calculateHours(record: AttendanceRecord): number {
   return diffInMinutes / 60;
 }
 
-// Format time helper
-function adjustToNairobiTime(date: Date | string | null): Date | null {
-  if (!date) return null;
-  const d = new Date(date);
-  d.setHours(d.getHours() + 3);
-  return d;
-}
-
 // Calculate comprehensive analytics
 function calculateAnalytics(data: AttendanceRecord[]): AnalyticsData {
   const totalRecords = data.length;
@@ -156,20 +148,18 @@ function calculateAnalytics(data: AttendanceRecord[]): AnalyticsData {
   });
 
   // Check-in time distribution (group by hour)
-  const checkInTimes: Record<string, number> = {};
-  data.forEach(record => {
-    if (record.check_in_time || (record.sessions && record.sessions[0]?.check_in)) {
-      const checkInTime = record.sessions?.[0]?.check_in || record.check_in_time;
-      const date = new Date(checkInTime);
-      let hour = date.getHours();
-      
-      // Adjust for 3-hour time difference (server is 3 hours behind)
-      hour = (hour + 3) % 24;
-      
-      const timeSlot = `${hour.toString().padStart(2, '0')}:00`;
-      checkInTimes[timeSlot] = (checkInTimes[timeSlot] || 0) + 1;
-    }
-  });
+const checkInTimes: Record<string, number> = {};
+data.forEach(record => {
+  if (record.check_in_time || (record.sessions && record.sessions[0]?.check_in)) {
+    const checkInTime = record.sessions?.[0]?.check_in || record.check_in_time;
+    const date = new Date(checkInTime);
+    
+    // Convert UTC to Nairobi time properly
+    const nairobiHour = new Date(date.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' })).getHours();
+    const timeSlot = `${nairobiHour.toString().padStart(2, '0')}:00`;
+    checkInTimes[timeSlot] = (checkInTimes[timeSlot] || 0) + 1;
+  }
+});
 
   // Late arrivals
   const lateCount = data.filter(record => {
@@ -565,21 +555,6 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
-
-    // Adjust all times by +3 hours to Nairobi
-    attendanceData = attendanceData.map(r => ({
-      ...r,
-      date: adjustToNairobiTime(r.date)!,
-      check_in_time: adjustToNairobiTime(r.check_in_time),
-      check_out_time: adjustToNairobiTime(r.check_out_time),
-      sessions: Array.isArray(r.sessions)
-        ? r.sessions.map((s: any) => ({
-            ...s,
-            check_in: adjustToNairobiTime(s.check_in),
-            check_out: adjustToNairobiTime(s.check_out),
-          }))
-        : r.sessions,
-    }));
 
     const analytics = calculateAnalytics(attendanceData);
 

@@ -7,12 +7,13 @@ import CreateSlotDialog from '@/components/timetable/CreateSlotDialog';
 import SlotDetailsDialog from '@/components/timetable/SlotDetailsDialog';
 import TimetableHeader from '@/components/timetable/TimetableHeader';
 import TermSelector from '@/components/timetable/TermSelector';
-import TimetableFilters from '@/components/timetable/TimetableFilters';
+import TimetableFilters, { SlotTypeFilter } from '@/components/timetable/TimetableFilters';
 import ActiveFiltersDisplay from '@/components/timetable/ActiveFiltersDisplay';
 import PrintableTimetable from '@/components/timetable/PrintableTimetable';
 import MasterTimetablePrint from '@/components/timetable/MasterTimetablePrint';
 import PrintTrainerDialog from '@/components/timetable/PrintTrainerDialog';
 import DraftSelectionDialog from '@/components/timetable/DraftSelectionDialogue';
+import PrintSlotTypeDialog from '@/components/timetable/PrintSlotTypeDialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,9 +24,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import PrintRoomDialog from '@/components/timetable/PrintRoomDialog';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TimetableSlot } from '@/lib/types/timetable';
-import { Printer, FileText, Building2, UserCheck, Filter, ClipboardList, ScrollText } from "lucide-react";
+import { Printer, FileText, DoorOpen, Building2, UserCheck, Filter, ClipboardList, ScrollText } from "lucide-react";
 import { Button } from '@/components/ui/button';
 import PrintFilterDialog from '@/components/timetable/PrintFilterDialog';
 
@@ -89,11 +91,11 @@ export default function TimetablePage() {
   const [pendingDraftTermId, setPendingDraftTermId] = useState<number | null>(null);
   const [hasPendingDrafts, setHasPendingDrafts] = useState(false);
 
-  const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer' | 'filtered'>('none');
-  const [printTrainerId, setPrintTrainerId] = useState<number | null>(null);
+const [printMode, setPrintMode] = useState<'none' | 'master' | 'grouped' | 'department' | 'trainer' | 'filtered' | 'room'>('none');  
+const [printTrainerId, setPrintTrainerId] = useState<number | null>(null);
   const [isPrintFilterDialogOpen, setIsPrintFilterDialogOpen] = useState(false);
-  const [printFilterType, setPrintFilterType] = useState<'department' | 'class' | 'combined' | null>(null);
-  const [printFilterValue, setPrintFilterValue] = useState<string | number | { department: string; classIds: number[] } | null>(null);
+const [printFilterType, setPrintFilterType] = useState<'department' | 'class' | 'combined' | 'department_trainer' | null>(null);
+const [printFilterValue, setPrintFilterValue] = useState<string | number | { department: string; classIds: number[] } | { department: string; trainerIds: number[] } | null>(null);
 
   const [deletingSlot, setDeletingSlot] = useState<TimetableSlot | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -107,9 +109,17 @@ export default function TimetablePage() {
 
   const [availableTrainers, setAvailableTrainers] = useState<Array<{ id: number, name: string }>>([]);
   const [availableDepartments, setAvailableDepartments] = useState<string[]>([]);
-  const [availableClasses, setAvailableClasses] = useState<Array<{ id: number, name: string, code: string }>>([]);
+  const [availableClasses, setAvailableClasses] = useState<Array<{ id: number, name: string, code: string, department: string }>>([]);
   const [availableSubjects, setAvailableSubjects] = useState<Array<{ id: number, name: string, code: string }>>([]);
   const [allTrainers, setAllTrainers] = useState<Array<{ id: number, name: string }>>([]);
+
+const [filterSlotType, setFilterSlotType] = useState<SlotTypeFilter>('all');
+const [isPrintSlotTypeDialogOpen, setIsPrintSlotTypeDialogOpen] = useState(false);
+const [pendingPrintMode, setPendingPrintMode] = useState<'master' | 'grouped' | 'department' | 'room' | null>(null);
+const [printSlotType, setPrintSlotType] = useState<SlotTypeFilter>('all');
+
+const [isPrintRoomDialogOpen, setIsPrintRoomDialogOpen] = useState(false);
+const [printRoomId, setPrintRoomId] = useState<number | null>(null);
 
   const isAdmin = user?.role === 'admin';
   const hasTimetableAdminAccess = user?.role === 'admin' || user?.has_timetable_admin === true;
@@ -155,23 +165,25 @@ export default function TimetablePage() {
     }
   };
 
-  const fetchUserData = async () => {
-    try {
-      const response = await fetch('/api/auth/check');
-      if (!response.ok) throw new Error('Failed to fetch user data');
-      const data = await response.json();
-      setUser(data.user);
-      const hasTimetableAccess = data.user.role === 'admin' || data.user.has_timetable_admin === true;
-      if (!hasTimetableAccess) {
-        setViewMode('mine');
-        setFilterTrainer(data.user.id);
-      }
-    } catch {
-      setError('Failed to load user data');
-    } finally {
-      setIsLoading(false);
+const fetchUserData = async () => {
+  try {
+    const response = await fetch('/api/auth/check');
+    if (!response.ok) throw new Error('Failed to fetch user data');
+    const data = await response.json();
+    setUser(data.user);
+    const hasTimetableAccess = data.user.role === 'admin' || !!data.user.has_timetable_admin;
+    if (!hasTimetableAccess) {
+      setViewMode('mine');
+      setFilterTrainer(data.user.id);
     }
-  };
+ 
+  } catch (err){
+    setError('Failed to load user data');
+  } finally {
+    setIsLoading(false);
+  }
+};
+
 
   const fetchDepartments = async () => {
     try {
@@ -239,33 +251,43 @@ export default function TimetablePage() {
     }
   };
 
-  const handleFilteredPrint = (
-    filterType: 'department' | 'class' | 'combined',
-    filterValue: string | number | { department: string; classIds: number[] }
-  ) => {
-    setPrintFilterType(filterType);
-    setPrintFilterValue(filterValue);
-    setPrintMode('filtered');
+const handleFilteredPrint = (
+  filterType: 'department' | 'class' | 'combined' | 'department_trainer',
+  filterValue: string | number | { department: string; classIds: number[] } | { department: string; trainerIds: number[] }
+) => {
+  setPrintFilterType(filterType);
+  setPrintFilterValue(filterValue);
+  setPrintMode('filtered');
+  setTimeout(() => {
+    window.print();
     setTimeout(() => {
-      window.print();
-      setTimeout(() => {
-        setPrintMode('none');
-        setPrintFilterType(null);
-        setPrintFilterValue(null);
-      }, 500);
-    }, 100);
-  };
+      setPrintMode('none');
+      setPrintFilterType(null);
+      setPrintFilterValue(null);
+    }, 500);
+  }, 100);
+};
 
-  const getFilteredPrintSlots = () => {
-    if (!printFilterType || !printFilterValue) return [];
-    if (printFilterType === 'department') return timetableSlots.filter(s => s.subjects?.department === printFilterValue);
-    if (printFilterType === 'class') return timetableSlots.filter(s => s.class_id === printFilterValue);
-    if (printFilterType === 'combined' && typeof printFilterValue === 'object') {
-      const { department, classIds } = printFilterValue as { department: string; classIds: number[] };
-      return timetableSlots.filter(s => s.subjects?.department === department && classIds.includes(s.class_id));
-    }
-    return [];
-  };
+const getFilteredPrintSlots = () => {
+  if (!printFilterType || !printFilterValue) return [];
+  if (printFilterType === 'department')
+    return timetableSlots.filter(s => s.subjects?.department === printFilterValue);
+  if (printFilterType === 'class')
+    return timetableSlots.filter(s => s.class_id === printFilterValue);
+  if (printFilterType === 'combined' && typeof printFilterValue === 'object') {
+    const { department, classIds } = printFilterValue as { department: string; classIds: number[] };
+    return timetableSlots.filter(s =>
+      s.subjects?.department === department && classIds.includes(s.class_id)
+    );
+  }
+  if (printFilterType === 'department_trainer' && typeof printFilterValue === 'object') {
+    const { department, trainerIds } = printFilterValue as { department: string; trainerIds: number[] };
+    return timetableSlots.filter(s =>
+      s.subjects?.department === department && trainerIds.includes(s.employee_id)
+    );
+  }
+  return [];
+};
 
   const extractFilterOptions = (slots: TimetableSlot[]) => {
     const trainers = new Map<number, string>();
@@ -298,12 +320,21 @@ export default function TimetablePage() {
     setFilterClass(null);
     setFilterSubject(null);
     setFilterRoom(null);
+    setFilterSlotType('all'); 
   };
 
-  const handlePrint = (mode: 'master' | 'grouped' | 'department') => {
-    setPrintMode(mode);
-    setTimeout(() => { window.print(); setTimeout(() => setPrintMode('none'), 500); }, 100);
-  };
+const handlePrint = (mode: 'master' | 'grouped' | 'department' | 'room') => {
+  setPendingPrintMode(mode);
+  setIsPrintSlotTypeDialogOpen(true);
+};
+
+const handlePrintConfirmed = (filter: SlotTypeFilter) => {
+  if (!pendingPrintMode) return;
+  setPrintSlotType(filter);
+  setPrintMode(pendingPrintMode);
+  setTimeout(() => { window.print(); setTimeout(() => setPrintMode('none'), 500); }, 100);
+  setPendingPrintMode(null);
+};
 
   const handlePrintTrainer = async (trainerId: number) => {
     setPrintTrainerId(trainerId);
@@ -402,6 +433,14 @@ export default function TimetablePage() {
     );
   }
 
+const filteredSlots = timetableSlots.filter(s => {
+  if (filterSlotType === 'all')     return true;
+  if (filterSlotType === 'nta')     return (s as any).status === 'NTA';
+  if (filterSlotType === 'rna')     return !!(s as any).is_room_fallback;
+  if (filterSlotType === 'nta_rna') return (s as any).status === 'NTA' || !!(s as any).is_room_fallback;
+  return true;
+});
+
   return (
     <div className="container mx-auto py-6 space-y-6">
       <TimetableHeader
@@ -448,12 +487,16 @@ export default function TimetablePage() {
 
       {/* Print Buttons */}
       <div className="flex justify-end gap-2 flex-wrap">
+ 
         <Button variant="outline" onClick={() => handlePrint('master')}>
           <Printer className="mr-2 h-4 w-4" />Print Master Timetable
         </Button>
         <Button variant="outline" onClick={() => handlePrint('grouped')}>
           <FileText className="mr-2 h-4 w-4" />Print by Class
         </Button>
+   <Button variant="outline" onClick={() => setIsPrintRoomDialogOpen(true)}>
+  <DoorOpen className="mr-2 h-4 w-4" />Print Room Occupancy
+</Button>
         <Button variant="outline" onClick={() => handlePrint('department')}>
           <Building2 className="mr-2 h-4 w-4" />Print by Department
         </Button>
@@ -487,6 +530,10 @@ export default function TimetablePage() {
           availableClasses={availableClasses}
           availableSubjects={availableSubjects}
           availableRooms={availableRooms}
+          filterSlotType={filterSlotType}                       
+  onSlotTypeChange={setFilterSlotType}                  
+  ntaCount={timetableSlots.filter(s => (s as any).status === 'NTA').length}        
+  rnaCount={timetableSlots.filter(s => !!(s as any).is_room_fallback).length} 
         />
       </div>
 
@@ -515,31 +562,96 @@ export default function TimetablePage() {
         onNextWeek={() => handleWeekChange('next')}
       />
 
+      <PrintSlotTypeDialog
+  open={isPrintSlotTypeDialogOpen}
+  onOpenChange={setIsPrintSlotTypeDialogOpen}
+  printLabel={pendingPrintMode === 'master' ? 'Master Timetable' : pendingPrintMode === 'grouped' ? 'Class Timetable' : 'Department Timetable'}
+  ntaCount={timetableSlots.filter(s => (s as any).status === 'NTA').length}
+  rnaCount={timetableSlots.filter(s => !!(s as any).is_room_fallback).length}
+  onConfirm={handlePrintConfirmed}
+/>
+
+<PrintRoomDialog
+  open={isPrintRoomDialogOpen}
+  onOpenChange={setIsPrintRoomDialogOpen}
+  rooms={availableRooms.map(r => ({
+    id: r.id,
+    name: r.name,
+    room_type: (timetableSlots.find(s => s.room_id === r.id)?.rooms as any)?.room_type
+  }))}
+onPrint={(roomId) => {
+  setPrintRoomId(roomId);
+  setPrintMode('room');
+  setTimeout(() => { window.print(); setTimeout(() => { setPrintMode('none'); setPrintRoomId(null); }, 500); }, 100);
+}}
+/>
+
       <TimetableGrid
-        slots={timetableSlots}
+        slots={filteredSlots} 
         currentWeek={currentWeek}
         onSlotMove={handleSlotMove}
         onSlotClick={handleSlotClick}
-        isAdmin={isAdmin}
+isAdmin={hasTimetableAdminAccess}
         userId={user?.id || 0}
       />
 
-      {/* Print Views */}
-      {printMode === 'master' && (
-        <MasterTimetablePrint slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} />
-      )}
-      {printMode === 'grouped' && (
-        <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={viewMode === 'mine' || filterTrainer ? 'trainer' : 'class'} />
-      )}
-      {printMode === 'department' && (
-        <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="department" />
-      )}
-      {printMode === 'trainer' && printTrainerId && (
-        <PrintableTimetable slots={getTrainerPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="trainer" />
-      )}
-      {printMode === 'filtered' && printFilterType && printFilterValue && (
-        <PrintableTimetable slots={getFilteredPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={printFilterType === 'class' ? 'class' : 'department'} />
-      )}
+   {/* Print Views */}
+{printMode === 'master' && (
+  <MasterTimetablePrint slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} filterSlotType={printSlotType} />
+)}
+{printMode === 'grouped' && (
+  <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy={viewMode === 'mine' || filterTrainer ? 'trainer' : 'class'} />
+)}
+{printMode === 'department' && (
+  <PrintableTimetable slots={timetableSlots} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="department" />
+)}
+{printMode === 'trainer' && printTrainerId && (
+  <PrintableTimetable slots={getTrainerPrintSlots()} currentWeek={currentWeek} termName={terms.find(t => t.id === selectedTerm)?.name} groupBy="trainer" />
+)}
+
+{printMode === 'filtered' && printFilterType && printFilterValue && (
+  <PrintableTimetable
+    slots={getFilteredPrintSlots()}
+    currentWeek={currentWeek}
+    termName={terms.find(t => t.id === selectedTerm)?.name}
+    groupBy={
+      printFilterType === 'class'             ? 'class'
+      : printFilterType === 'combined'        ? 'class'    // ← each class gets its own page
+      : printFilterType === 'department_trainer' ? 'trainer'
+      : 'department'
+    }
+    filterDepartment={
+      printFilterType === 'department'
+        ? printFilterValue as string
+      : printFilterType === 'combined'
+        ? (printFilterValue as { department: string; classIds: number[] }).department  // ← pass dept for summary
+      : printFilterType === 'department_trainer'
+        ? (printFilterValue as { department: string; trainerIds: number[] }).department
+      : undefined
+    }
+    filterSlotType={printSlotType}
+    printedClasses={
+      printFilterType === 'combined'
+        ? (printFilterValue as { department: string; classIds: number[] }).classIds
+            .map(id => availableClasses.find(c => c.id === id)!)
+            .filter(Boolean)
+        : undefined
+    }
+  />
+)}
+
+{printMode === 'room' && (
+  <PrintableTimetable
+    slots={printRoomId !== null
+      ? timetableSlots.filter(s => s.room_id === printRoomId)
+      : timetableSlots
+    }
+    currentWeek={currentWeek}
+    termName={terms.find(t => t.id === selectedTerm)?.name}
+    groupBy="room"
+    filterSlotType={printSlotType}
+  />
+)}
 
       {user?.role === 'admin' && (
         <GenerateTimetableDialog
@@ -550,23 +662,39 @@ export default function TimetablePage() {
         />
       )}
 
-      <CreateSlotDialog
-        open={isCreateSlotDialogOpen}
-        onOpenChange={setIsCreateSlotDialogOpen}
-        onSuccess={fetchTimetableData}
-        selectedTerm={selectedTerm}
-      />
+ <CreateSlotDialog
+  open={isCreateSlotDialogOpen}
+  onOpenChange={setIsCreateSlotDialogOpen}
+  onSuccess={fetchTimetableData}
+  selectedTerm={selectedTerm}
+  allSlots={timetableSlots}
+  currentUser={{
+    id: user?.id ?? 0,
+    role: user?.role ?? '',
+    has_timetable_admin: hasTimetableAdminAccess, 
+  }}
+/>
 
-      {selectedSlot && (
-        <SlotDetailsDialog
-          open={isSlotDetailsOpen}
-          onOpenChange={setIsSlotDetailsOpen}
-          slot={selectedSlot}
-          onDelete={() => handleDeleteSlot(selectedSlot)}
-          onUpdate={fetchTimetableData}
-          isAdmin={hasTimetableAdminAccess}
-        />
-      )}
+{selectedSlot && (
+  <SlotDetailsDialog
+    open={isSlotDetailsOpen}
+    onOpenChange={setIsSlotDetailsOpen}
+    slot={selectedSlot}
+    onDelete={() => handleDeleteSlot(selectedSlot)}
+    onUpdate={fetchTimetableData}
+    isAdmin={hasTimetableAdminAccess}
+    selectedTerm={selectedTerm}
+     allSlots={timetableSlots}
+    sessionGroupSize={
+      selectedSlot.session_group_id
+        ? timetableSlots.filter(s =>
+            s.session_group_id === selectedSlot.session_group_id &&
+            s.class_id === selectedSlot.class_id   
+          ).length
+        : 1
+    }
+  />
+)}
 
       <PrintTrainerDialog
         open={isPrintTrainerDialogOpen}
@@ -575,13 +703,22 @@ export default function TimetablePage() {
         onPrint={handlePrintTrainer}
       />
 
-      <PrintFilterDialog
-        open={isPrintFilterDialogOpen}
-        onOpenChange={setIsPrintFilterDialogOpen}
-        departments={availableDepartments}
-        classes={availableClasses}
-        onPrint={handleFilteredPrint}
-      />
+<PrintFilterDialog
+  open={isPrintFilterDialogOpen}
+  onOpenChange={setIsPrintFilterDialogOpen}
+  classes={availableClasses}
+  trainers={timetableSlots  // ← was `slots` (doesn't exist)
+    .filter(s => s.users)
+    .map(s => ({
+      id: s.employee_id,
+      name: s.users!.name,
+      department: (s.users as any)?.department ?? null
+    }))
+    .filter((t, i, arr) => arr.findIndex(x => x.id === t.id) === i)
+    .sort((a, b) => a.name.localeCompare(b.name))
+  }
+  onPrint={handleFilteredPrint}
+/>
 
       {/* Draft Selection Dialog (resume pending drafts) */}
       <DraftSelectionDialog

@@ -46,6 +46,7 @@ export default function CreateRoomDialog({
 }: CreateRoomDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [departments, setDepartments] = useState<{ id: number; name: string }[]>([]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -66,23 +67,6 @@ export default function CreateRoomDialog({
     { value: 'lecture_hall', label: 'Lecture Hall' },
     { value: 'studio', label: 'Studio' },
     { value: 'auditorium', label: 'Auditorium' },
-  ];
-
-  const departments = [
-    'Finance',
-    'Human Resources',
-    'Engineering',
-    'Procurement',
-    'Administration',
-    'Executive',
-    'Building and Civil Engineering',
-    'Electrical and Electronics Engineering',
-    'Cosmetology',
-    'Fashion Design and Clothing Textile',
-    'Business and Liberal Studies',
-    'Agriculture and Environment Studies',
-    'Automotive and Mechanical Engineering',
-    'Hospitality and Institutional Management',
   ];
 
   const commonEquipment = [
@@ -113,6 +97,21 @@ export default function CreateRoomDialog({
       resetForm();
     }
   }, [editingRoom, open]);
+
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      try {
+        const res = await fetch('/api/departments');
+        if (res.ok) {
+          const data = await res.json();
+          setDepartments(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch departments:', err);
+      }
+    };
+    fetchDepartments();
+  }, []);
 
   const resetForm = () => {
     setFormData({
@@ -272,8 +271,8 @@ export default function CreateRoomDialog({
               </SelectTrigger>
               <SelectContent>
                 {departments.map((dept) => (
-                  <SelectItem key={dept} value={dept}>
-                    {dept}
+                  <SelectItem key={dept.id} value={dept.name}>
+                    {dept.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -283,7 +282,7 @@ export default function CreateRoomDialog({
           {/* Equipment */}
           <div className="space-y-3">
             <Label>Equipment & Facilities</Label>
-            
+
             {/* Quick Add Common Equipment */}
             <div className="flex flex-wrap gap-2">
               {commonEquipment.map((item) => (
@@ -388,8 +387,8 @@ export default function CreateRoomDialog({
               {isSubmitting
                 ? 'Saving...'
                 : editingRoom
-                ? 'Update Room'
-                : 'Create Room'}
+                  ? 'Update Room'
+                  : 'Create Room'}
             </Button>
           </div>
         </form>

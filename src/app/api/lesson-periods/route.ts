@@ -22,8 +22,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Parse times - expecting format like "09:00:00" or "09:00"
-    const startTime = new Date(`1970-01-01T${start_time}`);
-    const endTime = new Date(`1970-01-01T${end_time}`);
+const startTime = new Date(`1970-01-01T${start_time}Z`);
+const endTime = new Date(`1970-01-01T${end_time}Z`);
 
     if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
       return NextResponse.json(
@@ -139,8 +139,8 @@ export async function GET(request: NextRequest) {
     // Format times for better readability
     const formattedPeriods = lessonPeriods.map(period => ({
       ...period,
-      start_time_formatted: period.start_time.toTimeString().slice(0, 5), // HH:MM
-      end_time_formatted: period.end_time.toTimeString().slice(0, 5) // HH:MM
+start_time_formatted: period.start_time.toISOString().slice(11, 16),
+end_time_formatted: period.end_time.toISOString().slice(11, 16)
     }));
 
     return NextResponse.json({

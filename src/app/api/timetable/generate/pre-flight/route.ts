@@ -50,6 +50,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const termIdParam = searchParams.get('term_id');
+const departmentParam = searchParams.get('department') ?? null; // ← add
 
     if (!termIdParam) {
       return NextResponse.json({ error: 'term_id is required' }, { status: 400 });
@@ -106,22 +107,52 @@ export async function GET(request: NextRequest) {
 
     // ── Class subjects for this term ──────────────────────────────────────────
     const allClassSubjects = await db.classsubjects.findMany({
-      where: { class_id: { in: classIds }, term_id: termId },
+      where: { class_id: { in: classIds }, term_id: termId, is_active: true },
       include: {
         classes: { select: { id: true, name: true, code: true, department: true } },
         subjects: {
           select: {
-            id: true,
-            name: true,
-            code: true,
-            department: true,
-            credit_hours: true,
-            sessions_per_week: true,
-            lesson_type: true
+            id: true, name: true, code: true, department: true,
+            credit_hours: true, sessions_per_week: true, lesson_type: true
           }
         }
       }
     });
+
+    // ── Class load check (blocks generation if any class exceeds 20 sessions) ──
+    // 1 session = 1 period = 2 hrs → 20 sessions max = 40 hrs max per class per week
+    const SESSIONS_MAX = 20;
+    const HOURS_PER_SESSION = 2;
+
+    const periodsByClass = new Map<number, {
+      class_id: number;
+      class_name: string;
+      class_code: string;
+      total_periods: number;
+      total_hours: number;
+    }>();
+
+    allClassSubjects.forEach(cs => {
+      // sessions_per_week IS the period count — lesson_type does not multiply it
+      const sessions = cs.sessions_per_week;
+      const existing = periodsByClass.get(cs.class_id);
+      if (existing) {
+        existing.total_periods += sessions;
+        existing.total_hours = existing.total_periods * HOURS_PER_SESSION;
+      } else {
+        periodsByClass.set(cs.class_id, {
+          class_id: cs.class_id,
+          class_name: cs.classes.name,
+          class_code: cs.classes.code,
+          total_periods: sessions,
+          total_hours: sessions * HOURS_PER_SESSION
+        });
+      }
+    });
+
+    const overloadedClasses = Array.from(periodsByClass.values())
+      .filter(c => c.total_periods > SESSIONS_MAX)
+      .sort((a, b) => b.total_periods - a.total_periods);
 
     // ── Trainer assignments with scheduling config ─────────────────────────────
     const trainerAssignments = await db.trainersubjectassignments.findMany({
@@ -150,6 +181,18 @@ export async function GET(request: NextRequest) {
         users: { select: { id: true, name: true, department: true } }
       }
     });
+
+const filteredAssignments = departmentParam
+  ? trainerAssignments.filter(ta =>
+      ta.classsubjects.subjects.department?.toLowerCase() === departmentParam.toLowerCase()
+    )
+  : trainerAssignments;
+
+const filteredClassSubjects = departmentParam
+  ? allClassSubjects.filter(cs =>
+      cs.subjects.department?.toLowerCase() === departmentParam.toLowerCase()
+    )
+  : allClassSubjects;
 
     // ── Lesson periods ────────────────────────────────────────────────────────
     const lessonPeriods = await db.lessonperiods.findMany({
@@ -192,29 +235,53 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // ── Room mapping check (global) ───────────────────────────────────────────
-    const allActiveSubjects = await db.subjects.findMany({
+    // ── Rooms (with department for fallback matching) ──────────────────────────
+    const rooms = await db.rooms.findMany({
       where: { is_active: true },
-      select: { id: true, name: true, code: true, department: true }
+      select: { id: true, name: true, capacity: true, room_type: true, department: true }
     });
+
+    const workshopRooms = rooms.filter(r => r.room_type === 'workshop');
+
+    // ── Room mapping check (fallback-aware) ───────────────────────────────────
+    const uniqueActiveSubjects = Array.from(
+      new Map(
+        allClassSubjects.map(cs => [cs.subjects.id, {
+          id: cs.subjects.id,
+          name: cs.subjects.name,
+          code: cs.subjects.code,
+          department: cs.subjects.department
+        }])
+      ).values()
+    );
 
     const allSubjectRoomMappings = await db.subjectrooms.findMany({
       select: { subject_id: true }
     });
 
     const mappedSubjectIds = new Set(allSubjectRoomMappings.map(m => m.subject_id));
-    const subjectsWithoutRooms = allActiveSubjects.filter(s => !mappedSubjectIds.has(s.id));
 
-    // ── Build trainer map ─────────────────────────────────────────────────────
+    const subjectsExplicitlyMapped = uniqueActiveSubjects.filter(s => mappedSubjectIds.has(s.id));
+
+    const subjectsUsingFallback = uniqueActiveSubjects.filter(s => {
+      if (mappedSubjectIds.has(s.id)) return false;
+      return rooms.some(r => r.department?.toLowerCase() === s.department?.toLowerCase() || r.department?.toLowerCase() === 'all');
+    });
+
+    const subjectsWithoutRooms = uniqueActiveSubjects.filter(s => {
+      if (mappedSubjectIds.has(s.id)) return false;
+      return !rooms.some(r => r.department?.toLowerCase() === s.department?.toLowerCase() || r.department?.toLowerCase() === 'all');
+    });
+
+    // ── Build trainer assignment lookup ───────────────────────────────────────
     const classSubjectIdsWithTrainer = new Set(
       trainerAssignments.map(ta => ta.class_subject_id)
     );
 
-    // ── Effective sessions and lesson type per assignment ─────────────────────
-    // (assignment-level override takes priority, falls back to subject default)
+    // ── Effective sessions and lesson type — read from classsubjects ──────────
     const subjectsWithTrainer = trainerAssignments.map(ta => {
-      const effectiveSessions = ta.sessions_per_week ?? ta.classsubjects.subjects.sessions_per_week;
-      const effectiveLessonType = ta.lesson_type ?? ta.classsubjects.subjects.lesson_type;
+      const effectiveSessions = ta.classsubjects.sessions_per_week;
+      const effectiveLessonType = ta.classsubjects.lesson_type;
       return {
         id: ta.classsubjects.id,
         trainer_assignment_id: ta.id,
@@ -228,7 +295,7 @@ export async function GET(request: NextRequest) {
         credit_hours: ta.classsubjects.subjects.credit_hours,
         sessions_per_week: effectiveSessions,
         lesson_type: effectiveLessonType,
-        is_override: ta.sessions_per_week !== null || ta.lesson_type !== null,
+        is_override: false,
         trainer: {
           id: ta.users.id,
           name: ta.users.name,
@@ -249,8 +316,8 @@ export async function GET(request: NextRequest) {
         class_code: cs.classes.code,
         department: cs.classes.department,
         credit_hours: cs.subjects.credit_hours,
-        sessions_per_week: cs.subjects.sessions_per_week,
-        lesson_type: cs.subjects.lesson_type
+        sessions_per_week: cs.sessions_per_week,
+        lesson_type: cs.lesson_type
       }));
 
     // ── Trainer summary map ───────────────────────────────────────────────────
@@ -259,29 +326,33 @@ export async function GET(request: NextRequest) {
       name: string;
       department: string | null;
       subjects_count: number;
-      total_sessions_per_week: number;
+      total_periods_per_week: number;
       subjects: Array<{
         code: string;
         name: string;
         class_code: string;
         sessions_per_week: number;
         lesson_type: string;
+        periods_per_week: number;
       }>;
     }>();
 
     trainerAssignments.forEach(ta => {
-      const effectiveSessions = ta.sessions_per_week ?? ta.classsubjects.subjects.sessions_per_week;
-      const effectiveLessonType = ta.lesson_type ?? ta.classsubjects.subjects.lesson_type;
+      const effectiveSessions = ta.classsubjects.sessions_per_week;
+      const effectiveLessonType = ta.classsubjects.lesson_type;
+      // periods_per_week = sessions_per_week (1 session = 1 period)
+      const periodsPerWeek = effectiveSessions;
       const existing = trainerMap.get(ta.users.id);
       if (existing) {
         existing.subjects_count++;
-        existing.total_sessions_per_week += effectiveSessions;
+        existing.total_periods_per_week += periodsPerWeek;
         existing.subjects.push({
           code: ta.classsubjects.subjects.code,
           name: ta.classsubjects.subjects.name,
           class_code: ta.classsubjects.classes.code,
           sessions_per_week: effectiveSessions,
-          lesson_type: effectiveLessonType
+          lesson_type: effectiveLessonType,
+          periods_per_week: periodsPerWeek
         });
       } else {
         trainerMap.set(ta.users.id, {
@@ -289,13 +360,14 @@ export async function GET(request: NextRequest) {
           name: ta.users.name,
           department: ta.users.department,
           subjects_count: 1,
-          total_sessions_per_week: effectiveSessions,
+          total_periods_per_week: periodsPerWeek,
           subjects: [{
             code: ta.classsubjects.subjects.code,
             name: ta.classsubjects.subjects.name,
             class_code: ta.classsubjects.classes.code,
             sessions_per_week: effectiveSessions,
-            lesson_type: effectiveLessonType
+            lesson_type: effectiveLessonType,
+            periods_per_week: periodsPerWeek
           }]
         });
       }
@@ -303,54 +375,116 @@ export async function GET(request: NextRequest) {
 
     const trainerList = Array.from(trainerMap.values());
 
-    // ── Rooms ─────────────────────────────────────────────────────────────────
-    const rooms = await db.rooms.findMany({
-      where: { is_active: true },
-      select: { id: true, name: true, capacity: true, room_type: true }
-    });
+const existingSlots = departmentParam
+  ? await db.timetableslots.count({
+      where: {
+        term_id: termId,
+        subjects: { department: departmentParam }
+      }
+    })
+  : await db.timetableslots.count({ where: { term_id: termId } });
 
-    const existingSlots = await db.timetableslots.count({ where: { term_id: termId } });
 
-    // ── Combination summary ───────────────────────────────────────────────────
+    // ── Combination analysis ──────────────────────────────────────────────────
     const combinationsBySubject = new Map<number, typeof subjectCombinations>();
     subjectCombinations.forEach(combo => {
-      const subjectId = combo.subject_id;
-      const existing = combinationsBySubject.get(subjectId) ?? [];
+      const existing = combinationsBySubject.get(combo.subject_id) ?? [];
       existing.push(combo);
-      combinationsBySubject.set(subjectId, existing);
+      combinationsBySubject.set(combo.subject_id, existing);
     });
 
+    interface SessionGroupMeta {
+      subjectId: number;
+      subjectName: string;
+      subjectCode: string;
+      sessionNumber: number;
+      trainerIds: Set<number>;
+      trainerNames: string[];
+      classCodes: string[];
+      isMultiTrainer: boolean;
+    }
+    const sessionGroupMap = new Map<string, SessionGroupMeta>();
+
+    subjectCombinations.forEach(combo => {
+      const key = `${combo.subject_id}-${combo.session_number}`;
+      const primaryTrainerId = combo.primary_assignment.users.id;
+      const combinedTrainerId = combo.combined_assignment.users.id;
+
+      if (!sessionGroupMap.has(key)) {
+        sessionGroupMap.set(key, {
+          subjectId: combo.subject_id,
+          subjectName: combo.subjects.name,
+          subjectCode: combo.subjects.code,
+          sessionNumber: combo.session_number,
+          trainerIds: new Set(),
+          trainerNames: [],
+          classCodes: [],
+          isMultiTrainer: false
+        });
+      }
+      const group = sessionGroupMap.get(key)!;
+
+      if (!group.trainerIds.has(primaryTrainerId)) {
+        group.trainerIds.add(primaryTrainerId);
+        group.trainerNames.push(combo.primary_assignment.users.name);
+      }
+      if (!group.trainerIds.has(combinedTrainerId)) {
+        group.trainerIds.add(combinedTrainerId);
+        group.trainerNames.push(combo.combined_assignment.users.name);
+      }
+      const primaryCode = combo.primary_assignment.classsubjects.classes.code;
+      const combinedCode = combo.combined_assignment.classsubjects.classes.code;
+      if (!group.classCodes.includes(primaryCode)) group.classCodes.push(primaryCode);
+      if (!group.classCodes.includes(combinedCode)) group.classCodes.push(combinedCode);
+    });
+
+    sessionGroupMap.forEach(group => {
+      group.isMultiTrainer = group.trainerIds.size > 1;
+    });
+
+    const allSessionGroups = Array.from(sessionGroupMap.values());
+    const multiTrainerGroups = allSessionGroups.filter(g => g.isMultiTrainer);
+    const sameTrainerGroups = allSessionGroups.filter(g => !g.isMultiTrainer);
+
     const combinationSummary = Array.from(combinationsBySubject.entries()).map(
-      ([subjectId, combos]) => ({
-        subject_id: subjectId,
-        subject_name: combos[0].subjects.name,
-        subject_code: combos[0].subjects.code,
-        combination_count: combos.length,
-        combinations: combos.map(c => ({
-          id: c.id,
-          session_number: c.session_number,
-          class_a: c.primary_assignment.classsubjects.classes.name,
-          class_a_code: c.primary_assignment.classsubjects.classes.code,
-          trainer_a: c.primary_assignment.users.name,
-          class_b: c.combined_assignment.classsubjects.classes.name,
-          class_b_code: c.combined_assignment.classsubjects.classes.code,
-          trainer_b: c.combined_assignment.users.name,
-        }))
-      })
+      ([subjectId, combos]) => {
+        const subjectGroups = allSessionGroups.filter(g => g.subjectId === subjectId);
+        return {
+          subject_id: subjectId,
+          subject_name: combos[0].subjects.name,
+          subject_code: combos[0].subjects.code,
+          combination_count: combos.length,
+          session_groups: subjectGroups.map(g => ({
+            session_number: g.sessionNumber,
+            type: g.isMultiTrainer ? 'multi_trainer' : 'same_trainer',
+            trainer_count: g.trainerIds.size,
+            trainer_names: g.trainerNames,
+            class_codes: g.classCodes,
+            requires_workshop: g.isMultiTrainer
+          })),
+          combinations: combos.map(c => ({
+            id: c.id,
+            session_number: c.session_number,
+            class_a: c.primary_assignment.classsubjects.classes.name,
+            class_a_code: c.primary_assignment.classsubjects.classes.code,
+            trainer_a: c.primary_assignment.users.name,
+            class_b: c.combined_assignment.classsubjects.classes.name,
+            class_b_code: c.combined_assignment.classsubjects.classes.code,
+            trainer_b: c.combined_assignment.users.name,
+          }))
+        };
+      }
     );
 
     // ── Scheduling config summary ─────────────────────────────────────────────
-    // Group subjects by lesson_type for the summary
     const lessonTypeCounts = { single: 0, double: 0, triple: 0 };
     subjectsWithTrainer.forEach(s => {
       const lt = s.lesson_type as 'single' | 'double' | 'triple';
       if (lt in lessonTypeCounts) lessonTypeCounts[lt]++;
     });
 
-    const totalSlotsNeeded = subjectsWithTrainer.reduce((sum, s) => {
-      const periodsPerSession = s.lesson_type === 'triple' ? 3 : s.lesson_type === 'double' ? 2 : 1;
-      return sum + s.sessions_per_week * periodsPerSession;
-    }, 0);
+    // total slots = sum of sessions_per_week (1 session = 1 slot)
+    const totalSlotsNeeded = subjectsWithTrainer.reduce((sum, s) => sum + s.sessions_per_week, 0);
 
     // ── Errors & warnings ─────────────────────────────────────────────────────
     const errors: string[] = [];
@@ -364,6 +498,17 @@ export async function GET(request: NextRequest) {
       errors.push('No subjects assigned to classes for this term. Assign subjects to classes first.');
     }
 
+    // ── Class load check — blocks generation ─────────────────────────────────
+    if (overloadedClasses.length > 0) {
+      const classList = overloadedClasses
+        .map(c => `${c.class_code} (${c.total_periods} sessions / ${c.total_hours} hrs)`)
+        .join(', ');
+      errors.push(
+        `${overloadedClasses.length} class(es) exceed the 20-session (40 hr) weekly limit: ${classList}. ` +
+        `Fix session counts in the Class Load page before generating.`
+      );
+    }
+
     if (subjectsWithoutTrainer.length > 0) {
       errors.push(
         `${subjectsWithoutTrainer.length} subject(s) have no trainer assigned. Trainers must select their subjects before generating.`
@@ -372,8 +517,16 @@ export async function GET(request: NextRequest) {
 
     if (subjectsWithoutRooms.length > 0) {
       errors.push(
-        `${subjectsWithoutRooms.length} active subject(s) have no room assigned. ` +
-        `Go to Subject — Room Assignments and assign at least one room to every subject before generating.`
+        `${subjectsWithoutRooms.length} subject(s) have no eligible rooms — no explicit assignment and no ` +
+        `active rooms match their department. Either assign rooms explicitly in Subject — Room Assignments, ` +
+        `or ensure active rooms exist for their department.`
+      );
+    }
+
+    if (subjectsUsingFallback.length > 0) {
+      warnings.push(
+        `${subjectsUsingFallback.length} subject(s) have no explicit room assignment and will be scheduled ` +
+        `in any available room matching their department or marked as "all".`
       );
     }
 
@@ -395,36 +548,45 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ── Double/triple consecutive period warnings ──────────────────────────────
+    if (multiTrainerGroups.length > 0 && workshopRooms.length === 0) {
+      errors.push(
+        `${multiTrainerGroups.length} combined session group(s) involve multiple trainers sharing a room, ` +
+        `but no workshop rooms are configured. ` +
+        `Mark at least one room as "workshop" in Room Management so these sessions can be placed.`
+      );
+    } else if (multiTrainerGroups.length > 0 && workshopRooms.length > 0) {
+      warnings.push(
+        `${multiTrainerGroups.length} multi-trainer session group(s) will be placed in workshop rooms. ` +
+        `Available workshops: ${workshopRooms.map(r => r.name).join(', ')}.`
+      );
+    }
+
+    if (sameTrainerGroups.length > 0) {
+      warnings.push(
+        `${sameTrainerGroups.length} combined session group(s) share a single trainer across multiple classes — ` +
+        `these will use any eligible room and follow normal conflict rules.`
+      );
+    }
+
     const doubleTripleSubjects = subjectsWithTrainer.filter(
       s => s.lesson_type === 'double' || s.lesson_type === 'triple'
     );
 
     if (doubleTripleSubjects.length > 0) {
-      const periodsNeededForDouble = 2;
-      const periodsNeededForTriple = 3;
-
-      // Check if there are enough consecutive periods in the configured periods
-      // A simple check: if lesson_type is double, we need at least 2 periods per day
-      const hasEnoughForDouble = lessonPeriods.length >= periodsNeededForDouble;
-      const hasEnoughForTriple = lessonPeriods.length >= periodsNeededForTriple;
-
       const doubleCount = doubleTripleSubjects.filter(s => s.lesson_type === 'double').length;
       const tripleCount = doubleTripleSubjects.filter(s => s.lesson_type === 'triple').length;
 
-      if (doubleCount > 0 && !hasEnoughForDouble) {
+      if (doubleCount > 0 && lessonPeriods.length < 2) {
         errors.push(
           `${doubleCount} subject(s) require double periods but only ${lessonPeriods.length} lesson period(s) are configured. Add at least 2 lesson periods.`
         );
       }
-
-      if (tripleCount > 0 && !hasEnoughForTriple) {
+      if (tripleCount > 0 && lessonPeriods.length < 3) {
         errors.push(
           `${tripleCount} subject(s) require triple periods but only ${lessonPeriods.length} lesson period(s) are configured. Add at least 3 lesson periods.`
         );
       }
-
-      if (hasEnoughForDouble || hasEnoughForTriple) {
+      if (lessonPeriods.length >= 2) {
         warnings.push(
           `${doubleTripleSubjects.length} subject(s) require consecutive periods (${doubleCount} double, ${tripleCount} triple). ` +
           `The generator will find back-to-back slots for these — scheduling may be tighter.`
@@ -444,26 +606,28 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // ── Per-trainer slot availability check ───────────────────────────────────
+    // ── Per-trainer period availability check ─────────────────────────────────
     const totalSlotsPerWeek = workingDaysArray.length * lessonPeriods.length;
     trainerList.forEach(trainer => {
-      if (trainer.total_sessions_per_week > totalSlotsPerWeek) {
+      if (trainer.total_periods_per_week > totalSlotsPerWeek) {
         warnings.push(
-          `${trainer.name} needs ${trainer.total_sessions_per_week} period(s)/week across ${trainer.subjects_count} subject(s), ` +
+          `${trainer.name} needs ${trainer.total_periods_per_week} period(s)/week across ${trainer.subjects_count} subject(s), ` +
           `but only ${totalSlotsPerWeek} slots/week are available.`
         );
       }
     });
 
-    if (subjectCombinations.length > 0) {
-      warnings.push(
-        `${subjectCombinations.length} class combination(s) configured across ${combinationsBySubject.size} subject(s). ` +
-        `Combined sessions will share one room and one slot.`
-      );
-    }
+    const filteredClassIds = departmentParam
+  ? [...new Set(filteredClassSubjects.map(cs => cs.class_id))]
+  : classIds;
+
+const filteredTermClasses = activeTermClasses.filter(tc =>
+  filteredClassIds.includes(tc.class_id)
+);
 
     const result = {
       passed: errors.length === 0,
+      department: departmentParam ?? null, 
       term_info: {
         id: term.id,
         name: term.name,
@@ -473,8 +637,8 @@ export async function GET(request: NextRequest) {
         days_count: workingDaysArray.length
       },
       classes: {
-        total: activeTermClasses.length,
-        list: activeTermClasses.map(tc => ({
+  total: filteredTermClasses.length,
+  list: filteredTermClasses.map(tc => ({
           id: tc.classes.id,
           name: tc.classes.name,
           code: tc.classes.code,
@@ -491,18 +655,29 @@ export async function GET(request: NextRequest) {
       scheduling_config: {
         lesson_type_breakdown: lessonTypeCounts,
         total_period_slots_needed_per_week: totalSlotsNeeded,
-        subjects_with_overrides: subjectsWithTrainer.filter(s => s.is_override).length
+        subjects_with_overrides: 0
+      },
+      class_load: {
+        sessions_max: SESSIONS_MAX,
+        hours_max: SESSIONS_MAX * HOURS_PER_SESSION,
+        overloaded_count: overloadedClasses.length,
+        overloaded_classes: overloadedClasses
       },
       combinations: {
         total: subjectCombinations.length,
+        session_groups_total: allSessionGroups.length,
+        multi_trainer_groups: multiTrainerGroups.length,
+        same_trainer_groups: sameTrainerGroups.length,
+        workshop_rooms_available: workshopRooms.length,
         subjects_with_combinations: combinationsBySubject.size,
         details: combinationSummary
       },
       subject_room_mappings: {
-        total_active_subjects: allActiveSubjects.length,
-        mapped: allActiveSubjects.length - subjectsWithoutRooms.length,
-        unmapped: subjectsWithoutRooms.length,
-        unmapped_subjects: subjectsWithoutRooms.map(s => ({
+        total_active_subjects: uniqueActiveSubjects.length,
+        explicitly_mapped: subjectsExplicitlyMapped.length,
+        using_fallback: subjectsUsingFallback.length,
+        blocked: subjectsWithoutRooms.length,
+        blocked_subjects: subjectsWithoutRooms.map(s => ({
           id: s.id,
           name: s.name,
           code: s.code,
@@ -516,6 +691,7 @@ export async function GET(request: NextRequest) {
       rooms: {
         total: rooms.length,
         active: rooms.length,
+        workshops: workshopRooms.length,
         list: rooms
       },
       lesson_periods: {

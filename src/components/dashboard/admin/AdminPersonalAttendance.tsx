@@ -177,7 +177,6 @@ const fetchPersonalAttendanceStatus = async () => {
         }
       }
       
-      console.log('Check-in status determined:', checkedInStatus); // DEBUG LOG
       setIsCheckedIn(checkedInStatus);
       
       // Calculate today's hours
@@ -263,7 +262,6 @@ const handleAttendance = async (action: 'check-in' | 'check-out') => {
     }
 
     const result = await response.json();
-    console.log('Attendance response:', result); // DEBUG LOG
 
     // SET STATE IMMEDIATELY
     const newCheckedInState = action === 'check-in';

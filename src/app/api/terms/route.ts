@@ -29,16 +29,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { name, start_date, end_date, working_days, holidays } = body;
 
-    console.log('📅 Creating term with holidays:', {
-      name,
-      start_date,
-      end_date,
-      working_days,
-      holidays,
-      holidays_type: typeof holidays,
-      holidays_length: Array.isArray(holidays) ? holidays.length : 0
-    });
-
     // Validation
     if (!name || !start_date || !end_date) {
       return NextResponse.json(
@@ -112,12 +102,6 @@ export async function POST(request: NextRequest) {
 
     // ✅ Type guard for holidays count
     const holidaysCount = Array.isArray(term.holidays) ? term.holidays.length : 0;
-
-    console.log('✅ Term created with holidays:', {
-      id: term.id,
-      holidays: term.holidays,
-      holidays_count: holidaysCount
-    });
 
     return NextResponse.json(
       {

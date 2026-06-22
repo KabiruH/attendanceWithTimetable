@@ -26,7 +26,6 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
     const authHeader = request.headers.get('authorization');
     if (authHeader?.startsWith('Bearer ')) {
       token = authHeader.substring(7);
-      console.log('✅ Token found in Authorization header (Mobile)');
     }
 
     // Method 2: Check cookies (for web apps)
@@ -38,12 +37,10 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
       
       if (cookieToken) {
         token = cookieToken;
-        console.log('✅ Token found in cookies (Web)');
       }
     }
 
     if (!token) {
-      console.log('❌ No token found in request');
       return {
         user: null,
         error: 'No token found',
@@ -58,8 +55,6 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
     const userId = Number(payload.id);
     const role = payload.role as string;
     const name = payload.name as string;
-
-    console.log('🔍 Token payload:', { userId, role, name });
 
     // Get user from database
     const user = await db.users.findUnique({
@@ -77,7 +72,6 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
     });
 
     if (!user) {
-      console.log('❌ User not found in database');
       return {
         user: null,
         error: 'User not found',
@@ -86,16 +80,13 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
     }
 
     if (!user.is_active) {
-      console.log('❌ User is inactive');
       return {
         user: null,
         error: 'User is inactive',
         status: 401
       };
     }
-
-    console.log('✅ User authenticated:', { id: user.id, role: user.role, name: user.name });
-    
+        
     return { 
       user: { 
         ...user, 

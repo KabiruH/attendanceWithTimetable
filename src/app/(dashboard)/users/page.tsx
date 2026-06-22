@@ -63,6 +63,7 @@ export default function UsersPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [deactivatingUser, setDeactivatingUser] = useState<User | null>(null);
   const [isDeactivating, setIsDeactivating] = useState(false);
+  const [filterDepartment, setFilterDepartment] = useState<string>('all');
 
   // Search and pagination states
   const [searchQuery, setSearchQuery] = useState('');
@@ -97,19 +98,24 @@ export default function UsersPage() {
 
   // Filter users when search query changes
   useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setFilteredUsers(users);
-    } else {
-      const query = searchQuery.toLowerCase();
-      const filtered = users.filter(user =>
-        user.name.toLowerCase().includes(query) ||
-        user.id_number.toLowerCase().includes(query) ||
-        (user.department && user.department.toLowerCase().includes(query))
-      );
-      setFilteredUsers(filtered);
-    }
-    setCurrentPage(1);
-  }, [searchQuery, users]);
+  let filtered = users;
+
+  if (searchQuery.trim() !== '') {
+    const query = searchQuery.toLowerCase();
+    filtered = filtered.filter(user =>
+      user.name.toLowerCase().includes(query) ||
+      user.id_number.toLowerCase().includes(query) ||
+      (user.department && user.department.toLowerCase().includes(query))
+    );
+  }
+
+  if (filterDepartment !== 'all') {
+    filtered = filtered.filter(user => user.department === filterDepartment);
+  }
+
+  setFilteredUsers(filtered);
+  setCurrentPage(1);
+}, [searchQuery, filterDepartment, users]);
 
   // Pagination calculations
   const indexOfLastUser = currentPage * usersPerPage;
@@ -294,7 +300,6 @@ export default function UsersPage() {
         worksheet = workbook.Sheets[workbook.SheetNames[workbook.SheetNames.length - 1]];
       }
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
-      console.log('Raw Excel data:', jsonData);
       const usersToImport = jsonData
         .filter((row: any) => row.name || row.Name)
         .map((row: any) => {
@@ -312,7 +317,6 @@ export default function UsersPage() {
           if (user.email === '') user.email = null;
           return user;
         });
-      console.log('Transformed users:', usersToImport);
       if (usersToImport.length === 0) {
         throw new Error('No valid user data found in the Excel file. Please check the format.');
       }
@@ -616,22 +620,52 @@ export default function UsersPage() {
       </div>
 
       {/* Search Bar */}
-      <div className="mb-6">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-          <Input
-            type="text"
-            placeholder="Search by name, ID number, or department..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 max-w-md"
-          />
-        </div>
-        <p className="text-sm text-gray-500 mt-2">
-          Showing {filteredUsers.length === 0 ? 0 : indexOfFirstUser + 1}–{Math.min(indexOfLastUser, filteredUsers.length)} of {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
-          {searchQuery && ` (filtered from ${users.length} total)`}
-        </p>
-      </div>
+{/* Search Bar */}
+<div className="mb-6 flex flex-col sm:flex-row gap-3 items-start flex-wrap">
+  <div className="relative flex-1 max-w-md">
+    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+    <Input
+      type="text"
+      placeholder="Search by name, ID number, or department..."
+      value={searchQuery}
+      onChange={(e) => setSearchQuery(e.target.value)}
+      className="pl-10"
+    />
+  </div>
+
+  <Select value={filterDepartment} onValueChange={setFilterDepartment}>
+    <SelectTrigger className="w-[220px]">
+      <SelectValue placeholder="All departments" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="all">All departments</SelectItem>
+      {departments
+        .filter(d => d.is_active)
+        .map(d => (
+          <SelectItem key={d.id} value={d.name}>
+            {d.name}
+          </SelectItem>
+        ))
+      }
+    </SelectContent>
+  </Select>
+
+  {filterDepartment !== 'all' && (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => setFilterDepartment('all')}
+      className="text-muted-foreground"
+    >
+      Clear
+    </Button>
+  )}
+</div>
+
+<p className="text-sm text-gray-500 mb-4">
+  Showing {filteredUsers.length === 0 ? 0 : indexOfFirstUser + 1}–{Math.min(indexOfLastUser, filteredUsers.length)} of {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+  {(searchQuery || filterDepartment !== 'all') && ` (filtered from ${users.length} total)`}
+</p>
 
       {/* ── Change Password Dialog ────────────────────────────────────────── */}
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>

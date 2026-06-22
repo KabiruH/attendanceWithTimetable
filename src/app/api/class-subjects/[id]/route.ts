@@ -46,8 +46,6 @@ export async function GET(
     // Determine trainer ID - use provided or fall back to current user
     const trainerId = trainerIdParam ? parseInt(trainerIdParam) : user.id;
 
-    console.log('🔍 Fetching subjects:', { classId, termId, trainerId, userId: user.id });
-
     // Fetch class subjects
     const classSubjects = await db.classsubjects.findMany({
       where: whereClause,
@@ -75,8 +73,6 @@ export async function GET(
       ]
     });
 
-    console.log('✅ Found classSubjects:', classSubjects.length);
-
     if (classSubjects.length === 0) {
       return NextResponse.json({
         success: true,
@@ -101,8 +97,6 @@ export async function GET(
         }
       });
     }
-
-    console.log('✅ Found trainerAssignments:', trainerAssignments.length);
 
     // ✅ FIXED: Create a Set of assigned class_subject_ids (not just subject_ids)
     // This allows the same subject to be assigned to multiple classes
@@ -173,12 +167,12 @@ export async function DELETE(
 
     const { user } = authResult;
 
-    if (user.role !== 'admin') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized. Admin access required.' },
-        { status: 403 }
-      );
-    }
+ if (user.role !== 'admin' && !user.has_timetable_admin) {
+  return NextResponse.json(
+    { success: false, error: 'Unauthorized. Admin or Timetable Admin access required.' },
+    { status: 403 }
+  );
+}
 
     const params = await context.params;
     const classSubjectId = parseInt(params.id);

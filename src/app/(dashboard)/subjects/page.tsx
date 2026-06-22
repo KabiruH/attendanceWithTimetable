@@ -14,13 +14,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Plus, Edit, BookOpen, ChevronLeft, ChevronRight, Upload, Download } from "lucide-react";
+import { Search, Plus, Edit, BookOpen, Trash2, ChevronLeft, ChevronRight, Upload, Download } from "lucide-react";
 import { toast } from "sonner";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import AddSubjectDialog from "@/components/class-subjects/AddSubjectDialog";
 import EditSubjectDialog from "@/components/class-subjects/EditSubjectDialog";
 import ImportSubjectsDialog from "@/components/class-subjects/ImportSubjectsDialog";
-import * as XLSX from 'xlsx';
 
 interface Subject {
   id: number;
@@ -44,7 +52,8 @@ export default function AllSubjectsPage() {
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [deletingSubject, setDeletingSubject] = useState<Subject | null>(null);
+const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetchSubjects();
@@ -85,24 +94,26 @@ export default function AllSubjectsPage() {
     toast.success("Subjects imported successfully");
   };
 
-  const downloadTemplate = () => {
-    const template = [
-      {
-        name: 'Programming Fundamentals',
-        code: 'PROG101',
-        department: 'Information Technology',
-        credit_hours: 40,
-        description: 'Introduction to programming concepts',
-      }
-    ];
+  const handleDelete = async () => {
+  if (!deletingSubject) return;
+  setIsDeleting(true);
+  try {
+    const response = await fetch(`/api/subjects?id=${deletingSubject.id}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to delete subject');
+    setSubjects(prev => prev.filter(s => s.id !== deletingSubject.id));
+    toast.success('Subject deleted successfully');
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Failed to delete subject');
+  } finally {
+    setIsDeleting(false);
+    setDeletingSubject(null);
+  }
+};
 
-    const worksheet = XLSX.utils.json_to_sheet(template);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Subjects');
-    XLSX.writeFile(workbook, 'subjects_template.xlsx');
-  };
-
-  const filteredSubjects = subjects.filter((subject) => {
+   const filteredSubjects = subjects.filter((subject) => {
     const matchesSearch =
       subject.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       subject.code.toLowerCase().includes(searchQuery.toLowerCase());
@@ -156,10 +167,7 @@ export default function AllSubjectsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={downloadTemplate}>
-            <Download className="h-4 w-4 mr-2" />
-            Template
-          </Button>
+        
           <Button variant="outline" onClick={() => setShowImportDialog(true)}>
             <Upload className="h-4 w-4 mr-2" />
             Import
@@ -298,6 +306,16 @@ export default function AllSubjectsPage() {
                   >
                     <Edit className="h-3 w-3" />
                   </Button>
+
+                  <Button
+  variant="outline"
+  size="sm"
+  className="shrink-0 h-7 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+  title="Delete subject"
+  onClick={() => setDeletingSubject(subject)}
+>
+  <Trash2 className="h-3 w-3" />
+</Button>
                 </div>
               ))}
             </div>
@@ -378,6 +396,29 @@ export default function AllSubjectsPage() {
           onSuccess={handleImportSuccess}
         />
       )}
+
+      <AlertDialog open={!!deletingSubject} onOpenChange={() => setDeletingSubject(null)}>
+  <AlertDialogContent>
+    <AlertDialogHeader>
+      <AlertDialogTitle>Permanently Delete Subject</AlertDialogTitle>
+      <AlertDialogDescription>
+        Are you sure you want to permanently delete <strong>"{deletingSubject?.name}"</strong>?
+        This action cannot be undone. If this subject is assigned to any classes,
+        you must remove those assignments first.
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+    <AlertDialogFooter>
+      <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+      <AlertDialogAction
+        onClick={handleDelete}
+        className="bg-red-600 hover:bg-red-700"
+        disabled={isDeleting}
+      >
+        {isDeleting ? 'Deleting...' : 'Delete Permanently'}
+      </AlertDialogAction>
+    </AlertDialogFooter>
+  </AlertDialogContent>
+</AlertDialog>
     </div>
   );
 }

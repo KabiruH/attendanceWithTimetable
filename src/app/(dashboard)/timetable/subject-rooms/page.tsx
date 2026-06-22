@@ -87,7 +87,6 @@ function ToastContainer({
 }
 
 // ─── Room Picker Popover ──────────────────────────────────────────────────────
-// ─── Room Picker Popover ──────────────────────────────────────────────────────
 
 function RoomPicker({
   subject,
@@ -106,17 +105,21 @@ function RoomPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [roomSearch, setRoomSearch] = useState('');
+  const [saving, setSaving] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // ── Local draft selection ─────────────────────────────────────────────────
+  // Initialised from assignedRooms when popover opens
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (open) {
+      setSelectedIds(new Set(assignedRooms.map(r => r.id)));
       setTimeout(() => searchRef.current?.focus(), 50);
     } else {
       setRoomSearch('');
     }
   }, [open]);
-
-  const assignedIds = new Set(assignedRooms.map(r => r.id));
 
   const filteredRooms = useMemo(() => {
     const term = roomSearch.trim().toLowerCase();
@@ -127,22 +130,66 @@ function RoomPicker({
     );
   }, [rooms, roomSearch]);
 
-  // Assigned at top, unassigned below — both respect the search filter
-  const assignedFiltered = filteredRooms.filter(r => assignedIds.has(r.id));
-  const unassignedFiltered = filteredRooms.filter(r => !assignedIds.has(r.id));
+  const selectedFiltered = filteredRooms.filter(r => selectedIds.has(r.id));
+  const unselectedFiltered = filteredRooms.filter(r => !selectedIds.has(r.id));
 
-  const isWorking = (roomId: number) =>
-    savingKey === `add-${subject.id}-${roomId}` ||
-    savingKey === `del-${subject.id}-${roomId}`;
+  const toggleRoom = (roomId: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(roomId) ? next.delete(roomId) : next.add(roomId);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      filteredRooms.forEach(r => next.add(r.id));
+      return next;
+    });
+  };
+
+  const deselectAll = () => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      filteredRooms.forEach(r => next.delete(r.id));
+      return next;
+    });
+  };
+
+  const handleCancel = () => {
+    setSelectedIds(new Set(assignedRooms.map(r => r.id)));
+    setOpen(false);
+  };
+
+  // ── Save on Done ──────────────────────────────────────────────────────────
+  const handleDone = async () => {
+    setSaving(true);
+    const originalIds = new Set(assignedRooms.map(r => r.id));
+
+    const toAdd = [...selectedIds].filter(id => !originalIds.has(id));
+    const toRemove = [...originalIds].filter(id => !selectedIds.has(id));
+
+    await Promise.all([
+      ...toAdd.map(id => onAdd(subject.id, id)),
+      ...toRemove.map(id => onRemove(subject.id, id)),
+    ]);
+
+    setSaving(false);
+    setOpen(false);
+  };
+
+  const hasChanges =
+    [...selectedIds].some(id => !assignedRooms.some(r => r.id === id)) ||
+    assignedRooms.some(r => !selectedIds.has(r.id));
+
+  const allFilteredSelected = filteredRooms.length > 0 &&
+    filteredRooms.every(r => selectedIds.has(r.id));
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7 px-2.5 text-xs gap-1.5 shrink-0"
-        >
+        <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs gap-1.5 shrink-0">
           <Plus className="w-3.5 h-3.5" />
           Add room
         </Button>
@@ -157,11 +204,11 @@ function RoomPicker({
         avoidCollisions={true}
         collisionPadding={16}
       >
-        {/* Fixed header — never scrolls */}
+        {/* Header */}
         <div className="px-3 pt-3 pb-2 border-b shrink-0">
           <p className="text-sm font-medium truncate">{subject.name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {assignedRooms.length} room{assignedRooms.length !== 1 ? 's' : ''} assigned
+            {selectedIds.size} room{selectedIds.size !== 1 ? 's' : ''} selected
           </p>
           <div className="relative mt-2">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -185,7 +232,7 @@ function RoomPicker({
           </div>
         </div>
 
-        {/* Scrollable room list — constrained, never overflows screen */}
+        {/* Room list */}
         <div className="overflow-y-auto overscroll-contain flex-1 py-1 min-h-0">
           {filteredRooms.length === 0 && (
             <p className="text-xs text-muted-foreground text-center py-6">
@@ -193,37 +240,27 @@ function RoomPicker({
             </p>
           )}
 
-          {/* ── Assigned rooms — checked + greyed out ── */}
-          {assignedFiltered.length > 0 && (
+          {/* Selected */}
+          {selectedFiltered.length > 0 && (
             <>
               <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Assigned
+                Selected
               </p>
-              {assignedFiltered.map(room => (
+              {selectedFiltered.map(room => (
                 <button
                   key={room.id}
-                  onClick={() => onRemove(subject.id, room.id)}
-                  disabled={isWorking(room.id)}
+                  onClick={() => toggleRoom(room.id)}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left
                     bg-muted/60 hover:bg-destructive/10 hover:text-destructive
-                    transition-colors group disabled:cursor-not-allowed"
+                    transition-colors group"
                 >
-                  {/* Checkbox state */}
-                  <div className="shrink-0">
-                    {isWorking(room.id) ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-sm bg-muted-foreground/30
-                        border border-muted-foreground/20 flex items-center justify-center
-                        group-hover:bg-destructive/20 group-hover:border-destructive/40
-                        transition-colors">
-                        <Check className="w-2.5 h-2.5 text-muted-foreground
-                          group-hover:text-destructive transition-colors" />
-                      </div>
-                    )}
+                  <div className="w-4 h-4 rounded-sm bg-muted-foreground/30
+                    border border-muted-foreground/20 flex items-center justify-center
+                    group-hover:bg-destructive/20 group-hover:border-destructive/40
+                    transition-colors shrink-0">
+                    <Check className="w-2.5 h-2.5 text-muted-foreground
+                      group-hover:text-destructive transition-colors" />
                   </div>
-
-                  {/* Room info — greyed out to signal "already selected" */}
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-medium truncate block
                       text-muted-foreground group-hover:text-destructive transition-colors">
@@ -231,13 +268,10 @@ function RoomPicker({
                     </span>
                     {room.room_type && (
                       <span className="text-xs text-muted-foreground/60">
-                        {room.room_type}
-                        {room.capacity ? ` · Cap: ${room.capacity}` : ''}
+                        {room.room_type}{room.capacity ? ` · Cap: ${room.capacity}` : ''}
                       </span>
                     )}
                   </div>
-
-                  {/* Remove hint on hover */}
                   <span className="text-xs text-muted-foreground/0 group-hover:text-destructive/70
                     transition-colors shrink-0 font-medium">
                     Remove
@@ -247,42 +281,32 @@ function RoomPicker({
             </>
           )}
 
-          {/* Divider */}
-          {assignedFiltered.length > 0 && unassignedFiltered.length > 0 && (
+          {selectedFiltered.length > 0 && unselectedFiltered.length > 0 && (
             <div className="border-t my-1 mx-3" />
           )}
 
-          {/* ── Unassigned rooms ── */}
-          {unassignedFiltered.length > 0 && (
+          {/* Unselected */}
+          {unselectedFiltered.length > 0 && (
             <>
-              {assignedFiltered.length > 0 && (
+              {selectedFiltered.length > 0 && (
                 <p className="px-3 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Available
                 </p>
               )}
-              {unassignedFiltered.map(room => (
+              {unselectedFiltered.map(room => (
                 <button
                   key={room.id}
-                  onClick={() => onAdd(subject.id, room.id)}
-                  disabled={isWorking(room.id)}
+                  onClick={() => toggleRoom(room.id)}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-left
-                    hover:bg-muted transition-colors
-                    disabled:opacity-50 disabled:cursor-not-allowed"
+                    hover:bg-muted transition-colors"
                 >
-                  <div className="shrink-0">
-                    {isWorking(room.id) ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-sm border-2
-                        border-muted-foreground/30 shrink-0" />
-                    )}
-                  </div>
+                  <div className="w-4 h-4 rounded-sm border-2
+                    border-muted-foreground/30 shrink-0" />
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-medium truncate block">{room.name}</span>
                     {room.room_type && (
                       <span className="text-xs text-muted-foreground">
-                        {room.room_type}
-                        {room.capacity ? ` · Cap: ${room.capacity}` : ''}
+                        {room.room_type}{room.capacity ? ` · Cap: ${room.capacity}` : ''}
                       </span>
                     )}
                   </div>
@@ -292,19 +316,48 @@ function RoomPicker({
           )}
         </div>
 
-        {/* Fixed footer — never scrolls */}
-        <div className="border-t px-3 py-2 flex items-center justify-between shrink-0">
-          <span className="text-xs text-muted-foreground">
-            {assignedRooms.length} of {rooms.length} assigned
-          </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setOpen(false)}
-          >
-            Done
-          </Button>
+        {/* Footer */}
+        <div className="border-t px-3 py-2 flex items-center justify-between shrink-0 gap-2">
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              disabled={allFilteredSelected || filteredRooms.length === 0}
+              onClick={selectAll}
+            >
+              Select all
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+              disabled={selectedIds.size === 0}
+              onClick={deselectAll}
+            >
+              Deselect all
+            </Button>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              disabled={saving}
+              onClick={handleCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-6 px-3 text-xs"
+              disabled={saving || !hasChanges}
+              onClick={handleDone}
+            >
+              {saving ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+              {saving ? 'Saving...' : 'Done'}
+            </Button>
+          </div>
         </div>
       </PopoverContent>
     </Popover>
@@ -650,13 +703,14 @@ export default function SubjectRoomsPage() {
 
       {/* Unmapped warning banner */}
       {!pageError && unmappedSubjects.length > 0 && (
-        <Alert className="border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+        <Alert className="border-blue-400 bg-blue-50 text-blue-900 dark:bg-blue-950 dark:text-blue-200">
+          <Info className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           <AlertDescription>
             <span className="font-medium">
-              {unmappedSubjects.length} subject{unmappedSubjects.length > 1 ? 's have' : ' has'} no room assigned
+              {unmappedSubjects.length} subject{unmappedSubjects.length > 1 ? 's have' : ' has'} no explicit room assignment
             </span>
-            {' '}— timetable generation will be blocked until all subjects have at least one room.
+            {' '}— these will be scheduled in any active room matching their department.
+            Assign rooms explicitly only for subjects that require specific rooms (labs, workshops, etc.).
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {unmappedSubjects.slice(0, 12).map(s => (
                 <Badge
@@ -685,8 +739,7 @@ export default function SubjectRoomsPage() {
         <Alert className="border-green-500 bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-200">
           <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
           <AlertDescription>
-            All {subjects.length} subjects have at least one room assigned.
-            Timetable generation is unblocked.
+            All {subjects.length} subjects have explicit room assignments.            Timetable generation is unblocked.
           </AlertDescription>
         </Alert>
       )}
@@ -696,9 +749,9 @@ export default function SubjectRoomsPage() {
         <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-2">
           <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <span>
-            Click <strong>Add room</strong> on any subject card to assign rooms.
-            A subject can have multiple rooms — the generator will pick the best available one.
-            Rooms can also be shared across multiple subjects.
+            Click <strong>Add room</strong> to explicitly assign rooms to special subjects (labs, workshops, etc.).
+            Subjects <strong>without explicit assignments</strong> will automatically use any active room
+            in their department, or any room marked as <strong>department: all</strong>.
           </span>
         </div>
       )}
@@ -785,11 +838,10 @@ export default function SubjectRoomsPage() {
               <span className="font-medium text-green-600 dark:text-green-400">
                 {mappedCount}
               </span> mapped,{' '}
-              <span className={`font-medium ${
-                unmappedSubjects.length > 0
-                  ? 'text-amber-600 dark:text-amber-400'
-                  : 'text-muted-foreground'
-              }`}>
+              <span className={`font-medium ${unmappedSubjects.length > 0
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-muted-foreground'
+                }`}>
                 {unmappedSubjects.length}
               </span> unmapped
             </span>

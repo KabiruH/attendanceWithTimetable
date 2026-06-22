@@ -1,13 +1,14 @@
 // components/profile/ProfileHeader.tsx
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Mail, Briefcase, Lock, Phone, UserCircle, Calendar, FileText, Edit } from 'lucide-react';
+import { Mail, Briefcase, Lock, Phone, UserCircle, Calendar, FileText, Edit, Upload } from 'lucide-react';
 import { UserProfile } from '@/lib/types/profile';
 import Link from 'next/link';
 
 interface ProfileHeaderProps extends UserProfile {
   onPasswordChange: () => void;
   onEdit: () => void;
+  onEditImages: () => void;
 }
 
 export function ProfileHeader({ 
@@ -23,12 +24,12 @@ export function ProfileHeader({
   id_card_path,
   date_of_birth,
   onPasswordChange,
-  onEdit
+  onEdit,
+  onEditImages,
 }: ProfileHeaderProps) {
   const formattedDate = new Date(created_at).toLocaleDateString();
   const formattedDOB = new Date(date_of_birth).toLocaleDateString();
 
-  
 
   return (
     <div className="flex flex-col md:flex-row md:items-start gap-6">
@@ -53,6 +54,10 @@ export function ProfileHeader({
               <Edit className="w-4 h-4 mr-2" />
               Edit Profile
             </Button>
+              <Button variant="outline" onClick={onEditImages}>
+    <Upload className="w-4 h-4 mr-2" />
+    Update Photos
+  </Button>
             <Button variant="outline" onClick={onPasswordChange}>
               <Lock className="w-4 h-4 mr-2" />
               Change Password

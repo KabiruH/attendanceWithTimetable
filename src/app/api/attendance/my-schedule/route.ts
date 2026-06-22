@@ -36,9 +36,6 @@ async function getAuthenticatedUser(req: NextRequest) {
     if (!user || !user.is_active) {
       throw new Error('User not found or inactive');
     }
-
-    console.log('✅ Authenticated user:', user.id, user.name);
-
     return user;
   } catch (error) {
     throw new Error('Invalid authentication token');

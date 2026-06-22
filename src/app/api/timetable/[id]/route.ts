@@ -9,7 +9,7 @@ async function verifyAuth() {
   try {
     const cookieStore = await cookies();
     const token = cookieStore.get('token');
-   
+
     if (!token) {
       return { error: 'No token found', status: 401 };
     }
@@ -149,9 +149,9 @@ export async function GET(
   } catch (error: any) {
     console.error('Error fetching timetable slot:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to fetch timetable slot',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );
@@ -163,6 +163,11 @@ export async function GET(
  * Update a timetable slot (reschedule)
  * Admin/Timetable Admin: Can update any slot
  * Trainer: Can only reschedule their own slots
+ *
+ * Workshop rooms (room_type = 'workshop') allow multiple simultaneous bookings
+ * by design — room conflicts are skipped for them.
+ * Moving a slot to the RNA room automatically sets is_room_fallback = true.
+ * Moving a slot away from RNA resets is_room_fallback = false.
  */
 export async function PUT(
   request: NextRequest,
@@ -219,11 +224,11 @@ export async function PUT(
 
     // Prepare update data
     const updateData: any = {};
-    
+
     if (term_id !== undefined) updateData.term_id = term_id;
     if (class_id !== undefined) updateData.class_id = class_id;
     if (subject_id !== undefined) updateData.subject_id = subject_id;
-    
+
     if (employee_id !== undefined) {
       // Only admin or timetable admin can change trainer
       if (!isAdminOrTimetableAdmin) {
@@ -234,10 +239,10 @@ export async function PUT(
       }
       updateData.employee_id = employee_id;
     }
-    
+
     if (room_id !== undefined) updateData.room_id = room_id;
     if (lesson_period_id !== undefined) updateData.lesson_period_id = lesson_period_id;
-    
+
     if (day_of_week !== undefined) {
       // Validate day_of_week
       if (day_of_week < 0 || day_of_week > 6) {
@@ -248,7 +253,7 @@ export async function PUT(
       }
       updateData.day_of_week = day_of_week;
     }
-    
+
     if (status !== undefined) updateData.status = status;
 
     // ✅ Validate class-subject relationship if being changed
@@ -273,47 +278,88 @@ export async function PUT(
       }
     }
 
-    // Check for conflicts if rescheduling
-    if (room_id !== undefined || lesson_period_id !== undefined || day_of_week !== undefined) {
-      const checkRoomId = room_id ?? existingSlot.room_id;
-      const checkPeriodId = lesson_period_id ?? existingSlot.lesson_period_id;
-      const checkDay = day_of_week ?? existingSlot.day_of_week;
-      const checkTrainerId = employee_id ?? existingSlot.employee_id;
-      const checkTermId = term_id ?? existingSlot.term_id;
+    // ✅ Check for conflicts if rescheduling
+    // Workshop rooms (room_type = 'workshop') allow multiple simultaneous
+    // bookings — they are shared practical spaces by design. Room conflicts
+    // are skipped for them. Trainer conflicts are always enforced.
+// ✅ Check for conflicts if rescheduling
+if (room_id !== undefined || lesson_period_id !== undefined || day_of_week !== undefined) {
+  const checkRoomId    = room_id          ?? existingSlot.room_id;
+  const checkPeriodId  = lesson_period_id ?? existingSlot.lesson_period_id;
+  const checkDay       = day_of_week      ?? existingSlot.day_of_week;
+  const checkTrainerId = employee_id      ?? existingSlot.employee_id;
+  const checkTermId    = term_id          ?? existingSlot.term_id;
 
-      const conflictingSlot = await db.timetableslots.findFirst({
-        where: {
-          id: { not: slotId }, // Exclude current slot
-          term_id: checkTermId,
-          day_of_week: checkDay,
-          lesson_period_id: checkPeriodId,
-          OR: [
-            { room_id: checkRoomId }, // Same room
-            { employee_id: checkTrainerId } // Same trainer
-          ]
-        },
-        include: {
-          classes: { select: { name: true, code: true } },
-          subjects: { select: { name: true, code: true } },
-          rooms: { select: { name: true } },
-          users: { select: { name: true } }
-        }
-      });
+  const checkRoom = await db.rooms.findUnique({
+    where: { id: checkRoomId },
+    select: { name: true, room_type: true }
+  });
 
-      if (conflictingSlot) {
-        let conflictMessage = '';
-        if (conflictingSlot.room_id === checkRoomId) {
-          conflictMessage = `Room ${conflictingSlot.rooms.name} is already booked for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
-        } else if (conflictingSlot.employee_id === checkTrainerId) {
-          conflictMessage = `Trainer ${conflictingSlot.users.name} is already scheduled for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
-        }
-        
+  const isWorkshopRoom = checkRoom?.room_type === 'workshop';
+
+  // Auto-set is_room_fallback when slot is moved to/from RNA
+  if (room_id !== undefined) {
+    const isRna =
+      checkRoom?.name?.toUpperCase() === 'RNA' ||
+      (checkRoom?.name?.toUpperCase().includes('RNA') ?? false);
+    updateData.is_room_fallback = isRna;
+    // If moving OUT of RNA, also clear the TFL/CNA status back to scheduled
+    if (!isRna && (existingSlot.status === 'TFL' || existingSlot.status === 'CNA')) {
+      updateData.status = 'scheduled';
+    }
+  }
+
+  // TFL/CNA/RNA slots were force-placed knowing the trainer was already
+  // double-booked. Skip the trainer conflict check so the admin can move
+  // them to a proper room without being blocked.
+  const isForceplacedSlot =
+    existingSlot.status === 'TFL' ||
+    existingSlot.status === 'CNA' ||
+    existingSlot.is_room_fallback === true;
+
+  const skipRoomCheck    = isWorkshopRoom;
+  const skipTrainerCheck = isForceplacedSlot;
+
+  // Build OR conditions — only run conflict check if at least one check applies
+  const orConditions = [
+    ...(!skipRoomCheck    ? [{ room_id: checkRoomId }]        : []),
+    ...(!skipTrainerCheck ? [{ employee_id: checkTrainerId }] : [])
+  ];
+
+  if (orConditions.length > 0) {
+    const conflictingSlot = await db.timetableslots.findFirst({
+      where: {
+        id:               { not: slotId },
+        term_id:          checkTermId,
+        day_of_week:      checkDay,
+        lesson_period_id: checkPeriodId,
+        OR:               orConditions
+      },
+      include: {
+        classes:  { select: { name: true, code: true } },
+        subjects: { select: { name: true, code: true } },
+        rooms:    { select: { name: true } },
+        users:    { select: { name: true } }
+      }
+    });
+
+    if (conflictingSlot) {
+      let conflictMessage = '';
+      if (!skipRoomCheck && conflictingSlot.room_id === checkRoomId) {
+        conflictMessage = `Room ${conflictingSlot.rooms.name} is already booked for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
+      } else if (!skipTrainerCheck && conflictingSlot.employee_id === checkTrainerId) {
+        conflictMessage = `Trainer ${conflictingSlot.users.name} is already scheduled for ${conflictingSlot.subjects.name} (${conflictingSlot.classes.name}) at this time`;
+      }
+
+      if (conflictMessage) {
         return NextResponse.json(
           { error: 'Scheduling conflict', details: conflictMessage },
           { status: 409 }
         );
       }
     }
+  }
+}
 
     // Update the slot
     const updatedSlot = await db.timetableslots.update({
@@ -338,9 +384,9 @@ export async function PUT(
   } catch (error: any) {
     console.error('Error updating timetable slot:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to update timetable slot',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );
@@ -406,9 +452,9 @@ export async function DELETE(
   } catch (error: any) {
     console.error('Error deleting timetable slot:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to delete timetable slot',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );

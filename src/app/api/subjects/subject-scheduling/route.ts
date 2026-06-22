@@ -1,4 +1,4 @@
-// app/api/subject-scheduling/route.ts
+// app/api/subjects/subject-scheduling/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
@@ -32,9 +32,9 @@ function hasTimetableAdminAccess(user: any): boolean {
   return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
-// GET /api/subject-scheduling
-// Returns all subjects that have active trainersubjectassignments in the current term
-// "Current term" = the term whose end_date is the furthest in the future (or most recently active)
+// GET /api/subjects/subject-scheduling
+// Returns all subjects with active trainer assignments in the current term.
+// sessions_per_week and lesson_type now come from classsubjects (per-class source of truth).
 export async function GET(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -45,7 +45,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized. Admin or Timetable Admin access required.' }, { status: 403 });
     }
 
-    // Get current active term
     const currentTerm = await db.terms.findFirst({
       where: { is_active: true },
       orderBy: { start_date: 'desc' }
@@ -55,12 +54,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No active term found.' }, { status: 404 });
     }
 
-    // Get all subjects that have active assignments in this term
     const assignedSubjectIds = await db.trainersubjectassignments.findMany({
-      where: {
-        term_id: currentTerm.id,
-        is_active: true
-      },
+      where: { term_id: currentTerm.id, is_active: true },
       select: { subject_id: true },
       distinct: ['subject_id']
     });
@@ -68,34 +63,20 @@ export async function GET(request: NextRequest) {
     const subjectIds = assignedSubjectIds.map(a => a.subject_id);
 
     if (subjectIds.length === 0) {
-      return NextResponse.json({
-        term: currentTerm,
-        subjects: []
-      });
+      return NextResponse.json({ term: currentTerm, subjects: [] });
     }
 
-    // Fetch full subject data with per-assignment overrides
     const subjects = await db.subjects.findMany({
-      where: {
-        id: { in: subjectIds },
-        is_active: true
-      },
+      where: { id: { in: subjectIds }, is_active: true },
       orderBy: { name: 'asc' },
       include: {
         trainersubjectassignments: {
-          where: {
-            term_id: currentTerm.id,
-            is_active: true
-          },
+          where: { term_id: currentTerm.id, is_active: true },
           include: {
-            users: {
-              select: { id: true, name: true, department: true }
-            },
+            users: { select: { id: true, name: true, department: true } },
             classsubjects: {
               include: {
-                classes: {
-                  select: { id: true, name: true, code: true, department: true }
-                }
+                classes: { select: { id: true, name: true, code: true, department: true } }
               }
             }
           }
@@ -103,18 +84,16 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // Shape the response
     const result = subjects.map(subject => ({
       id: subject.id,
       name: subject.name,
       code: subject.code,
       department: subject.department,
       classification: subject.classification,
-      // Subject-level defaults
+      // Subject-level defaults (shown as reference, not the editing target anymore)
       default_sessions_per_week: subject.sessions_per_week,
       default_lesson_type: subject.lesson_type,
       can_be_online: subject.can_be_online,
-      // All active assignments for this subject in the current term
       assignments: subject.trainersubjectassignments.map(a => ({
         id: a.id,
         trainer_id: a.trainer_id,
@@ -125,9 +104,13 @@ export async function GET(request: NextRequest) {
         class_name: a.classsubjects.classes.name,
         class_code: a.classsubjects.classes.code,
         class_department: a.classsubjects.classes.department,
-        // Per-assignment overrides (fall back to subject defaults if null)
-        sessions_per_week: a.sessions_per_week ?? subject.sessions_per_week,
-        lesson_type: a.lesson_type ?? subject.lesson_type,
+        // ✅ Read from classsubjects — the per-class source of truth
+        sessions_per_week: a.classsubjects.sessions_per_week,
+        lesson_type: a.classsubjects.lesson_type,
+        // is_override: true if classsubjects differs from subject default
+        is_override:
+          a.classsubjects.sessions_per_week !== subject.sessions_per_week ||
+          a.classsubjects.lesson_type !== subject.lesson_type,
       }))
     }));
 
@@ -147,8 +130,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PATCH /api/subject-scheduling
-// Updates subject-level defaults for sessions_per_week and lesson_type
+// PATCH /api/subjects/subject-scheduling
+// Updates subject-level defaults on the subjects table (does NOT touch classsubjects)
+// Use the class-load page to edit per-class values.
 export async function PATCH(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -166,15 +150,13 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'subject_id is required' }, { status: 400 });
     }
 
-    // Validate sessions_per_week
     if (sessions_per_week !== undefined) {
-      const sessions = parseInt(sessions_per_week);
-      if (isNaN(sessions) || sessions < 1 || sessions > 4) {
-        return NextResponse.json({ error: 'sessions_per_week must be between 1 and 4' }, { status: 400 });
+      const s = parseInt(sessions_per_week);
+      if (isNaN(s) || s < 1 || s > 7) {
+        return NextResponse.json({ error: 'sessions_per_week must be between 1 and 7' }, { status: 400 });
       }
     }
 
-    // Validate lesson_type
     const validLessonTypes = ['single', 'double', 'triple'];
     if (lesson_type !== undefined && !validLessonTypes.includes(lesson_type)) {
       return NextResponse.json({ error: 'lesson_type must be single, double, or triple' }, { status: 400 });

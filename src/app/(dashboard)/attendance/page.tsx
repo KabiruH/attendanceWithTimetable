@@ -70,12 +70,10 @@ function Attendance() {
 
       const response: AttendanceResponse = await attendanceResponse.json();
 
-      console.log('API Response:', response); // 🔍 Debug log
 
       if (user.role === "admin") {
         // ✅ FIXED: Use correct field names from API
         const adminEmployees = response.attendanceData.map((record: any) => {
-          console.log('Processing record:', record); // 🔍 Debug each record
           
           return {
             id: record.id,
@@ -93,7 +91,6 @@ function Attendance() {
           };
         });
         
-        console.log('Mapped admin employees:', adminEmployees); // 🔍 Debug mapped data
         setEmployees(adminEmployees);
 
         if (response.autoProcessed && (response.autoProcessed.autoCheckouts > 0 || response.autoProcessed.absentRecords > 0)) {

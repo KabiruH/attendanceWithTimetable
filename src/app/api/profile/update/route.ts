@@ -11,6 +11,8 @@ interface UpdateProfileData {
     date_of_birth?: string;
     phone_number?: string;
     gender?: string;
+    passport_photo?: string;  
+    id_card_path?: string;   
 }
 
 export async function PUT(request: NextRequest) {
@@ -92,6 +94,8 @@ export async function PUT(request: NextRequest) {
                     name: data.name,
                     email: data.email,
                     date_of_birth: data.date_of_birth ? new Date(data.date_of_birth) : undefined,
+                    id_card_path: data.id_card_path,
+                    passport_photo: data.passport_photo
                 }
             });
 

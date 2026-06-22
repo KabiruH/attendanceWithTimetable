@@ -1,7 +1,7 @@
 // app/(dashboard)/timetable/subject-scheduling/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Search, Filter, BookOpen, Users, AlertTriangle, RefreshCw, ChevronDown, X, Plus, Trash2, RotateCcw, Combine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ interface CombinationsData {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const LESSON_TYPE_OPTIONS = ['single', 'double', 'triple'];
-const SESSION_OPTIONS = [1, 2, 3, 4];
+const SESSION_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 
 const classificationColor: Record<string, string> = {
   basic: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -97,6 +98,13 @@ const lessonTypeColor: Record<string, string> = {
 
 // ── Combine Classes Modal ─────────────────────────────────────────────────────
 
+// ── Combine Classes Modal (drop-in replacement) ───────────────────────────────
+// Supports combining 2–N classes per session (no hard upper limit).
+// Schema: still writes one subjectcombinations row per (primary, combined) pair,
+// so the existing API and DB schema are unchanged.
+// The UI groups them visually into a "session group" so the timetabler sees
+// e.g. "Session 2: ARCH-A + ARCH-B + CIVIL-A" as one unit.
+
 function CombineClassesModal({
   subject,
   onClose,
@@ -109,21 +117,19 @@ function CombineClassesModal({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Form state for new combination
-  const [newCombo, setNewCombo] = useState({
-    session_number: 1,
-    primary_assignment_id: '',
-    combined_assignment_id: '',
-  });
+  // New group builder state
+  const [selectedSession, setSelectedSession] = useState(1);
+  // The set of assignment IDs chosen to form a new group
+  const [groupSelections, setGroupSelections] = useState<Set<string>>(new Set());
+  const [applyToAllSessions, setApplyToAllSessions] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const [assignRes, comboRes] = await Promise.all([
         fetch(`/api/subjects/subject-scheduling/${subject.id}/assignments`),
-        fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`)
+        fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`),
       ]);
-
       if (assignRes.ok) {
         const data = await assignRes.json();
         setAssignments(data.assignments || []);
@@ -139,77 +145,156 @@ function CombineClassesModal({
     }
   }, [subject.id]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
-  const handleAddCombination = async () => {
-    if (!newCombo.primary_assignment_id || !newCombo.combined_assignment_id) {
-      toast.error('Please select both classes to combine');
+  // ── Derived: build session groups from existing combinations ─────────────
+  // Each session may have multiple (primary, combined) pairs. We reconstruct
+  // the full group of class codes involved in each session.
+  const sessionGroups = useMemo(() => {
+    if (!combinations) return {};
+    const result: Record<number, { ids: Set<number>; combos: Combination[] }> = {};
+    const flat = Object.values(combinations.combinations).flat();
+    flat.forEach(combo => {
+      const sn = combo.session_number;
+      if (!result[sn]) result[sn] = { ids: new Set(), combos: [] };
+      result[sn].ids.add(combo.primary_assignment_id);
+      result[sn].ids.add(combo.combined_assignment_id);
+      result[sn].combos.push(combo);
+    });
+    return result;
+  }, [combinations]);
+
+  // ── Assignment lookup map ─────────────────────────────────────────────────
+  const assignmentMap = useMemo(
+    () => new Map(assignments.map(a => [a.id, a])),
+    [assignments]
+  );
+
+  // ── Toggle a class in the group builder ──────────────────────────────────
+  const toggleGroupMember = (id: string) => {
+    setGroupSelections(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // ── Save new group ────────────────────────────────────────────────────────
+  // The first selected assignment becomes the primary; the rest are combined.
+  // We write one DB row per (primary, combined) pair.
+  const handleSaveGroup = async () => {
+    const ids = Array.from(groupSelections).map(Number);
+    if (ids.length < 2) {
+      toast.error('Select at least 2 classes to combine');
       return;
     }
-    if (newCombo.primary_assignment_id === newCombo.combined_assignment_id) {
-      toast.error('Cannot combine a class with itself');
-      return;
-    }
-
     setSaving(true);
+    const [primaryId, ...restIds] = ids;
+
+    // If applyToAllSessions, create rows for every session number
+    const sessionsToCreate = applyToAllSessions
+      ? Array.from({ length: maxSessions }, (_, i) => i + 1)
+      : [selectedSession];
+
     try {
-      const res = await fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_number: newCombo.session_number,
-          primary_assignment_id: parseInt(newCombo.primary_assignment_id),
-          combined_assignment_id: parseInt(newCombo.combined_assignment_id),
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to create combination');
-        return;
+      const results = await Promise.all(
+        sessionsToCreate.flatMap(sessionNum =>
+          restIds.map(combinedId =>
+            fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_number: sessionNum,
+                primary_assignment_id: primaryId,
+                combined_assignment_id: combinedId,
+              }),
+            }).then(r => r.json())
+          )
+        )
+      );
+      const anyError = results.find(r => r.error);
+      if (anyError) {
+        toast.error(anyError.error || 'Some combinations failed to save');
+      } else {
+        toast.success(
+          applyToAllSessions
+            ? `All ${maxSessions} sessions combined (${ids.length} classes)`
+            : `Session ${selectedSession} group saved (${ids.length} classes)`
+        );
+        setGroupSelections(new Set());
+        await fetchData();
       }
-
-      toast.success(data.message || 'Combination created');
-      setNewCombo({ session_number: 1, primary_assignment_id: '', combined_assignment_id: '' });
-      await fetchData();
     } catch {
-      toast.error('Failed to create combination');
+      toast.error('Failed to save group');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleRemoveCombination = async (combinationId: number) => {
+  // ── Remove an entire session group ────────────────────────────────────────
+  const handleRemoveGroup = async (sessionNum: number) => {
+    const group = sessionGroups[sessionNum];
+    if (!group) return;
+    setSaving(true);
     try {
-      const res = await fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ combination_id: combinationId })
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error || 'Failed to remove combination');
-        return;
-      }
-
-      toast.success('Combination removed');
+      await Promise.all(
+        group.combos.map(combo =>
+          fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ combination_id: combo.id }),
+          })
+        )
+      );
+      toast.success(`Session ${sessionNum} combination removed`);
       await fetchData();
     } catch {
-      toast.error('Failed to remove combination');
+      toast.error('Failed to remove group');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── Remove a single class from a group ────────────────────────────────────
+  // Removes all combo rows that reference this assignment in this session
+  const handleRemoveFromGroup = async (sessionNum: number, assignmentId: number) => {
+    const group = sessionGroups[sessionNum];
+    if (!group) return;
+    const rowsToDelete = group.combos.filter(
+      c =>
+        c.primary_assignment_id === assignmentId ||
+        c.combined_assignment_id === assignmentId
+    );
+    if (rowsToDelete.length === 0) return;
+    setSaving(true);
+    try {
+      await Promise.all(
+        rowsToDelete.map(combo =>
+          fetch(`/api/subjects/subject-scheduling/${subject.id}/combinations`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ combination_id: combo.id }),
+          })
+        )
+      );
+      toast.success('Class removed from group');
+      await fetchData();
+    } catch {
+      toast.error('Failed to remove class from group');
+    } finally {
+      setSaving(false);
     }
   };
 
   const maxSessions = subject.default_sessions_per_week;
-  const allCombos = combinations
-    ? Object.values(combinations.combinations).flat()
-    : [];
+
+  // Sessions that already have a group
+  const configuredSessions = new Set(Object.keys(sessionGroups).map(Number));
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[680px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[720px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Combine className="h-5 w-5 text-indigo-600" />
@@ -218,7 +303,8 @@ function CombineClassesModal({
           <DialogDescription>
             <span className="font-medium text-foreground">{subject.code}</span>
             <span className="mx-2 text-muted-foreground">·</span>
-            {subject.default_sessions_per_week} session{subject.default_sessions_per_week > 1 ? 's' : ''} per week
+            {subject.default_sessions_per_week} session
+            {subject.default_sessions_per_week > 1 ? 's' : ''} per week
             <span className="mx-2 text-muted-foreground">·</span>
             {subject.default_lesson_type}
           </DialogDescription>
@@ -233,66 +319,101 @@ function CombineClassesModal({
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
               This subject needs at least 2 class assignments to create combinations.
-              Currently assigned to {assignments.length} class{assignments.length !== 1 ? 'es' : ''}.
+              Currently assigned to {assignments.length} class
+              {assignments.length !== 1 ? 'es' : ''}.
             </AlertDescription>
           </Alert>
         ) : (
           <div className="space-y-5 pt-1">
 
-            {/* Assigned classes reference */}
+            {/* ── All assignments reference chip row ── */}
             <div className="rounded-lg border bg-muted/30 p-3">
               <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                Assigned Classes in Current Term
+                Assigned Classes This Term ({assignments.length})
               </p>
               <div className="flex flex-wrap gap-2">
                 {assignments.map(a => (
-                  <div key={a.id} className="flex items-center gap-1.5 bg-white border rounded-md px-2.5 py-1 text-sm">
-                    <span className="font-medium">{a.class_code}</span>
-                    <span className="text-muted-foreground">·</span>
-                    <span className="text-muted-foreground">{a.trainer_name}</span>
+                  <div
+                    key={a.id}
+                    className="flex items-center gap-1.5 bg-white border rounded-md px-2.5 py-1 text-sm"
+                  >
+                    <span className="font-medium font-mono text-xs">{a.class_code}</span>
+                    <span className="text-muted-foreground text-xs">· {a.trainer_name}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Existing combinations */}
-            {allCombos.length > 0 && (
+            {/* ── Existing session groups ── */}
+            {Object.keys(sessionGroups).length > 0 && (
               <div className="space-y-2">
-                <p className="text-sm font-medium">Existing Combinations</p>
+                <p className="text-sm font-semibold">Configured Session Groups</p>
                 <div className="rounded-lg border divide-y">
                   {Array.from({ length: maxSessions }, (_, i) => i + 1).map(sessionNum => {
-                    const sessionCombos = combinations?.combinations[sessionNum] || [];
-                    if (sessionCombos.length === 0) return null;
+                    const group = sessionGroups[sessionNum];
+                    if (!group) return null;
+                    const memberIds = Array.from(group.ids);
                     return (
                       <div key={sessionNum} className="p-3">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                          Session {sessionNum}
-                        </p>
-                        <div className="space-y-1.5">
-                          {sessionCombos.map(combo => (
-                            <div key={combo.id} className="flex items-center justify-between gap-2 bg-indigo-50 rounded-md px-3 py-2 text-sm">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <Badge variant="outline" className="text-xs font-mono">
-                                  {combo.primary_class_code}
-                                </Badge>
-                                <span className="text-muted-foreground text-xs">+</span>
-                                <Badge variant="outline" className="text-xs font-mono">
-                                  {combo.combined_class_code}
-                                </Badge>
-                                <span className="text-xs text-muted-foreground">
-                                  {combo.primary_class} & {combo.combined_class}
-                                </span>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRemoveCombination(combo.id)}
-                                className="text-red-500 hover:text-red-600 hover:bg-red-50 h-7 w-7 p-0 shrink-0"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                          ))}
+                        {/* Session header */}
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                            Session {sessionNum}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveGroup(sessionNum)}
+                            disabled={saving}
+                            className="h-6 text-xs text-red-500 hover:text-red-600 hover:bg-red-50 px-2"
+                          >
+                            <Trash2 className="h-3 w-3 mr-1" />
+                            Remove all
+                          </Button>
+                        </div>
+
+                        {/* Member chips — each removable individually */}
+                        <div className="flex flex-wrap gap-2 items-center">
+                          {memberIds.map((assignId, idx) => {
+                            const a = assignmentMap.get(assignId);
+                            if (!a) return null;
+                            return (
+                              <>
+                                {idx > 0 && (
+                                  <span key={`plus-${assignId}`} className="text-muted-foreground text-sm font-medium">+</span>
+                                )}
+                                <div
+                                  key={assignId}
+                                  className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded-full pl-2.5 pr-1 py-0.5 text-xs"
+                                >
+                                  <span className="font-mono font-semibold text-indigo-800">
+                                    {a.class_code}
+                                  </span>
+                                  <span className="text-indigo-500">· {a.trainer_name}</span>
+                                  {memberIds.length > 2 && (
+                                    <button
+                                      onClick={() => handleRemoveFromGroup(sessionNum, assignId)}
+                                      disabled={saving}
+                                      className="ml-1 text-indigo-400 hover:text-red-500 transition-colors rounded-full hover:bg-red-50 p-0.5"
+                                      title={`Remove ${a.class_code} from this group`}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </>
+                            );
+                          })}
+
+                          {/* Inline add more to this session */}
+                          <AddToGroupButton
+                            sessionNum={sessionNum}
+                            assignments={assignments}
+                            existingIds={group.ids}
+                            subjectId={subject.id}
+                            onAdded={fetchData}
+                            disabled={saving}
+                          />
                         </div>
                       </div>
                     );
@@ -301,84 +422,132 @@ function CombineClassesModal({
               </div>
             )}
 
-            {/* Add new combination */}
+            {/* ── Build new group ── */}
             <div className="space-y-3 rounded-lg border p-4">
-              <p className="text-sm font-medium flex items-center gap-2">
+              <p className="text-sm font-semibold flex items-center gap-2">
                 <Plus className="h-4 w-4 text-indigo-600" />
-                Add Combination
+                Create New Session Group
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Pick a session number, then tick the classes that should share that slot. You can combine 2 or more.
               </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {/* Session number */}
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Session #</label>
-                  <Select
-                    value={newCombo.session_number.toString()}
-                    onValueChange={v => setNewCombo(prev => ({ ...prev, session_number: parseInt(v) }))}
-                  >
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Array.from({ length: maxSessions }, (_, i) => i + 1).map(n => (
-                        <SelectItem key={n} value={n.toString()}>Session {n}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Class A */}
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Class A</label>
-                  <Select
-                    value={newCombo.primary_assignment_id}
-                    onValueChange={v => setNewCombo(prev => ({ ...prev, primary_assignment_id: v }))}
-                  >
-                    <SelectTrigger className="h-9">
-                      <SelectValue placeholder="Select class..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {assignments.map(a => (
-                        <SelectItem
-                          key={a.id}
-                          value={a.id.toString()}
-                          disabled={a.id.toString() === newCombo.combined_assignment_id}
-                        >
-                          {a.class_code} — {a.trainer_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Class B */}
-                <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground">Class B</label>
-                  <Select
-                    value={newCombo.combined_assignment_id}
-                    onValueChange={v => setNewCombo(prev => ({ ...prev, combined_assignment_id: v }))}
-                  >
-                    <SelectTrigger className="h-9">
-                      <SelectValue placeholder="Select class..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {assignments.map(a => (
-                        <SelectItem
-                          key={a.id}
-                          value={a.id.toString()}
-                          disabled={a.id.toString() === newCombo.primary_assignment_id}
-                        >
-                          {a.class_code} — {a.trainer_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+              {/* Session selector */}
+              {/* Apply to all sessions toggle */}
+              <div className="flex items-center gap-2 rounded-md bg-muted/40 border px-3 py-2">
+                <input
+                  type="checkbox"
+                  id="apply-all-sessions"
+                  checked={applyToAllSessions}
+                  onChange={e => setApplyToAllSessions(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-indigo-600"
+                />
+                <label htmlFor="apply-all-sessions" className="text-xs font-medium cursor-pointer flex-1">
+                  Apply to all {maxSessions} sessions
+                  <span className="text-muted-foreground font-normal ml-1">
+                    (recommended — combines these classes for every session of this subject)
+                  </span>
+                </label>
               </div>
 
+              {/* Session selector — only shown when not applying to all */}
+              {!applyToAllSessions && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">
+                    Session #
+                  </label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {Array.from({ length: maxSessions }, (_, i) => i + 1).map(n => (
+                      <button
+                        key={n}
+                        onClick={() => {
+                          setSelectedSession(n);
+                          setGroupSelections(new Set());
+                        }}
+                        className={`h-7 w-7 rounded-full text-xs font-semibold transition-colors border
+            ${selectedSession === n
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : configuredSessions.has(n)
+                              ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
+                              : 'bg-white text-muted-foreground border-border hover:border-indigo-300'
+                          }`}
+                        title={configuredSessions.has(n) ? `Session ${n} already has a group` : `Session ${n}`}
+                      >
+                        {n}
+                        {configuredSessions.has(n) && (
+                          <span className="sr-only">(configured)</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {configuredSessions.has(selectedSession) && (
+                    <span className="text-xs text-amber-600 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" />
+                      Session {selectedSession} already has a group. Adding more will extend it.
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Class checkboxes */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {assignments.map(a => {
+                  const checked = groupSelections.has(a.id.toString());
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => toggleGroupMember(a.id.toString())}
+                      className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all
+                        ${checked
+                          ? 'border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300'
+                          : 'border-border bg-white hover:border-indigo-200 hover:bg-muted/20'
+                        }`}
+                    >
+                      {/* Checkbox indicator */}
+                      <div className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors
+                        ${checked ? 'border-indigo-600 bg-indigo-600' : 'border-muted-foreground/40'}`}
+                      >
+                        {checked && (
+                          <svg viewBox="0 0 10 8" className="h-2.5 w-2.5 fill-white">
+                            <path d="M1 4l3 3 5-6" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs font-semibold">{a.class_code}</span>
+                          <span className="text-xs text-muted-foreground truncate">{a.class_name}</span>
+                        </div>
+                        <span className="text-xs text-muted-foreground">{a.trainer_name}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Selection summary */}
+              {groupSelections.size > 0 && (
+                <div className="flex items-center gap-2 rounded-md bg-indigo-50 border border-indigo-100 px-3 py-2 text-xs text-indigo-700">
+                  <Combine className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <strong>{groupSelections.size} classes</strong> selected for Session {selectedSession}:&nbsp;
+                    {Array.from(groupSelections)
+                      .map(id => assignments.find(a => a.id.toString() === id)?.class_code)
+                      .filter(Boolean)
+                      .join(' + ')}
+                  </span>
+                  <button
+                    onClick={() => setGroupSelections(new Set())}
+                    className="ml-auto text-indigo-400 hover:text-indigo-600"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+
               <Button
-                onClick={handleAddCombination}
-                disabled={saving || !newCombo.primary_assignment_id || !newCombo.combined_assignment_id}
+                onClick={handleSaveGroup}
+                disabled={saving || groupSelections.size < 2}
                 size="sm"
                 className="w-full"
               >
@@ -387,13 +556,111 @@ function CombineClassesModal({
                 ) : (
                   <Plus className="h-3.5 w-3.5 mr-2" />
                 )}
-                {saving ? 'Saving...' : 'Add Combination'}
+                {saving
+                  ? 'Saving...'
+                  : groupSelections.size < 2
+                    ? 'Select at least 2 classes'
+                    : applyToAllSessions
+                      ? `Combine ${groupSelections.size} classes for all ${maxSessions} sessions`
+                      : `Combine ${groupSelections.size} classes for Session ${selectedSession}`}
               </Button>
             </div>
           </div>
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── Inline "Add more classes" button inside an existing group ─────────────────
+
+function AddToGroupButton({
+  sessionNum,
+  assignments,
+  existingIds,
+  subjectId,
+  onAdded,
+  disabled,
+}: {
+  sessionNum: number;
+  assignments: Assignment[];
+  existingIds: Set<number>;
+  subjectId: number;
+  onAdded: () => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const available = assignments.filter(a => !existingIds.has(a.id));
+  if (available.length === 0) return null;
+
+  // The primary is the lowest-id in existing group (convention)
+  const primaryId = Math.min(...Array.from(existingIds));
+
+  const handleAdd = async (combinedId: number) => {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/subjects/subject-scheduling/${subjectId}/combinations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_number: sessionNum,
+            primary_assignment_id: primaryId,
+            combined_assignment_id: combinedId,
+          }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to add class');
+      } else {
+        toast.success('Class added to group');
+        setOpen(false);
+        onAdded();
+      }
+    } catch {
+      toast.error('Failed to add class');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled || saving}
+        className="flex items-center gap-1 border border-dashed border-indigo-300 rounded-full px-2.5 py-0.5 text-xs text-indigo-500 hover:border-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 transition-colors"
+      >
+        <Plus className="h-3 w-3" />
+        Add class
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-8 z-50 bg-white rounded-lg border shadow-lg p-1 min-w-[200px]">
+          {available.map(a => (
+            <button
+              key={a.id}
+              onClick={() => handleAdd(a.id)}
+              disabled={saving}
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-md hover:bg-indigo-50 text-left"
+            >
+              <span className="font-mono font-semibold">{a.class_code}</span>
+              <span className="text-muted-foreground truncate">{a.trainer_name}</span>
+            </button>
+          ))}
+          <button
+            onClick={() => setOpen(false)}
+            className="w-full text-center text-xs text-muted-foreground py-1 hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

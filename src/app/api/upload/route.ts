@@ -14,7 +14,6 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
   });
 }
 
-// Check if we're in production/cloud environment
 const isProduction = process.env.NODE_ENV === 'production' && process.env.CLOUDINARY_CLOUD_NAME;
 
 async function uploadToCloudinary(buffer: Buffer, filename: string, folder: string): Promise<string> {
@@ -34,11 +33,9 @@ async function uploadToCloudinary(buffer: Buffer, filename: string, folder: stri
 }
 
 async function uploadToLocal(buffer: Buffer, filename: string, uploadDir: string): Promise<string> {
-  // Ensure upload directory exists
   if (!existsSync(uploadDir)) {
     await mkdir(uploadDir, { recursive: true });
   }
-  
   const filePath = join(uploadDir, filename);
   await writeFile(filePath, buffer);
   return `/uploads/${filename}`;
@@ -48,8 +45,6 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const uploadedFiles = [];
-    
-    // Local upload directory (only used in development)
     const uploadDir = join(process.cwd(), 'public', 'uploads');
 
     // Handle ID Card
@@ -58,17 +53,11 @@ export async function POST(request: Request) {
       const idCardBytes = await idCard.arrayBuffer();
       const idCardBuffer = Buffer.from(idCardBytes);
       const idCardFileName = `id_card_${Date.now()}_${idCard.name}`;
-      
-      let idCardPath: string;
-      
-      if (isProduction) {
-        // Upload to Cloudinary in production
-        idCardPath = await uploadToCloudinary(idCardBuffer, idCardFileName, 'id_cards');
-      } else {
-        // Upload to local filesystem in development
-        idCardPath = await uploadToLocal(idCardBuffer, idCardFileName, uploadDir);
-      }
-      
+
+      const idCardPath = isProduction
+        ? await uploadToCloudinary(idCardBuffer, idCardFileName, 'id_cards')
+        : await uploadToLocal(idCardBuffer, idCardFileName, uploadDir);
+
       uploadedFiles.push({ field: 'id_card_path', path: idCardPath });
     }
 
@@ -78,30 +67,25 @@ export async function POST(request: Request) {
       const passportBytes = await passportPhoto.arrayBuffer();
       const passportBuffer = Buffer.from(passportBytes);
       const passportFileName = `passport_${Date.now()}_${passportPhoto.name}`;
-      
-      let passportPath: string;
-      
-      if (isProduction) {
-        // Upload to Cloudinary in production
-        passportPath = await uploadToCloudinary(passportBuffer, passportFileName, 'passport_photos');
-      } else {
-        // Upload to local filesystem in development
-        passportPath = await uploadToLocal(passportBuffer, passportFileName, uploadDir);
-      }
-      
+
+      const passportPath = isProduction
+        ? await uploadToCloudinary(passportBuffer, passportFileName, 'passport_photos')
+        : await uploadToLocal(passportBuffer, passportFileName, uploadDir);
+
       uploadedFiles.push({ field: 'passport_photo_path', path: passportPath });
     }
+
     return NextResponse.json({
       id_card_path: uploadedFiles.find(f => f.field === 'id_card_path')?.path || '',
       passport_photo_path: uploadedFiles.find(f => f.field === 'passport_photo_path')?.path || '',
-      upload_method: isProduction ? 'cloudinary' : 'local'
+      upload_method: isProduction ? 'cloudinary' : 'local',
     });
 
   } catch (error) {
-  console.error('Upload error:', error);
-  return NextResponse.json(
-    { error: 'Error uploading file', details: (error as Error).message },
-    { status: 500 }
-  );
-}
+    console.error('Upload error:', error);
+    return NextResponse.json(
+      { error: 'Error uploading file', details: (error as Error).message },
+      { status: 500 }
+    );
+  }
 }

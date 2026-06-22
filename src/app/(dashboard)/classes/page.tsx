@@ -86,11 +86,15 @@ export default function ClassesPage() {
     const [refreshClassSelection, setRefreshClassSelection] = useState(0);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [deleteError, setDeleteError] = useState('');
 
     const isAdmin = userRole === 'admin';
     const isTrainer = userRole === 'employee';
     const isTimetableAdmin = user?.has_timetable_admin === true;
     const hasManageAccess = isAdmin || isTimetableAdmin;
+
+    const [deletingClass, setDeletingClass] = useState<Class | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     // Filtered classes based on search term
     const filteredClasses = useMemo(() => {
@@ -260,6 +264,30 @@ export default function ClassesPage() {
             setDeactivatingClass(null);
         }
     };
+
+    const handleDelete = (classItem: Class) => {
+        setDeletingClass(classItem);
+    };
+
+  const confirmDelete = async () => {
+  if (!deletingClass) return;
+  setIsDeleting(true);
+  setDeleteError('');
+  try {
+    const response = await fetch(`/api/classes?id=${deletingClass.id}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to delete class');
+    await fetchClasses();
+    setDeletingClass(null); // only close on success
+  } catch (error) {
+    setDeleteError(error instanceof Error ? error.message : 'Failed to delete class');
+    // dialog stays open so user can read the message
+  } finally {
+    setIsDeleting(false);
+  }
+};
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
@@ -507,10 +535,11 @@ export default function ClassesPage() {
                                             classes={paginatedClasses}
                                             termId={selectedTerm}
                                             onEdit={handleEdit}
+                                            isAdmin={isAdmin}  
                                             onDeactivate={handleDeactivate}
+                                            onDelete={handleDelete}
                                             startIndex={(currentPage - 1) * pageSize}
                                         />
-
                                         {/* Pagination controls */}
                                         {totalPages > 1 && (
                                             <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
@@ -693,6 +722,44 @@ export default function ClassesPage() {
                             </AlertDialogFooter>
                         </AlertDialogContent>
                     </AlertDialog>
+
+              <AlertDialog
+  open={!!deletingClass}
+  onOpenChange={(open) => {
+    if (!open) { setDeletingClass(null); setDeleteError(''); }
+  }}
+>
+  <AlertDialogContent>
+    <AlertDialogHeader>
+      <AlertDialogTitle>Permanently Delete Class</AlertDialogTitle>
+      <AlertDialogDescription>
+        Are you sure you want to permanently delete <strong>"{deletingClass?.name}"</strong>?
+        This action cannot be undone.
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+
+    {deleteError && (
+      <Alert variant="destructive" className="mt-2">
+        <AlertDescription className="whitespace-pre-line text-xs">
+          {deleteError}
+        </AlertDescription>
+      </Alert>
+    )}
+
+    <AlertDialogFooter>
+      <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+      {!deleteError && (
+        <AlertDialogAction
+          onClick={confirmDelete}
+          className="bg-red-600 hover:bg-red-700"
+          disabled={isDeleting}
+        >
+          {isDeleting ? 'Deleting...' : 'Delete Permanently'}
+        </AlertDialogAction>
+      )}
+    </AlertDialogFooter>
+  </AlertDialogContent>
+</AlertDialog>
                 </>
             )}
         </div>

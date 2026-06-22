@@ -33,7 +33,6 @@ function hasTimetableAdminAccess(user: any): boolean {
 }
 
 // GET /api/subject-scheduling/[subjectId]/combinations
-// Returns all existing combinations for a subject, grouped by session number
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ subjectId: string }> }
@@ -80,7 +79,6 @@ export async function GET(
       orderBy: { session_number: 'asc' }
     });
 
-    // Group by session number
     const grouped: Record<number, any[]> = {};
     for (const combo of combinations) {
       const session = combo.session_number;
@@ -114,7 +112,6 @@ export async function GET(
 }
 
 // POST /api/subject-scheduling/[subjectId]/combinations
-// Creates a combination between two assignments for a specific session number
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ subjectId: string }> }
@@ -150,23 +147,26 @@ export async function POST(
       }, { status: 400 });
     }
 
-    // Validate session number against the subject's sessions_per_week
     const subject = await db.subjects.findUnique({
       where: { id: numericSubjectId },
-      select: { sessions_per_week: true, name: true }
+      select: { sessions_per_week: true, lesson_type: true,   name: true }
     });
 
     if (!subject) {
       return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
     }
 
-    if (session_number < 1 || session_number > subject.sessions_per_week) {
-      return NextResponse.json({
-        error: `Session number must be between 1 and ${subject.sessions_per_week} for this subject`
-      }, { status: 400 });
-    }
+   const groupSize = subject.lesson_type === 'triple' ? 3 : subject.lesson_type === 'double' ? 2 : 1;
+const numSlots = groupSize > 1
+  ? Math.floor(subject.sessions_per_week / groupSize) + (subject.sessions_per_week % groupSize > 0 ? 1 : 0)
+  : subject.sessions_per_week;
 
-    // Validate both assignments belong to this subject and are active
+if (session_number < 1 || session_number > numSlots) {
+  return NextResponse.json({
+    error: `Session number must be between 1 and ${numSlots} for this subject`
+  }, { status: 400 });
+}
+
     const [primaryAssignment, combinedAssignment] = await Promise.all([
       db.trainersubjectassignments.findFirst({
         where: { id: parseInt(primary_assignment_id), subject_id: numericSubjectId, is_active: true }
@@ -183,7 +183,7 @@ export async function POST(
       return NextResponse.json({ error: 'Combined assignment not found for this subject' }, { status: 404 });
     }
 
-    // Check for duplicate combination
+    // Check for duplicate — silently skip instead of erroring
     const existing = await db.subjectcombinations.findFirst({
       where: {
         subject_id: numericSubjectId,
@@ -203,8 +203,11 @@ export async function POST(
 
     if (existing) {
       return NextResponse.json({
-        error: 'These two assignments are already combined for this session'
-      }, { status: 400 });
+        success: true,
+        combination_id: existing.id,
+        message: `Session ${session_number} combination already exists — skipped`,
+        skipped: true
+      });
     }
 
     const combination = await db.subjectcombinations.create({
@@ -225,15 +228,19 @@ export async function POST(
 
   } catch (error: any) {
     console.error('Error creating combination:', error);
+    // Unique constraint — skip silently
     if (error.code === 'P2002') {
-      return NextResponse.json({ error: 'This combination already exists' }, { status: 400 });
+      return NextResponse.json({
+        success: true,
+        message: 'Combination already exists — skipped',
+        skipped: true
+      });
     }
     return NextResponse.json({ error: 'Failed to create combination' }, { status: 500 });
   }
 }
 
 // DELETE /api/subject-scheduling/[subjectId]/combinations
-// Removes a specific combination by ID
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ subjectId: string }> }

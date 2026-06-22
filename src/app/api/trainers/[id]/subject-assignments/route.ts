@@ -21,10 +21,10 @@ async function verifyAuth() {
 
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { 
-        id: true, 
-        name: true, 
-        role: true, 
+      select: {
+        id: true,
+        name: true,
+        role: true,
         is_active: true,
         is_blocked: true,
         has_timetable_admin: true
@@ -53,8 +53,8 @@ export async function POST(
   try {
     const authResult = await verifyAuth();
     if (authResult.error) {
-return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });    
-}
+      return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });
+    }
 
     if (!authResult.user) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
@@ -68,8 +68,7 @@ return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status:
       return NextResponse.json({ error: 'Invalid trainer ID' }, { status: 400 });
     }
 
-    // Only allow trainers to update their own assignments (or admin)
-   const isSelf = user.id === trainerUserId;
+    const isSelf = user.id === trainerUserId;
     const isPrivileged = user.role === 'admin' || user.has_timetable_admin === true;
 
     if (!isPrivileged && !isSelf) {
@@ -79,8 +78,7 @@ return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status:
       );
     }
 
-    // ✅ CHECK GLOBAL BLOCK (ADD THIS)
-  const isGloballyBlocked = await isSubjectSelectionBlocked();
+    const isGloballyBlocked = await isSubjectSelectionBlocked();
     if (isGloballyBlocked && !isPrivileged) {
       return NextResponse.json(
         { error: 'Subject selection is currently disabled by administrator.' },
@@ -88,7 +86,6 @@ return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status:
       );
     }
 
-    // ✅ CHECK INDIVIDUAL BLOCK (ADD THIS)
     if (user.is_blocked && !isPrivileged) {
       return NextResponse.json(
         { error: 'Your account is blocked from selecting subjects.' },
@@ -125,63 +122,95 @@ return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status:
       return NextResponse.json({ error: 'Subject mismatch for class subject' }, { status: 400 });
     }
 
-    // Check if trainer already has this subject assigned in this term (Option A constraint)
-   // Replace the entire existingAssignment block with this:
+    // ── Check for existing assignment scoped to this specific class-subject ──
 
-const existingAssignment = await db.trainersubjectassignments.findFirst({
-  where: {
-    trainer_id: trainerUserId,
-    subject_id: numericSubjectId,
-    term_id: numericTermId,
-    class_subject_id: numericClassSubjectId  // now scoped to this specific class-subject
-  }
-});
+    const existingAssignment = await db.trainersubjectassignments.findFirst({
+      where: {
+        trainer_id: trainerUserId,
+        subject_id: numericSubjectId,
+        term_id: numericTermId,
+        class_subject_id: numericClassSubjectId
+      }
+    });
 
-if (existingAssignment) {
-  // Just update is_active — no more cross-class blocking
-  await db.trainersubjectassignments.update({
-    where: { id: existingAssignment.id },
-    data: { is_active }
-  });
+    if (existingAssignment) {
+      // Update the trainer assignment
+      await db.trainersubjectassignments.update({
+        where: { id: existingAssignment.id },
+        data: { is_active }
+      });
 
-  return NextResponse.json({
-    success: true,
-    action: 'updated',
-    message: is_active ? 'Subject activated' : 'Subject deactivated'
-  });
-}
+      if (is_active) {
+        // Activating — ensure classsubject is also active
+        await db.classsubjects.update({
+          where: { id: numericClassSubjectId },
+          data: { is_active: true }
+        });
+      } else {
+        // Deactivating — only flip classsubject to false if no other
+        // active trainer assignments remain for this class-subject
+        const remainingActive = await db.trainersubjectassignments.count({
+          where: {
+            class_subject_id: numericClassSubjectId,
+            is_active: true,
+            id: { not: existingAssignment.id }
+          }
+        });
 
-// No existing assignment - create new one if activating
-if (is_active) {
-  await db.trainersubjectassignments.create({
-    data: {
-      trainer_id: trainerUserId,
-      subject_id: numericSubjectId,
-      term_id: numericTermId,
-      class_subject_id: numericClassSubjectId,
-      is_active: true
+        if (remainingActive === 0) {
+          await db.classsubjects.update({
+            where: { id: numericClassSubjectId },
+            data: { is_active: false }
+          });
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        action: 'updated',
+        message: is_active ? 'Subject activated' : 'Subject deactivated'
+      });
     }
-  });
 
-  return NextResponse.json({
-    success: true,
-    action: 'created',
-    message: 'Subject assignment created and activated'
-  });
-}
+    // ── No existing assignment ────────────────────────────────────────────────
 
-// Trying to deactivate something that doesn't exist - no-op
-return NextResponse.json({
-  success: true,
-  action: 'none',
-  message: 'No assignment to deactivate'
-});
+    if (is_active) {
+      // Create the trainer assignment and activate the classsubject in a transaction
+      await db.$transaction([
+        db.trainersubjectassignments.create({
+          data: {
+            trainer_id: trainerUserId,
+            subject_id: numericSubjectId,
+            term_id: numericTermId,
+            class_subject_id: numericClassSubjectId,
+            is_active: true
+          }
+        }),
+        db.classsubjects.update({
+          where: { id: numericClassSubjectId },
+          data: { is_active: true }
+        })
+      ]);
+
+      return NextResponse.json({
+        success: true,
+        action: 'created',
+        message: 'Subject assignment created and activated'
+      });
+    }
+
+    // Trying to deactivate something that doesn't exist — no-op
+    return NextResponse.json({
+      success: true,
+      action: 'none',
+      message: 'No assignment to deactivate'
+    });
 
   } catch (error) {
     console.error('Error updating subject assignment:', error);
-    return NextResponse.json({ 
-      error: 'Failed to update subject assignment', 
-      details: error instanceof Error ? error.message : String(error) 
+    return NextResponse.json({
+      error: 'Failed to update subject assignment',
+      details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
   }
 }

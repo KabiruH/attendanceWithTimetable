@@ -8,6 +8,7 @@ import { ProfileEditForm } from '@/components/profile/ProfileEditForm';
 import { AttendanceStats } from '@/components/profile/AttendanceStats';
 import { BiometricRegistration } from '@/components/profile/BiometricRegistration';
 import { UserProfile, PasswordForm, AttendanceStats as AttendanceStatsType } from '@/lib/types/profile';
+import { ProfileImageUpload } from '@/components/profile/ProfileImageUpload';
 import { useRouter } from 'next/navigation';
 
 export default function ProfilePage() {
@@ -24,6 +25,7 @@ export default function ProfilePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
+  const [showImageForm, setShowImageForm] = useState(false);
 
   useEffect(() => {
     const checkAuthAndFetchData = async () => {
@@ -128,6 +130,11 @@ export default function ProfilePage() {
     }
   };
 
+const handleImagesUploaded = (data: { passport_photo?: string; id_card_path?: string }) => {
+  setProfile((prev) => (prev ? { ...prev, ...data } : prev));
+  setShowImageForm(false);
+};
+
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -198,6 +205,7 @@ export default function ProfilePage() {
             {...profile}
             onPasswordChange={() => setShowPasswordForm(!showPasswordForm)}
             onEdit={() => setShowEditForm(!showEditForm)}
+            onEditImages={() => setShowImageForm(!showImageForm)}
           />
 
           {showEditForm && (
@@ -218,6 +226,15 @@ export default function ProfilePage() {
               isSubmitting={isSubmitting}
             />
           )}
+
+        {showImageForm && (
+  <ProfileImageUpload
+    passportPhoto={profile.passport_photo}
+    idCardPath={profile.id_card_path}
+    onUploaded={handleImagesUploaded}
+    onCancel={() => setShowImageForm(false)}
+  />
+)}
 
           {/* Biometric Registration Section */}
           <BiometricRegistration userId={profile.id} />

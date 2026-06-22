@@ -44,8 +44,8 @@ export async function GET(
     // Format times for better readability
     const formattedPeriod = {
       ...lessonPeriod,
-      start_time_formatted: lessonPeriod.start_time.toTimeString().slice(0, 5),
-      end_time_formatted: lessonPeriod.end_time.toTimeString().slice(0, 5)
+ start_time_formatted: lessonPeriod.start_time.toISOString().slice(11, 16),
+end_time_formatted: lessonPeriod.end_time.toISOString().slice(11, 16)
     };
 
     return NextResponse.json({
@@ -107,13 +107,12 @@ export async function PUT(
 
     // Handle time updates
     if (start_time !== undefined || end_time !== undefined) {
-      const startTime = start_time 
-        ? new Date(`1970-01-01T${start_time}`)
-        : existingPeriod.start_time;
-      
-      const endTime = end_time 
-        ? new Date(`1970-01-01T${end_time}`)
-        : existingPeriod.end_time;
+    const startTime = start_time 
+  ? new Date(`1970-01-01T${start_time}Z`)
+  : existingPeriod.start_time;
+const endTime = end_time 
+  ? new Date(`1970-01-01T${end_time}Z`)
+  : existingPeriod.end_time;
 
       if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
         return NextResponse.json(
@@ -180,8 +179,8 @@ export async function PUT(
     // Format times for response
     const formattedPeriod = {
       ...updatedPeriod,
-      start_time_formatted: updatedPeriod.start_time.toTimeString().slice(0, 5),
-      end_time_formatted: updatedPeriod.end_time.toTimeString().slice(0, 5)
+start_time_formatted: updatedPeriod.start_time.toISOString().slice(11, 16),
+end_time_formatted: updatedPeriod.end_time.toISOString().slice(11, 16)
     };
 
     return NextResponse.json({

@@ -36,9 +36,6 @@ function hasTimetableAdminAccess(user: any): boolean {
 }
 
 // ─── GET /api/timetable/drafts?term_id=X&include_slots=true ──────────────────
-// Returns all pending drafts for a term.
-// When include_slots=true also returns the full slots_json and lookup metadata
-// (subjects, classes, rooms, trainers, periods) so the UI can render the grid.
 export async function GET(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -67,7 +64,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ has_drafts: false, message: 'No pending drafts for this term.' });
     }
 
-    // Base response — always included
     const draftSummaries = drafts.map(d => ({
       draft_id: d.id,
       draft_number: d.draft_number,
@@ -77,6 +73,7 @@ export async function GET(request: NextRequest) {
       ...(includeSlots ? { slots: d.slots_json } : {}),
     }));
 
+
     const response: any = {
       has_drafts: true,
       term_id,
@@ -85,11 +82,12 @@ export async function GET(request: NextRequest) {
       drafts: draftSummaries,
     };
 
-    // When include_slots requested, also return lookup data so the UI can
-    // render subject names, room names etc. without extra round-trips.
+    // When include_slots requested, return lookup data so the UI can render
+    // subject names, room names, session group info etc. without extra round-trips.
     if (includeSlots) {
-      // Collect all unique IDs across all drafts
-      const allSlots: any[] = drafts.flatMap(d => Array.isArray(d.slots_json) ? d.slots_json as any[] : []);
+      const allSlots: any[] = drafts.flatMap(d =>
+        Array.isArray(d.slots_json) ? d.slots_json as any[] : []
+      );
 
       const subjectIds = [...new Set(allSlots.map(s => s.subject_id))];
       const classIds   = [...new Set(allSlots.map(s => s.class_id))];
@@ -97,19 +95,90 @@ export async function GET(request: NextRequest) {
       const trainerIds = [...new Set(allSlots.map(s => s.employee_id))];
       const periodIds  = [...new Set(allSlots.map(s => s.lesson_period_id))];
 
+      // ── Fetch subjects with lesson_type so UI knows double/triple ───────────
+      // lesson_type comes from classsubjects (our source of truth) but for
+      // display purposes we fetch it from subjects as the default. The actual
+      // block type per slot can be inferred from session_group_id group size.
       const [subjects, classes, rooms, trainers, periods] = await Promise.all([
-        db.subjects.findMany({ where: { id: { in: subjectIds } }, select: { id: true, name: true, code: true, department: true } }),
-        db.classes.findMany({ where: { id: { in: classIds } }, select: { id: true, name: true, code: true } }),
-        db.rooms.findMany({ where: { id: { in: roomIds } }, select: { id: true, name: true } }),
-        db.users.findMany({ where: { id: { in: trainerIds } }, select: { id: true, name: true } }),
-        db.lessonperiods.findMany({ where: { id: { in: periodIds } }, select: { id: true, name: true, start_time: true, end_time: true } }),
+        db.subjects.findMany({
+          where: { id: { in: subjectIds } },
+          select: {
+            id: true,
+            name: true,
+            code: true,
+            department: true,
+            lesson_type: true,       // ← needed for double/triple display
+            sessions_per_week: true, // ← needed for coverage calculation
+          }
+        }),
+        db.classes.findMany({
+          where: { id: { in: classIds } },
+          select: { id: true, name: true, code: true }
+        }),
+        db.rooms.findMany({
+          where: { id: { in: roomIds } },
+          select: { id: true, name: true }
+        }),
+        db.users.findMany({
+          where: { id: { in: trainerIds } },
+          select: { id: true, name: true }
+        }),
+        db.lessonperiods.findMany({
+          where: { id: { in: periodIds } },
+          select: {
+            id: true,
+            name: true,
+            start_time: true,
+            end_time: true,
+            duration: true, // ← needed for span height calculation
+          }
+        }),
       ]);
+
+      // ── Build session group metadata ────────────────────────────────────────
+      // For each session_group_id, record how many slots it spans and which
+      // period IDs are involved. This lets the UI know a group is double (2)
+      // or triple (3) without having to count slots client-side.
+      const sessionGroupMeta = new Map<string, {
+        span: number;
+        period_ids: number[];
+        day: number;
+        class_id: number;
+        subject_id: number;
+      }>();
+
+      allSlots.forEach(slot => {
+        if (!slot.session_group_id) return;
+        // Key by group+day+class so multi-class combos are tracked separately
+        const key = `${slot.session_group_id}-${slot.day_of_week}-${slot.class_id}`;
+        const existing = sessionGroupMeta.get(key);
+        if (existing) {
+          if (!existing.period_ids.includes(slot.lesson_period_id)) {
+            existing.period_ids.push(slot.lesson_period_id);
+            existing.span = existing.period_ids.length;
+          }
+        } else {
+          sessionGroupMeta.set(key, {
+            span: 1,
+            period_ids: [slot.lesson_period_id],
+            day: slot.day_of_week,
+            class_id: slot.class_id,
+            subject_id: slot.subject_id,
+          });
+        }
+      });
 
       response.subjects = subjects;
       response.classes  = classes;
       response.rooms    = rooms;
       response.trainers = trainers;
       response.periods  = periods;
+      // Send as array for easy lookup on the frontend
+      response.session_groups = Array.from(sessionGroupMeta.entries()).map(([key, meta]) => ({
+        key,
+        group_id: key.split('-')[0],
+        ...meta,
+      }));
     }
 
     return NextResponse.json(response);
@@ -119,8 +188,8 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// ─── POST /api/timetable/drafts/select ───────────────────────────────────────
-// Confirms one draft: writes its slots to timetableslots, deletes all 3 drafts
+// ─── POST /api/timetable/drafts ───────────────────────────────────────────────
+// Confirms one draft: writes its slots to timetableslots, deletes all drafts
 export async function POST(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -138,46 +207,86 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'draft_id (number) is required' }, { status: 400 });
     }
 
-    // Fetch the chosen draft
     const draft = await db.timetabledrafts.findUnique({
       where: { id: draft_id },
       include: { terms: true }
     });
 
     if (!draft) {
-      return NextResponse.json({ error: 'Draft not found. It may have already been selected or discarded.' }, { status: 404 });
+      return NextResponse.json({
+        error: 'Draft not found. It may have already been selected or discarded.'
+      }, { status: 404 });
     }
 
     const term_id = draft.term_id;
-    const slots = draft.slots_json as any[];
+    const rawSlots = draft.slots_json as any[];
 
-    if (!Array.isArray(slots) || slots.length === 0) {
+    if (!Array.isArray(rawSlots) || rawSlots.length === 0) {
       return NextResponse.json({ error: 'Draft contains no slots.' }, { status: 400 });
     }
 
     // Safety check: don't overwrite a confirmed timetable
-    const existingSlots = await db.timetableslots.count({ where: { term_id } });
-    if (existingSlots > 0) {
-      return NextResponse.json(
-        { error: 'A confirmed timetable already exists for this term. Delete it first before selecting a draft.' },
-        { status: 409 }
-      );
-    }
+  const draftSubjectIds = [...new Set(rawSlots.map((s: any) => s.subject_id as number))];
+const existingSlots = await db.timetableslots.count({
+  where: {
+    term_id,
+    subject_id: { in: draftSubjectIds }
+  }
+});
+if (existingSlots > 0) {
+  return NextResponse.json(
+    {
+      error: 'Slots for these subjects already exist in the confirmed timetable. ' +
+             'Use regenerate to replace them.'
+    },
+    { status: 409 }
+  );
+}
 
-    // Write the chosen draft's slots into timetableslots + delete all drafts for this term
-    await db.$transaction([
-      db.timetableslots.createMany({ data: slots }),
-      db.timetabledrafts.deleteMany({ where: { term_id } })
-    ]);
+    // ── Normalise slots before writing ────────────────────────────────────────
+    // The slots_json was produced by the generator which uses classsubjects as
+    // the source of truth for sessions_per_week and lesson_type. Ensure that
+    // combined_class_ids (a JSON array field) is correctly serialized, and that
+    // any undefined optional fields are stripped so createMany doesn't fail.
+    const slots = rawSlots.map(slot => ({
+      id:                slot.id,
+      term_id:           slot.term_id,
+      class_id:          slot.class_id,
+      subject_id:        slot.subject_id,
+      employee_id:       slot.employee_id,
+      room_id:           slot.room_id,
+      lesson_period_id:  slot.lesson_period_id,
+      day_of_week:       slot.day_of_week,
+      status:            slot.status ?? 'scheduled',
+      is_online_session: slot.is_online_session ?? false,
+      is_room_fallback:  slot.is_room_fallback ?? false, 
+      created_at:        slot.created_at ? new Date(slot.created_at) : new Date(),
+      updated_at:        new Date(),
+      // Optional fields — only include if present
+      ...(slot.session_group_id   ? { session_group_id: slot.session_group_id }     : {}),
+      ...(slot.combined_class_ids ? { combined_class_ids: slot.combined_class_ids } : {}),
+    }));
 
-    console.log(`✅ Draft ${draft_id} (option ${draft.draft_number}) confirmed for term ${term_id}. ${slots.length} slots written.`);
+    const draftDepartments = [...new Set(
+  rawSlots
+    .map((s: any) => s.subject_department)
+    .filter(Boolean)
+)] as string[];
 
-    return NextResponse.json({
-      success: true,
-      message: `Timetable confirmed for ${draft.terms.name}. ${slots.length} slots created.`,
-      term_id,
-      slots_created: slots.length
-    });
+await db.$transaction([
+  db.timetableslots.createMany({ data: slots }),
+  db.timetabledrafts.deleteMany({ where: { term_id } })
+]);
+
+// ← replaces the existing return at the bottom
+return NextResponse.json({
+  success: true,
+  message: draftDepartments.length === 1
+    ? `${draftDepartments[0]} timetable confirmed for ${draft.terms.name}. ${slots.length} slots created.`
+    : `Timetable confirmed for ${draft.terms.name}. ${slots.length} slots created.`,
+  term_id,
+  slots_created: slots.length
+});
   } catch (error) {
     console.error('Error selecting draft:', error);
     return NextResponse.json(
@@ -188,7 +297,6 @@ export async function POST(request: NextRequest) {
 }
 
 // ─── DELETE /api/timetable/drafts?term_id=X ──────────────────────────────────
-// Discards all drafts for a term so the user can regenerate from scratch
 export async function DELETE(request: NextRequest) {
   try {
     const authResult = await verifyAuth();

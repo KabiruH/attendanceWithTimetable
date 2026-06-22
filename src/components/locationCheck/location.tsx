@@ -15,11 +15,10 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
   const [checkFailed, setCheckFailed] = useState(false);
   const [isDevEnvironment] = useState(process.env.NODE_ENV === 'development');
 
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+useEffect(() => {
     let initialCheckDone = false;
 
-    const checkLocationPeriodically = async () => {
+    const checkLocationOnce = async () => {
       try {
         if (!navigator.geolocation) {
           console.warn('Geolocation is not supported by this browser');
@@ -31,7 +30,7 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
 
         if (navigator.permissions) {
           const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
-          
+
           if (permissionStatus.state === 'prompt' && !initialCheckDone) {
             setShowLocationPrompt(true);
             return;
@@ -57,7 +56,7 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
       } catch (error) {
         console.error('Location check failed:', error);
         setCheckFailed(true);
-        
+
         if (!isDevEnvironment) {
           toast({
             title: "Location Check Failed",
@@ -69,14 +68,11 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
     };
 
     const initialCheckTimeout = setTimeout(() => {
-      checkLocationPeriodically();
+      checkLocationOnce();
     }, 1000);
-
-    intervalId = setInterval(checkLocationPeriodically, 5 * 60 * 1000);
 
     return () => {
       clearTimeout(initialCheckTimeout);
-      clearInterval(intervalId);
     };
   }, [router, toast, isDevEnvironment]);
 
@@ -94,7 +90,6 @@ export default function LocationCheck({ children }: { children: React.ReactNode 
       await checkLocation();
       setCheckFailed(false);
     } catch (error) {
-      console.error('Location retry failed:', error);
       toast({
         title: "Location Check Failed",
         description: "Please check your browser settings and try again.",

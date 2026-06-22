@@ -1,7 +1,7 @@
 // components/classes/ClassesTable.tsx
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 
@@ -22,9 +22,11 @@ interface Class {
 
 interface ClassesTableProps {
   classes: Class[];
-  termId: number | null; // ✅ ADDED
+  termId: number | null;
+  isAdmin: boolean; // ✅ ADDED
   onEdit: (classItem: Class) => void;
   onDeactivate: (classItem: Class) => void;
+  onDelete: (classItem: Class) => void; // ✅ ADDED
   startIndex?: number;
 }
 
@@ -32,12 +34,11 @@ interface ClassSubjectCount {
   [classId: number]: number;
 }
 
-export default function ClassesTable({ classes, termId, onEdit, onDeactivate, startIndex = 0 }: ClassesTableProps) {
+export default function ClassesTable({ classes, termId, isAdmin, onEdit, onDeactivate, onDelete, startIndex = 0 }: ClassesTableProps) {
   const router = useRouter();
   const [subjectCounts, setSubjectCounts] = useState<ClassSubjectCount>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
 
-  // ✅ Fetch subject counts for each class based on selected term
   useEffect(() => {
     if (termId && classes.length > 0) {
       fetchSubjectCounts();
@@ -58,7 +59,6 @@ export default function ClassesTable({ classes, termId, onEdit, onDeactivate, st
       if (!response.ok) return;
 
       const data = await response.json();
-      // Expects: { counts: { [classId]: number } }
       setSubjectCounts(data.counts || {});
     } catch (error) {
       console.error('Error fetching subject counts:', error);
@@ -88,20 +88,19 @@ export default function ClassesTable({ classes, termId, onEdit, onDeactivate, st
           </tr>
         </thead>
         <tbody>
-       {classes.map((classItem, index) => (
-  <tr key={classItem.id} className="border-b hover:bg-muted/50 transition-colors">
-    <td className="p-4 align-middle text-sm text-muted-foreground w-12">
-      {startIndex + index + 1}
-                
+          {classes.map((classItem, index) => (
+            <tr key={classItem.id} className="border-b hover:bg-muted/50 transition-colors">
+              <td className="p-4 align-middle text-sm text-muted-foreground w-12">
+                {startIndex + index + 1}
               </td>
               <td className="p-4 align-middle max-w-[220px]">
-  <div>
-    <div className="font-medium text-sm leading-snug">{classItem.name}</div>
-    {classItem.description && (
-      <div className="text-sm text-muted-foreground">{classItem.description}</div>
-    )}
-  </div>
-</td>
+                <div>
+                  <div className="font-medium text-sm leading-snug">{classItem.name}</div>
+                  {classItem.description && (
+                    <div className="text-sm text-muted-foreground">{classItem.description}</div>
+                  )}
+                </div>
+              </td>
               <td className="p-4 align-middle">
                 <code className="bg-muted px-2 py-1 rounded text-sm">{classItem.code}</code>
               </td>
@@ -109,9 +108,7 @@ export default function ClassesTable({ classes, termId, onEdit, onDeactivate, st
               <td className="p-4 align-middle">
                 {termId ? (
                   loadingCounts ? (
-                    <Badge variant="outline" className="text-sm">
-                      Loading...
-                    </Badge>
+                    <Badge variant="outline" className="text-sm">Loading...</Badge>
                   ) : (
                     <Badge variant="secondary" className="text-sm">
                       {subjectCounts[classItem.id] || 0} Subject{subjectCounts[classItem.id] !== 1 ? 's' : ''}
@@ -124,10 +121,9 @@ export default function ClassesTable({ classes, termId, onEdit, onDeactivate, st
                 )}
               </td>
               <td className="p-4 align-middle">
-                <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${classItem.is_active
-                    ? 'bg-green-50 text-green-700'
-                    : 'bg-red-50 text-red-700'
-                  }`}>
+                <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                  classItem.is_active ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                }`}>
                   {classItem.is_active ? 'Active' : 'Inactive'}
                 </span>
               </td>
@@ -158,6 +154,19 @@ export default function ClassesTable({ classes, termId, onEdit, onDeactivate, st
                   >
                     {classItem.is_active ? 'Deactivate' : 'Activate'}
                   </Button>
+
+                  {/* ✅ Admin-only Delete button */}
+                  {isAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onDelete(classItem)}
+                      className="text-red-700 hover:text-red-800 hover:bg-red-50 border-red-200"
+                      title="Permanently delete this class"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </td>
             </tr>

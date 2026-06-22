@@ -19,7 +19,8 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Zap, Upload, Loader2, AlertTriangle, CheckCircle2,
-  Info, BookOpen, ChevronDown, ChevronUp, Combine
+  Info, BookOpen, ChevronDown, ChevronUp, Combine,
+  Building2, GraduationCap
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -130,6 +131,8 @@ interface Draft {
   skipped_assignments?: any[];
 }
 
+type GenerationScope = 'institution' | 'department';
+
 export default function GenerateTimetableDialog({
   open,
   onOpenChange,
@@ -139,7 +142,13 @@ export default function GenerateTimetableDialog({
   const [selectedTerm, setSelectedTerm] = useState<string>('');
   const [method, setMethod] = useState<'auto' | 'manual'>('auto');
   const [error, setError] = useState('');
-  const [minClassesPerDay, setMinClassesPerDay] = useState(3);
+  const [minClassesPerDay, setMinClassesPerDay] = useState(1);
+
+  // ── Generation scope ───────────────────────────────────────────────────────
+  const [generationScope, setGenerationScope] = useState<GenerationScope>('institution');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('');
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [isFetchingDepartments, setIsFetchingDepartments] = useState(false);
 
   const [isCheckingPreFlight, setIsCheckingPreFlight] = useState(false);
   const [preFlightResults, setPreFlightResults] = useState<PreFlightCheckResult | null>(null);
@@ -160,6 +169,51 @@ export default function GenerateTimetableDialog({
   useEffect(() => {
     if (open) checkGenerationDeadline();
   }, [open]);
+
+  // Fetch departments when term is selected
+  useEffect(() => {
+    if (!selectedTerm) {
+      setDepartments([]);
+      return;
+    }
+    fetchDepartments(selectedTerm);
+  }, [selectedTerm]);
+
+  // Reset scope state when term changes
+  const handleTermChange = (termId: string) => {
+    setSelectedTerm(termId);
+    setPreFlightResults(null);
+    setShowPreFlight(false);
+    setError('');
+    setShowSubjectsWithoutTrainer(false);
+    setShowCombinations(false);
+    setSelectedDepartment('');
+    setGenerationScope('institution');
+  };
+
+  const fetchDepartments = async (termId: string) => {
+    setIsFetchingDepartments(true);
+    try {
+      // Fetch distinct departments from active assignments for this term
+      const res = await fetch(`/api/timetable/generate/departments?term_id=${termId}`);
+      if (!res.ok) throw new Error('Failed to fetch departments');
+      const data = await res.json();
+      setDepartments(data.departments ?? []);
+    } catch {
+      // Silently fail — departments won't be shown but generation still works
+      setDepartments([]);
+    } finally {
+      setIsFetchingDepartments(false);
+    }
+  };
+
+  const handleScopeChange = (scope: GenerationScope) => {
+    setGenerationScope(scope);
+    setSelectedDepartment('');
+    setPreFlightResults(null);
+    setShowPreFlight(false);
+    setError('');
+  };
 
   const checkGenerationDeadline = async () => {
     try {
@@ -185,22 +239,27 @@ export default function GenerateTimetableDialog({
     }
   };
 
-  const handleTermChange = (termId: string) => {
-    setSelectedTerm(termId);
-    setPreFlightResults(null);
-    setShowPreFlight(false);
-    setError('');
-    setShowSubjectsWithoutTrainer(false);
-    setShowCombinations(false);
-  };
+  // Whether the scope selection is complete enough to proceed
+  const isScopeReady =
+    generationScope === 'institution' ||
+    (generationScope === 'department' && !!selectedDepartment);
 
   const runPreFlightChecks = async () => {
     if (!selectedTerm) { setError('Please select a term'); return; }
+    if (!isScopeReady) { setError('Please select a department'); return; }
+
     setIsCheckingPreFlight(true);
     setError('');
     setPreFlightResults(null);
+
     try {
-      const response = await fetch(`/api/timetable/generate/pre-flight?term_id=${selectedTerm}`);
+      const url = new URL('/api/timetable/generate/pre-flight', window.location.origin);
+      url.searchParams.set('term_id', selectedTerm);
+      if (generationScope === 'department' && selectedDepartment) {
+        url.searchParams.set('department', selectedDepartment);
+      }
+
+      const response = await fetch(url.toString());
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Pre-flight checks failed');
       setPreFlightResults(data);
@@ -218,19 +277,30 @@ export default function GenerateTimetableDialog({
       setError('Cannot generate timetable. Please fix the errors listed above.');
       return;
     }
+    if (!isScopeReady) {
+      setError('Please select a department or choose institution-wide generation.');
+      return;
+    }
 
     setIsGenerating(true);
     setError('');
 
     try {
+      const body: Record<string, any> = {
+        term_id: parseInt(selectedTerm),
+        min_classes_per_day: minClassesPerDay,
+        regenerate: preFlightResults.existing_timetable.exists,
+      };
+
+      // Only include department when generating for a specific department
+      if (generationScope === 'department' && selectedDepartment) {
+        body.department = selectedDepartment;
+      }
+
       const response = await fetch('/api/timetable/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          term_id: parseInt(selectedTerm),
-          min_classes_per_day: minClassesPerDay,
-          regenerate: preFlightResults.existing_timetable.exists,
-        }),
+        body: JSON.stringify(body),
       });
 
       const data = await response.json();
@@ -282,12 +352,15 @@ export default function GenerateTimetableDialog({
   const resetForm = () => {
     setSelectedTerm('');
     setMethod('auto');
-    setMinClassesPerDay(3);
+    setMinClassesPerDay(1);
     setError('');
     setPreFlightResults(null);
     setShowPreFlight(false);
     setShowSubjectsWithoutTrainer(false);
     setShowCombinations(false);
+    setGenerationScope('institution');
+    setSelectedDepartment('');
+    setDepartments([]);
   };
 
   const lessonTypeLabel = (type: string) => ({
@@ -325,6 +398,106 @@ export default function GenerateTimetableDialog({
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Generation Scope — only shown once a term is selected */}
+            {selectedTerm && method === 'auto' && (
+              <div className="space-y-3">
+                <Label>Generation Scope</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Institution-wide */}
+                  <button
+                    type="button"
+                    onClick={() => handleScopeChange('institution')}
+                    className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all
+                      ${generationScope === 'institution'
+                        ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                        : 'border-border hover:border-muted-foreground/40 hover:bg-muted/30'
+                      }`}
+                  >
+                    <div className={`mt-0.5 rounded-md p-1.5 shrink-0
+                      ${generationScope === 'institution' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                      <Building2 className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">Entire Institution</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Master timetable for all departments
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Department-specific */}
+                  <button
+                    type="button"
+                    onClick={() => handleScopeChange('department')}
+                    className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-all
+                      ${generationScope === 'department'
+                        ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                        : 'border-border hover:border-muted-foreground/40 hover:bg-muted/30'
+                      }`}
+                  >
+                    <div className={`mt-0.5 rounded-md p-1.5 shrink-0
+                      ${generationScope === 'department' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                      <GraduationCap className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">Specific Department</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Generate for one department only
+                      </p>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Department dropdown — only when department scope is selected */}
+                {generationScope === 'department' && (
+                  <div className="space-y-2">
+                    <Label>Select Department *</Label>
+                    {isFetchingDepartments ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground h-10 px-3 border rounded-md">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Loading departments...
+                      </div>
+                    ) : departments.length === 0 ? (
+                      <Alert className="bg-amber-50 border-amber-200">
+                        <AlertTriangle className="h-4 w-4 text-amber-600" />
+                        <AlertDescription className="text-amber-800 text-sm">
+                          No departments found with active trainer assignments for this term.
+                        </AlertDescription>
+                      </Alert>
+                    ) : (
+                      <Select value={selectedDepartment} onValueChange={(val) => {
+                        setSelectedDepartment(val);
+                        setPreFlightResults(null);
+                        setShowPreFlight(false);
+                        setError('');
+                      }}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a department" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {departments.map((dept) => (
+                            <SelectItem key={dept} value={dept}>
+                              {dept}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+
+                    {selectedDepartment && (
+                      <Alert className="bg-blue-50 border-blue-200">
+                        <Info className="h-4 w-4 text-blue-600" />
+                        <AlertDescription className="text-blue-800 text-sm">
+                          Only <strong>{selectedDepartment}</strong> subjects and trainers will be
+                          scheduled. Other departments are unaffected.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Method Selection */}
             <div className="space-y-2">
@@ -366,7 +539,7 @@ export default function GenerateTimetableDialog({
                       min="1"
                       max="8"
                       value={minClassesPerDay}
-                      onChange={(e) => setMinClassesPerDay(parseInt(e.target.value) || 3)}
+                      onChange={(e) => setMinClassesPerDay(parseInt(e.target.value) || 1)}
                     />
                     <p className="text-xs text-gray-500">
                       Minimum number of subjects a trainer should teach per day
@@ -391,8 +564,8 @@ export default function GenerateTimetableDialog({
                   </AlertDescription>
                 </Alert>
 
-                {/* Pre-flight trigger */}
-                {selectedTerm && !showPreFlight && (
+                {/* Pre-flight trigger — only when scope is ready */}
+                {selectedTerm && isScopeReady && !showPreFlight && (
                   <Button
                     onClick={runPreFlightChecks}
                     disabled={isCheckingPreFlight}
@@ -411,7 +584,14 @@ export default function GenerateTimetableDialog({
                 {showPreFlight && preFlightResults && (
                   <div className="space-y-3 p-4 bg-white rounded-lg border">
                     <div className="flex items-center justify-between">
-                      <h3 className="font-semibold text-sm">Pre-Flight Check Results</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-sm">Pre-Flight Check Results</h3>
+                        {generationScope === 'department' && selectedDepartment && (
+                          <Badge variant="outline" className="text-xs text-indigo-600 border-indigo-300">
+                            {selectedDepartment}
+                          </Badge>
+                        )}
+                      </div>
                       {preFlightResults.passed ? (
                         <Badge className="bg-green-500">✓ Ready to Generate</Badge>
                       ) : (
@@ -482,7 +662,9 @@ export default function GenerateTimetableDialog({
                                 Overrides
                               </Badge>
                               <span className="font-medium">{preFlightResults.scheduling_config.subjects_with_overrides}</span>
-                              <span className="text-muted-foreground text-xs">assignment{preFlightResults.scheduling_config.subjects_with_overrides !== 1 ? 's' : ''}</span>
+                              <span className="text-muted-foreground text-xs">
+                                assignment{preFlightResults.scheduling_config.subjects_with_overrides !== 1 ? 's' : ''}
+                              </span>
                             </div>
                           )}
                         </div>
@@ -525,10 +707,19 @@ export default function GenerateTimetableDialog({
                       <Alert className="bg-amber-50 border-amber-200">
                         <AlertTriangle className="h-4 w-4 text-amber-600" />
                         <AlertDescription className="text-amber-800">
-                          <strong>Existing timetable found ({preFlightResults.existing_timetable.slots_count} slots)</strong>
+                          <strong>
+                            {generationScope === 'department' && selectedDepartment
+                              ? `Existing timetable found for ${selectedDepartment} (${preFlightResults.existing_timetable.slots_count} slots)`
+                              : `Existing timetable found (${preFlightResults.existing_timetable.slots_count} slots)`}
+                          </strong>
                           <br />
                           {preFlightResults.existing_timetable.can_regenerate ? (
-                            <span>Regeneration allowed (within 2 weeks of term start). Existing slots will be deleted.</span>
+                            <span>
+                              Regeneration allowed (within 2 weeks of term start).
+                              {generationScope === 'department' && selectedDepartment
+                                ? ` Only ${selectedDepartment} slots will be replaced.`
+                                : ' All existing slots will be deleted.'}
+                            </span>
                           ) : (
                             <span className="text-red-600 font-semibold">
                               Cannot regenerate: More than 2 weeks since term start ({preFlightResults.existing_timetable.days_since_term_start} days)
@@ -671,12 +862,16 @@ export default function GenerateTimetableDialog({
                 </Button>
                 <Button
                   onClick={handleAutoGenerate}
-                  disabled={isGenerating || !selectedTerm || !canGenerate || !preFlightResults?.passed}
+                  disabled={isGenerating || !selectedTerm || !canGenerate || !preFlightResults?.passed || !isScopeReady}
                 >
                   {isGenerating ? (
                     <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Generating 3 Options...</>
                   ) : (
-                    <><Zap className="mr-2 h-4 w-4" />Generate 3 Options</>
+                    <><Zap className="mr-2 h-4 w-4" />
+                      {generationScope === 'department' && selectedDepartment
+                        ? `Generate for ${selectedDepartment}`
+                        : 'Generate 3 Options'}
+                    </>
                   )}
                 </Button>
               </div>

@@ -30,6 +30,7 @@ export default function RootLayout({
    <html lang="en">
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <link rel="preload" as="image" href="/logo2.png" />  
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}

@@ -136,7 +136,10 @@ model classsubjects {
   classes                   classes                     @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassSubjects_class_id_fkey")
   subjects                  subjects                    @relation(fields: [subject_id], references: [id], onDelete: Cascade, map: "ClassSubjects_subject_id_fkey")
   terms                     terms?                      @relation(fields: [term_id], references: [id], map: "ClassSubjects_term_id_fkey")
+  sessions_per_week         Int     @default(1)
+  lesson_type               String  @default("single") @db.VarChar(20)
   trainersubjectassignments trainersubjectassignments[]
+  
 
 @@unique([class_id, subject_id, term_id], map: "ClassSubjects_class_id_subject_id_term_id_key")  
 @@index([class_id], map: "ClassSubjects_class_id_idx")
@@ -323,26 +326,36 @@ model timetableslots {
   status           String        @default("scheduled") @db.VarChar(20)
   created_at       DateTime      @default(now())
   updated_at       DateTime      @default(now())
-  is_online_session Boolean          @default(false) 
+  is_online_session Boolean      @default(false)
+  session_group_id    String?    @db.VarChar(36)
+  combined_class_ids  Json?
+  is_room_fallback Boolean       @default(false)
   classes          classes       @relation(fields: [class_id], references: [id], map: "TimetableSlots_class_id_fkey")
   users            users         @relation(fields: [employee_id], references: [id], map: "TimetableSlots_employee_id_fkey")
   lessonperiods    lessonperiods @relation(fields: [lesson_period_id], references: [id], map: "TimetableSlots_lesson_period_id_fkey")
   rooms            rooms         @relation(fields: [room_id], references: [id], map: "TimetableSlots_room_id_fkey")
   subjects         subjects      @relation(fields: [subject_id], references: [id], map: "TimetableSlots_subject_id_fkey")
   terms            terms         @relation(fields: [term_id], references: [id], map: "TimetableSlots_term_id_fkey")
-  classattendance  classattendance[] // ✅ NEW: Relation to class attendance records
+  classattendance  classattendance[]
   timetableslotclasses timetableslotclasses[]
 
-  @@unique([term_id, day_of_week, lesson_period_id, employee_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_employee_key")
-  @@unique([term_id, day_of_week, lesson_period_id, room_id], map: "TimetableSlots_term_id_day_of_week_lesson_period_id_room_id_key")
+  // ── Unique constraints ──────────────────────────────────────────────────────
+  // Employee+class: a trainer can teach multiple combined classes in the same
+  // slot, but the same trainer+class pair must be unique per slot
+  @@unique([term_id, day_of_week, lesson_period_id, employee_id, class_id], map: "TimetableSlots_term_day_period_employee_class_key")
+  // Room: same room can be shared by combined classes (same session_group),
+  // so we scope uniqueness to room+class instead of room alone
+
+  // ── Indexes ─────────────────────────────────────────────────────────────────
   @@index([class_id], map: "TimetableSlots_class_id_idx")
   @@index([employee_id], map: "TimetableSlots_employee_id_idx")
   @@index([lesson_period_id], map: "TimetableSlots_lesson_period_id_fkey")
   @@index([room_id], map: "TimetableSlots_room_id_fkey")
   @@index([subject_id], map: "TimetableSlots_subject_id_idx")
   @@index([term_id], map: "TimetableSlots_term_id_idx")
-  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx") // Index for day queries
-  @@index([is_online_session], map: "TimetableSlots_is_online_session_idx") // Index for online session queries
+  @@index([day_of_week], map: "TimetableSlots_day_of_week_idx")
+  @@index([is_online_session], map: "TimetableSlots_is_online_session_idx")
+  @@index([session_group_id], map: "TimetableSlots_session_group_id_idx")
 }
 
 model timetableslotclasses {

@@ -1,5 +1,4 @@
 // types/timetable.ts
-
 export interface TimetableSlot {
   id: string;
   class_id: number;
@@ -9,6 +8,8 @@ export interface TimetableSlot {
   lesson_period_id: number;
   day_of_week: number;
   status: string;
+  is_online_session: boolean;
+  session_group_id?: string;                    // ← ADD
   classes: {
     id: number;
     name: string;
@@ -43,4 +44,12 @@ export interface TimetableSlot {
     name: string;
     department: string;
   };
+  timetableslotclasses?: {                      // ← ADD
+    class_id: number;
+    classes?: {
+      id: number;
+      name: string;
+      code: string;
+    };
+  }[];
 }

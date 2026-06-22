@@ -109,7 +109,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-try {
+  try {
     const authResult = await verifyAuth();
     if (authResult.error || !authResult.user) {
       return NextResponse.json({ error: authResult.error || 'Auth failed' }, { status: authResult.status || 401 });
@@ -119,7 +119,6 @@ try {
     const resolvedParams = await params;
     const trainerUserId = parseInt(resolvedParams.id);
 
-    // ✅ UPDATED PERMISSION LOGIC
     const isSelf = user.id === trainerUserId;
     const isPrivileged = user.role === 'admin' || user.has_timetable_admin === true;
 
@@ -130,8 +129,7 @@ try {
       );
     }
 
-    // ✅ CHECK GLOBAL BLOCK (ADD THIS)
-const isGloballyBlocked = await isSubjectSelectionBlocked();
+    const isGloballyBlocked = await isSubjectSelectionBlocked();
     if (isGloballyBlocked && !isPrivileged) {
       return NextResponse.json(
         { error: 'Class selection is currently disabled by administrator.' },
@@ -139,7 +137,6 @@ const isGloballyBlocked = await isSubjectSelectionBlocked();
       );
     }
 
-    // ✅ CHECK INDIVIDUAL BLOCK (Privileged users bypass this)
     if (user.is_blocked && !isPrivileged) {
       return NextResponse.json(
         { error: 'Your account is blocked from selecting classes.' },
@@ -165,7 +162,6 @@ const isGloballyBlocked = await isSubjectSelectionBlocked();
       return numId;
     });
 
-    // Validate trainer exists and is active
     const trainerUser = await db.users.findUnique({ where: { id: trainerUserId } });
     if (!trainerUser || !trainerUser.is_active) {
       return NextResponse.json({ error: 'Trainer not found or inactive' }, { status: 404 });
@@ -178,62 +174,56 @@ const isGloballyBlocked = await isSubjectSelectionBlocked();
       );
     }
 
-    // Validate term exists
     const term = await db.terms.findUnique({ where: { id: numericTermId } });
     if (!term) {
       return NextResponse.json({ error: 'Term not found' }, { status: 404 });
     }
 
-    // Validate all classes exist and are active
-    if (numericClassIds.length > 0) {
-      const validClasses = await db.classes.findMany({
-        where: { id: { in: numericClassIds }, is_active: true },
-        select: { id: true }
-      });
+    // Silently filter to only active classes — stale inactive assignments are dropped
+    const validClasses = await db.classes.findMany({
+      where: { id: { in: numericClassIds }, is_active: true },
+      select: { id: true }
+    });
+    const validClassIds = validClasses.map(c => c.id);
 
-      if (validClasses.length !== numericClassIds.length) {
-        const foundIds = new Set(validClasses.map(c => c.id));
-        const invalidIds = numericClassIds.filter(id => !foundIds.has(id));
-        return NextResponse.json(
-          { error: `Some classes not found or inactive. Invalid IDs: ${invalidIds.join(', ')}` },
-          { status: 400 }
-        );
-      }
+    // If all submitted classes were inactive, just deactivate existing and return
+    if (validClassIds.length === 0) {
+      await db.trainerclassassignments.updateMany({
+        where: { trainer_id: trainerUserId, is_active: true },
+        data: { is_active: false }
+      });
+      return NextResponse.json({
+        message: 'Assignments updated. 0 classes assigned.',
+        class_assignments: 0,
+        total_classes: 0
+      });
     }
 
     const result = await db.$transaction(async (tx) => {
-      // 1. Deactivate existing class assignments
+      // 1. Deactivate all existing assignments
       await tx.trainerclassassignments.updateMany({
         where: { trainer_id: trainerUserId, is_active: true },
         data: { is_active: false }
       });
 
-      // Note: We do NOT deactivate subject assignments here.
-      // Subject assignments are managed separately via /subject-assignments route
-
-      let classAssignmentsCreated = 0;
-
-      if (numericClassIds.length === 0) {
-        return { classAssignmentsCreated, assigned_classes: 0 };
-      }
-
-      // 2. Get existing class assignments
+      // 2. Get existing rows for valid classes
       const existingClassAssignments = await tx.trainerclassassignments.findMany({
-        where: { trainer_id: trainerUserId, class_id: { in: numericClassIds } },
+        where: { trainer_id: trainerUserId, class_id: { in: validClassIds } },
         select: { id: true, class_id: true }
       });
 
-      // 3. Process class assignments - reactivate or create
+      // 3. Reactivate or create
       const existingClassMap = new Map(existingClassAssignments.map(a => [a.class_id, a.id]));
       const classIdsToReactivate: number[] = [];
       const classesToCreate: Array<{
         trainer_id: number;
         class_id: number;
+        term_id: number;
         assigned_by: string;
         is_active: boolean;
       }> = [];
 
-      for (const classId of numericClassIds) {
+      for (const classId of validClassIds) {
         const existingId = existingClassMap.get(classId);
         if (existingId) {
           classIdsToReactivate.push(existingId);
@@ -241,15 +231,15 @@ const isGloballyBlocked = await isSubjectSelectionBlocked();
           classesToCreate.push({
             trainer_id: trainerUserId,
             class_id: classId,
+            term_id: numericTermId,
             assigned_by: user.name,
             is_active: true
           });
         }
       }
 
-      // 4. Execute database operations
+      // 4. Execute
       const operations: Promise<unknown>[] = [];
-
       if (classIdsToReactivate.length > 0) {
         operations.push(
           tx.trainerclassassignments.updateMany({
@@ -257,32 +247,26 @@ const isGloballyBlocked = await isSubjectSelectionBlocked();
             data: { is_active: true, assigned_by: user.name, assigned_at: new Date() }
           })
         );
-        classAssignmentsCreated += classIdsToReactivate.length;
       }
-
       if (classesToCreate.length > 0) {
         operations.push(
           tx.trainerclassassignments.createMany({ data: classesToCreate })
         );
-        classAssignmentsCreated += classesToCreate.length;
       }
-
       await Promise.all(operations);
 
       return {
-        classAssignmentsCreated,
-        assigned_classes: numericClassIds.length
+        classAssignmentsCreated: classIdsToReactivate.length + classesToCreate.length,
+        assigned_classes: validClassIds.length
       };
-    }, {
-      timeout: 30000,
-      maxWait: 35000
-    });
+    }, { timeout: 30000, maxWait: 35000 });
 
     return NextResponse.json({
       message: `Successfully updated assignments. ${result.assigned_classes} classes assigned.`,
       class_assignments: result.classAssignmentsCreated,
       total_classes: result.assigned_classes
     });
+
   } catch (error) {
     console.error('Error updating trainer assignments:', error);
     return NextResponse.json(

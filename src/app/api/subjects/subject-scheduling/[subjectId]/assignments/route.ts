@@ -1,4 +1,4 @@
-// app/api/subject-scheduling/[subjectId]/assignments/route.ts
+// app/api/subjects/subject-scheduling/[subjectId]/assignments/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { jwtVerify } from 'jose';
@@ -32,9 +32,6 @@ function hasTimetableAdminAccess(user: any): boolean {
   return user.role === 'admin' || user.has_timetable_admin === true;
 }
 
-// GET /api/subject-scheduling/[subjectId]/assignments
-// Returns all active trainersubjectassignments for a subject in the current term
-// with full class and trainer details, plus per-assignment overrides
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ subjectId: string }> }
@@ -54,46 +51,29 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid subject ID' }, { status: 400 });
     }
 
-    // Get current active term
     const currentTerm = await db.terms.findFirst({
       where: { is_active: true },
       orderBy: { start_date: 'desc' }
     });
-
     if (!currentTerm) {
       return NextResponse.json({ error: 'No active term found.' }, { status: 404 });
     }
 
     const subject = await db.subjects.findUnique({
       where: { id: numericSubjectId },
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        sessions_per_week: true,
-        lesson_type: true
-      }
+      select: { id: true, name: true, code: true, sessions_per_week: true, lesson_type: true }
     });
-
     if (!subject) {
       return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
     }
 
     const assignments = await db.trainersubjectassignments.findMany({
-      where: {
-        subject_id: numericSubjectId,
-        term_id: currentTerm.id,
-        is_active: true
-      },
+      where: { subject_id: numericSubjectId, term_id: currentTerm.id, is_active: true },
       include: {
-        users: {
-          select: { id: true, name: true, department: true }
-        },
+        users: { select: { id: true, name: true, department: true } },
         classsubjects: {
           include: {
-            classes: {
-              select: { id: true, name: true, code: true, department: true }
-            }
+            classes: { select: { id: true, name: true, code: true, department: true } }
           }
         }
       },
@@ -108,10 +88,7 @@ export async function GET(
         default_sessions_per_week: subject.sessions_per_week,
         default_lesson_type: subject.lesson_type
       },
-      term: {
-        id: currentTerm.id,
-        name: currentTerm.name
-      },
+      term: { id: currentTerm.id, name: currentTerm.name },
       assignments: assignments.map(a => ({
         id: a.id,
         trainer_id: a.trainer_id,
@@ -122,10 +99,12 @@ export async function GET(
         class_name: a.classsubjects.classes.name,
         class_code: a.classsubjects.classes.code,
         class_department: a.classsubjects.classes.department,
-        // Per-assignment overrides — null means "use subject default"
-        sessions_per_week: a.sessions_per_week ?? subject.sessions_per_week,
-        lesson_type: a.lesson_type ?? subject.lesson_type,
-        is_override: a.sessions_per_week !== null || a.lesson_type !== null
+        // ✅ classsubjects is now the source of truth
+        sessions_per_week: a.classsubjects.sessions_per_week,
+        lesson_type: a.classsubjects.lesson_type,
+        is_override:
+          a.classsubjects.sessions_per_week !== subject.sessions_per_week ||
+          a.classsubjects.lesson_type !== subject.lesson_type
       }))
     });
 
@@ -135,8 +114,8 @@ export async function GET(
   }
 }
 
-// PATCH /api/subject-scheduling/[subjectId]/assignments
-// Updates sessions_per_week and/or lesson_type for a specific trainersubjectassignment
+// PATCH /api/subjects/subject-scheduling/[subjectId]/assignments
+// Updates sessions_per_week and/or lesson_type on classsubjects (not trainersubjectassignments)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ subjectId: string }> }
@@ -163,53 +142,55 @@ export async function PATCH(
       return NextResponse.json({ error: 'assignment_id is required' }, { status: 400 });
     }
 
-    // Validate the assignment belongs to this subject
+    // Resolve the trainersubjectassignment to get its class_subject_id
     const assignment = await db.trainersubjectassignments.findFirst({
-      where: {
-        id: parseInt(assignment_id),
-        subject_id: numericSubjectId,
-        is_active: true
-      }
+      where: { id: parseInt(assignment_id), subject_id: numericSubjectId, is_active: true },
+      include: { classsubjects: true }
     });
-
     if (!assignment) {
       return NextResponse.json({ error: 'Assignment not found for this subject' }, { status: 404 });
     }
 
-    // If reset_to_default, clear the overrides
+    // If reset_to_default, copy subject-level defaults back to classsubjects
     if (reset_to_default) {
-      const updated = await db.trainersubjectassignments.update({
-        where: { id: parseInt(assignment_id) },
+      const subject = await db.subjects.findUnique({
+        where: { id: numericSubjectId },
+        select: { sessions_per_week: true, lesson_type: true }
+      });
+      if (!subject) {
+        return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
+      }
+      const updated = await db.classsubjects.update({
+        where: { id: assignment.class_subject_id },
         data: {
-          sessions_per_week: null,
-          lesson_type: null
+          sessions_per_week: subject.sessions_per_week,
+          lesson_type: subject.lesson_type
         }
       });
       return NextResponse.json({
         success: true,
-        message: 'Assignment reset to subject defaults',
-        assignment_id: updated.id,
-        sessions_per_week: null,
-        lesson_type: null
+        message: 'Reset to subject defaults',
+        class_subject_id: updated.id,
+        sessions_per_week: updated.sessions_per_week,
+        lesson_type: updated.lesson_type
       });
     }
 
-    // Validate sessions_per_week
     if (sessions_per_week !== undefined) {
-      const sessions = parseInt(sessions_per_week);
-      if (isNaN(sessions) || sessions < 1 || sessions > 4) {
-        return NextResponse.json({ error: 'sessions_per_week must be between 1 and 4' }, { status: 400 });
+      const s = parseInt(sessions_per_week);
+      if (isNaN(s) || s < 0 || s > 20) {
+        return NextResponse.json({ error: 'sessions_per_week must be between 0 and 20' }, { status: 400 });
       }
     }
 
-    // Validate lesson_type
     const validLessonTypes = ['single', 'double', 'triple'];
     if (lesson_type !== undefined && !validLessonTypes.includes(lesson_type)) {
       return NextResponse.json({ error: 'lesson_type must be single, double, or triple' }, { status: 400 });
     }
 
-    const updated = await db.trainersubjectassignments.update({
-      where: { id: parseInt(assignment_id) },
+    // ✅ Write to classsubjects, not trainersubjectassignments
+    const updated = await db.classsubjects.update({
+      where: { id: assignment.class_subject_id },
       data: {
         ...(sessions_per_week !== undefined && { sessions_per_week: parseInt(sessions_per_week) }),
         ...(lesson_type !== undefined && { lesson_type })
@@ -218,7 +199,7 @@ export async function PATCH(
 
     return NextResponse.json({
       success: true,
-      assignment_id: updated.id,
+      class_subject_id: updated.id,
       sessions_per_week: updated.sessions_per_week,
       lesson_type: updated.lesson_type
     });

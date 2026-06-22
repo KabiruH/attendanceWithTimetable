@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
     // We only select non-sensitive fields to protect user privacy
     const trainers = await db.users.findMany({
       where: {
-        role: 'employee',
+        role: { in: ['employee', 'admin'] },
         is_active: true
       },
       select: {

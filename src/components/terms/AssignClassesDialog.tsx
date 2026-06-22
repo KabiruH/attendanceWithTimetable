@@ -36,7 +36,7 @@ interface Class {
   description: string;
   department: string;
   duration_hours: number;
-  assignedToTerm?: string; // Name of term this class is assigned to (if any)
+  assignedToTerm?: string; 
 }
 
 interface AssignClassesDialogProps {
@@ -99,7 +99,6 @@ export default function AssignClassesDialog({
           }
         }
       } catch (error) {
-        console.log('Could not fetch term assignments - continuing without conflict detection');
       }
 
       // Enhance classes with assignment info

@@ -134,8 +134,6 @@ export async function GET(request: NextRequest) {
       const absentDays = personalAttendance.filter(r => r.status?.toLowerCase() === 'absent').length;
       const attendanceRate = totalDays > 0 ? (presentDays / totalDays) * 100 : 0;
 
-      console.log(`Admin viewing attendance: ${allAttendance.length} total records from all employees`);
-
       return NextResponse.json({
         role: 'admin',
         isCheckedIn,

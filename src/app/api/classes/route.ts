@@ -26,7 +26,7 @@ async function verifyAuth() {
         // Verify user is still active and get has_timetable_admin status
         const user = await db.users.findUnique({
             where: { id: userId },
-            select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
+  select: { id: true, name: true, role: true, department: true, is_active: true, has_timetable_admin: true }
         });
 
         if (!user || !user.is_active) {
@@ -41,7 +41,7 @@ async function verifyAuth() {
 
 // Helper function to check if user has timetable admin access
 function hasTimetableAdminAccess(user: any): boolean {
-    return user.role === 'admin' || user.has_timetable_admin === true;
+  return user.role === 'admin' || !!user.has_timetable_admin;
 }
 
 // GET /api/classes - Fetch all classes (Admin/Timetable Admin) or active classes (Trainers) WITH SUBJECT COUNT
@@ -256,6 +256,101 @@ export async function PUT(request: NextRequest) {
         console.error('Error updating class:', error);
         return NextResponse.json(
             { error: 'Failed to update class' },
+            { status: 500 }
+        );
+    }
+}
+
+// DELETE /api/classes - Delete a class (Admin only)
+export async function DELETE(request: NextRequest) {
+    try {
+        const authResult = await verifyAuth();
+        if (authResult.error) {
+            return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+        }
+
+        if (!authResult.user) {
+            return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
+        }
+
+        const { user } = authResult;
+
+        // Admin only — timetable admins are not permitted to delete classes
+        if (user.role !== 'admin') {
+            return NextResponse.json(
+                { error: 'Unauthorized. Admin access required.' },
+                { status: 403 }
+            );
+        }
+
+        const url = new URL(request.url);
+        const id = Number(url.searchParams.get('id'));
+
+        if (!id || isNaN(id)) {
+            return NextResponse.json(
+                { error: 'Valid class ID is required' },
+                { status: 400 }
+            );
+        }
+
+  const existingClass = await db.classes.findUnique({
+  where: { id },
+  include: {
+    _count: {
+      select: {
+        classsubjects: true,
+        termclasses: true,
+        timetableslots: true,
+        timetableslotclasses: true,
+        trainerclassassignments: true,
+        classattendance: true,
+        subjectassignmentlog: true,
+      }
+    }
+  }
+});
+
+if (!existingClass) {
+  return NextResponse.json({ error: 'Class not found' }, { status: 404 });
+}
+
+const c = existingClass._count;
+const blockers: string[] = [];
+
+if (c.timetableslots > 0 || c.timetableslotclasses > 0) {
+  const total = c.timetableslots + c.timetableslotclasses;
+  blockers.push(`${total} timetable slot${total !== 1 ? 's' : ''} — go to Timetable and remove them first`);
+}
+if (c.classsubjects > 0) {
+  blockers.push(`${c.classsubjects} subject assignment${c.classsubjects !== 1 ? 's' : ''} — go to Class Subjects and remove them first`);
+}
+if (c.termclasses > 0) {
+  blockers.push(`${c.termclasses} term assignment${c.termclasses !== 1 ? 's' : ''} — go to Terms and unassign the class first`);
+}
+if (c.trainerclassassignments > 0) {
+  blockers.push(`${c.trainerclassassignments} trainer assignment${c.trainerclassassignments !== 1 ? 's' : ''} — go to Timetable Settings and unassign trainers first`);
+}
+if (c.classattendance > 0) {
+  blockers.push(`${c.classattendance} attendance record${c.classattendance !== 1 ? 's' : ''} — attendance history cannot be deleted`);
+}
+
+if (blockers.length > 0) {
+  return NextResponse.json(
+    {
+      error: `Cannot delete "${existingClass.name}". It has:\n• ${blockers.join('\n• ')}`,
+      blockers,
+    },
+    { status: 409 }
+  );
+}
+
+        await db.classes.delete({ where: { id } });
+
+        return NextResponse.json({ message: 'Class deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting class:', error);
+        return NextResponse.json(
+            { error: 'Failed to delete class' },
             { status: 500 }
         );
     }

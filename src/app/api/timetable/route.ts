@@ -26,11 +26,11 @@ async function verifyAuth() {
     // Verify user is still active and fetch has_timetable_admin
     const user = await db.users.findUnique({
       where: { id: userId },
-      select: { 
-        id: true, 
-        name: true, 
-        role: true, 
-        department: true, 
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        department: true,
         is_active: true,
         has_timetable_admin: true
       }
@@ -125,8 +125,18 @@ export async function GET(request: NextRequest) {
       };
     }
 
+    const status = searchParams.get('status');
+    if (status) {
+      whereConditions.status = status;
+    }
+
+    const isRoomFallback = searchParams.get('is_room_fallback');
+    if (isRoomFallback !== null) {
+      whereConditions.is_room_fallback = isRoomFallback === 'true';
+    }
+
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
-    
+
     // If user doesn't have timetable access, only show their own slots
     if (!hasTimetableAccess) {
       whereConditions.employee_id = user.id;
@@ -154,7 +164,9 @@ export async function GET(request: NextRequest) {
             department: true,
             credit_hours: true,
             description: true,
-            can_be_online: true // ✅ NEW: Include can_be_online flag
+            can_be_online: true,
+            lesson_type: true,
+            sessions_per_week: true
           }
         },
         rooms: {
@@ -234,7 +246,7 @@ export async function POST(request: NextRequest) {
     const { user } = authResult;
 
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
-    
+
     if (!hasTimetableAccess) {
       return NextResponse.json(
         { error: 'Unauthorized. Admin or Timetable Admin access required.' },
@@ -267,6 +279,14 @@ export async function POST(request: NextRequest) {
     if (day_of_week < 0 || day_of_week > 6) {
       return NextResponse.json(
         { error: 'day_of_week must be between 0 (Sunday) and 6 (Saturday)' },
+        { status: 400 }
+      );
+    }
+
+    const validStatuses = ['scheduled', 'TFL', 'CNA'];
+    if (status && !validStatuses.includes(status)) {
+      return NextResponse.json(
+        { error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` },
         { status: 400 }
       );
     }
@@ -349,7 +369,8 @@ export async function POST(request: NextRequest) {
         lesson_period_id,
         OR: [
           { room_id }, // Same room
-          { employee_id } // Same trainer
+          { employee_id }, // Same trainer
+          { class_id }
         ]
       },
       include: {
@@ -366,6 +387,8 @@ export async function POST(request: NextRequest) {
         conflictMessage = `Room ${existingSlot.rooms.name} is already booked for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
       } else if (existingSlot.employee_id === employee_id) {
         conflictMessage = `Trainer ${existingSlot.users.name} is already scheduled for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
+      } else if (existingSlot.class_id === class_id) {
+        conflictMessage = `Class ${classRecord.name} is already scheduled for ${existingSlot.subjects.name} at this time`;
       }
 
       return NextResponse.json(
@@ -418,27 +441,21 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/**
- * PATCH /api/timetable
- * Update an existing timetable slot (Admin or Timetable Admin only)
- * ✅ NEW: Allows toggling is_online_session for specific slots
- */
+
+ // PATCH /api/timetable
+  
 export async function PATCH(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
     if (authResult.error) {
       return NextResponse.json({ error: authResult.error }, { status: authResult.status });
     }
-
     if (!authResult.user) {
       return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
     }
 
     const { user } = authResult;
-
-    // ✅ AUTHORIZATION CHECK: Only admin or timetable admin can modify timetable
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
-    
     if (!hasTimetableAccess) {
       return NextResponse.json(
         { error: 'Unauthorized. Admin or Timetable Admin access required to modify timetable slots.' },
@@ -447,7 +464,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { id, is_online_session, status } = body;
+    const { id, is_online_session, status, room_id } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -456,29 +473,19 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Find the existing slot
     const existingSlot = await db.timetableslots.findUnique({
       where: { id },
       include: {
         subjects: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            can_be_online: true
-          }
+          select: { id: true, name: true, code: true, can_be_online: true }
         }
       }
     });
 
     if (!existingSlot) {
-      return NextResponse.json(
-        { error: 'Timetable slot not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Timetable slot not found' }, { status: 404 });
     }
 
-    // ✅ ADDITIONAL CHECK: Validate if changing to online
     if (is_online_session === true && !existingSlot.subjects?.can_be_online) {
       return NextResponse.json({
         error: 'Subject cannot be online',
@@ -486,20 +493,62 @@ export async function PATCH(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Build update data
-    const updateData: any = {
-      updated_at: new Date()
-    };
+    // ── Room change handling ───────────────────────────────────────────────
+    let isRoomFallback: boolean | undefined;
 
-    if (is_online_session !== undefined) {
-      updateData.is_online_session = is_online_session;
+    if (room_id !== undefined) {
+      const newRoom = await db.rooms.findUnique({
+        where: { id: room_id },
+        select: { id: true, name: true, room_type: true }
+      });
+
+      if (!newRoom) {
+        return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+      }
+
+      // Workshop rooms allow multiple simultaneous bookings — skip room conflict check.
+      // All other rooms must be free at this time slot.
+      const isWorkshop = newRoom.room_type === 'workshop';
+
+      if (!isWorkshop) {
+        const roomConflict = await db.timetableslots.findFirst({
+          where: {
+            id: { not: id }, // exclude current slot
+            term_id: existingSlot.term_id,
+            day_of_week: existingSlot.day_of_week,
+            lesson_period_id: existingSlot.lesson_period_id,
+            room_id
+          },
+          include: {
+            classes: { select: { name: true, code: true } },
+            subjects: { select: { name: true } }
+          }
+        });
+
+        if (roomConflict) {
+          return NextResponse.json({
+            error: 'Room conflict',
+            details: `${newRoom.name} is already booked for ${roomConflict.subjects.name} (${roomConflict.classes.name}) at this time`
+          }, { status: 409 });
+        }
+      }
+
+      // Auto-flag RNA: if the new room is named RNA, mark as room fallback
+      const isRna =
+        newRoom.name?.toUpperCase() === 'RNA' ||
+        newRoom.name?.toUpperCase().includes('RNA');
+
+      isRoomFallback = isRna ? true : false;
     }
 
-    if (status !== undefined) {
-      updateData.status = status;
-    }
+    // ── Build update payload ──────────────────────────────────────────────
+    const updateData: any = { updated_at: new Date() };
 
-    // Update the slot
+    if (is_online_session !== undefined) updateData.is_online_session = is_online_session;
+    if (status !== undefined)            updateData.status = status;
+    if (room_id !== undefined)           updateData.room_id = room_id;
+    if (isRoomFallback !== undefined)    updateData.is_room_fallback = isRoomFallback;
+
     const updatedSlot = await db.timetableslots.update({
       where: { id },
       data: updateData,
@@ -515,17 +564,22 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Timetable slot updated successfully${is_online_session !== undefined ? (is_online_session ? ' - Session marked as ONLINE' : ' - Session marked as PHYSICAL') : ''}`,
+      message: [
+        'Timetable slot updated successfully',
+        is_online_session !== undefined
+          ? is_online_session ? '— marked as ONLINE' : '— marked as PHYSICAL'
+          : null,
+        room_id !== undefined && isRoomFallback
+          ? '— moved to RNA (room fallback)'
+          : null,
+      ].filter(Boolean).join(' '),
       data: updatedSlot
     });
 
   } catch (error: any) {
     console.error('Error updating timetable slot:', error);
     return NextResponse.json(
-      {
-        error: 'Failed to update timetable slot',
-        details: error.message
-      },
+      { error: 'Failed to update timetable slot', details: error.message },
       { status: 500 }
     );
   }

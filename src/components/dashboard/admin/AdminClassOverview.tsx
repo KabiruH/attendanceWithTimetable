@@ -126,10 +126,6 @@ const AdminClassOverview: React.FC = () => {
         const reportData = await reportResponse.json();
         const statusData = await statusResponse.json();
 
-  console.log('Status Data:', statusData);
-  console.log('Today Attendance:', statusData.todayAttendance);
-  console.log('Active Class Sessions:', statusData.activeClassSessions);
-
         // Set metrics
         setClassMetrics({
           totalActiveClasses: statusData.activeClassSessions?.length || 0,

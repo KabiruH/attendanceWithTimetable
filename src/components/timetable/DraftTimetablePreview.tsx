@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   ChevronLeft,
   ChevronRight,
-  X,
   CheckCircle2,
   MapPin,
   User,
@@ -19,6 +18,7 @@ import {
   BookOpen,
   Wifi,
   Building,
+  Link2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -34,9 +34,8 @@ interface SlotData {
   day_of_week: number;
   status: string;
   is_online_session: boolean;
-
-  // These are stored flat in the JSON — no Prisma includes
-  // We reconstruct display info from the lookup maps below
+  session_group_id?: string;
+  combined_class_ids?: number[];
 }
 
 interface DraftStats {
@@ -55,11 +54,9 @@ interface Draft {
   stats: DraftStats;
   skipped_count: number;
   skipped_assignments?: any[];
-  // The full slots array — passed in by parent who fetches it
   slots?: SlotData[];
 }
 
-// Lookup maps resolved from the slots themselves + metadata passed in
 interface LookupMaps {
   subjects: Map<number, { name: string; code: string; department: string }>;
   classes: Map<number, { name: string; code: string }>;
@@ -81,42 +78,36 @@ interface DraftTimetablePreviewProps {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DAYS: { label: string; value: number }[] = [
-  { label: 'Monday', value: 1 },
-  { label: 'Tuesday', value: 2 },
-  { label: 'Wednesday', value: 3 },
-  { label: 'Thursday', value: 4 },
-  { label: 'Friday', value: 5 },
+const DAYS: { label: string; short: string; value: number }[] = [
+  { label: 'Monday',    short: 'Mon', value: 1 },
+  { label: 'Tuesday',   short: 'Tue', value: 2 },
+  { label: 'Wednesday', short: 'Wed', value: 3 },
+  { label: 'Thursday',  short: 'Thu', value: 4 },
+  { label: 'Friday',    short: 'Fri', value: 5 },
 ];
 
 const OPTION_COLORS = [
-  { accent: '#3b82f6', light: '#eff6ff', border: '#bfdbfe', badge: 'bg-blue-600', label: 'Option A' },
-  { accent: '#7c3aed', light: '#f5f3ff', border: '#ddd6fe', badge: 'bg-violet-600', label: 'Option B' },
+  { accent: '#3b82f6', light: '#eff6ff', border: '#bfdbfe', badge: 'bg-blue-600',    label: 'Option A' },
+  { accent: '#7c3aed', light: '#f5f3ff', border: '#ddd6fe', badge: 'bg-violet-600',  label: 'Option B' },
   { accent: '#059669', light: '#ecfdf5', border: '#a7f3d0', badge: 'bg-emerald-600', label: 'Option C' },
 ];
 
-// Department colour palette — deterministic by dept name hash
-const DEPT_COLORS = [
-  'bg-sky-100 border-sky-300 text-sky-800',
-  'bg-rose-100 border-rose-300 text-rose-800',
-  'bg-amber-100 border-amber-300 text-amber-800',
-  'bg-teal-100 border-teal-300 text-teal-800',
-  'bg-fuchsia-100 border-fuchsia-300 text-fuchsia-800',
-  'bg-orange-100 border-orange-300 text-orange-800',
-  'bg-cyan-100 border-cyan-300 text-cyan-800',
-  'bg-lime-100 border-lime-300 text-lime-800',
+// Session group color palette — each unique group_id gets a consistent color
+const GROUP_COLORS = [
+  { accent: '#7c3aed', light: '#f5f3ff', border: '#c4b5fd', text: '#5b21b6' },
+  { accent: '#0891b2', light: '#ecfeff', border: '#a5f3fc', text: '#0e7490' },
+  { accent: '#d97706', light: '#fffbeb', border: '#fcd34d', text: '#b45309' },
+  { accent: '#059669', light: '#ecfdf5', border: '#6ee7b7', text: '#047857' },
+  { accent: '#dc2626', light: '#fef2f2', border: '#fca5a5', text: '#b91c1c' },
+  { accent: '#db2777', light: '#fdf2f8', border: '#f9a8d4', text: '#be185d' },
+  { accent: '#65a30d', light: '#f7fee7', border: '#bef264', text: '#4d7c0f' },
+  { accent: '#ea580c', light: '#fff7ed', border: '#fed7aa', text: '#c2410c' },
 ];
-
-function deptColor(dept: string) {
-  let hash = 0;
-  for (let i = 0; i < dept.length; i++) hash = (hash * 31 + dept.charCodeAt(i)) & 0xffffffff;
-  return DEPT_COLORS[Math.abs(hash) % DEPT_COLORS.length];
-}
 
 function formatTime(timeStr: string) {
   try {
-    return new Date(timeStr).toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit', hour12: false
+    return new Date(timeStr).toLocaleTimeString('en-GB', {
+      hour: '2-digit', minute: '2-digit', hour12: false,
     });
   } catch {
     return timeStr;
@@ -145,31 +136,65 @@ export default function DraftTimetablePreview({
   const color = OPTION_COLORS[currentIndex] ?? OPTION_COLORS[0];
   const slots: SlotData[] = draft?.slots ?? [];
 
-  // ── Build period list from slots ──────────────────────────────────────────
+  // ── Build sorted period list ──────────────────────────────────────────────
   const periods = Array.from(lookupMaps.periods.entries())
     .map(([id, p]) => ({ id, ...p }))
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
+  // ── Assign colors to session groups ──────────────────────────────────────
+  const groupColorMap = useMemo(() => {
+    const map = new Map<string, typeof GROUP_COLORS[0]>();
+    let idx = 0;
+    slots.forEach(slot => {
+      if (slot.session_group_id && !map.has(slot.session_group_id)) {
+        map.set(slot.session_group_id, GROUP_COLORS[idx++ % GROUP_COLORS.length]);
+      }
+    });
+    return map;
+  }, [slots]);
+
+  // ── Identify continuation slot IDs ───────────────────────────────────────
+  const continuationSlotIds = useMemo(() => {
+    const cont = new Set<string>();
+    const grouped = new Map<string, SlotData[]>();
+
+    slots.forEach(slot => {
+      if (!slot.session_group_id) return;
+      const key = `${slot.day_of_week}-${slot.session_group_id}-${slot.class_id}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), slot]);
+    });
+
+    grouped.forEach(group => {
+      const sorted = [...group].sort((a, b) => {
+        const pa = periods.find(p => p.id === a.lesson_period_id);
+        const pb = periods.find(p => p.id === b.lesson_period_id);
+        if (!pa || !pb) return 0;
+        return new Date(pa.start_time).getTime() - new Date(pb.start_time).getTime();
+      });
+      sorted.slice(1).forEach(s => cont.add(s.id));
+    });
+    return cont;
+  }, [slots, periods]);
+
   // ── Index slots by day+period ─────────────────────────────────────────────
-  const slotIndex = new Map<string, SlotData[]>();
-  slots.forEach(slot => {
-    const key = `${slot.day_of_week}-${slot.lesson_period_id}`;
-    const existing = slotIndex.get(key) ?? [];
-    slotIndex.set(key, [...existing, slot]);
-  });
+  const slotIndex = useMemo(() => {
+    const index = new Map<string, SlotData[]>();
+    slots.forEach(slot => {
+      const key = `${slot.day_of_week}-${slot.lesson_period_id}`;
+      index.set(key, [...(index.get(key) ?? []), slot]);
+    });
+    return index;
+  }, [slots]);
 
   const getSlots = (day: number, periodId: number) =>
     slotIndex.get(`${day}-${periodId}`) ?? [];
 
   const navigate = useCallback((dir: 'prev' | 'next') => {
     setCurrentIndex(i =>
-      dir === 'next'
-        ? Math.min(i + 1, drafts.length - 1)
-        : Math.max(i - 1, 0)
+      dir === 'next' ? Math.min(i + 1, drafts.length - 1) : Math.max(i - 1, 0)
     );
   }, [drafts.length]);
 
-  // Keyboard navigation
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -184,8 +209,121 @@ export default function DraftTimetablePreview({
 
   const isSelected = selectedDraftId === draft.draft_id;
   const coveragePercent = draft.stats.trainer_assignments_processed > 0
-    ? Math.round((draft.stats.assignments_fully_scheduled / draft.stats.trainer_assignments_processed) * 100)
+    ? Math.min(100, Math.round(
+        (draft.stats.assignments_fully_scheduled / draft.stats.trainer_assignments_processed) * 100
+      ))
     : 100;
+
+  // ── Render a primary slot card ────────────────────────────────────────────
+  const renderSlotCard = (slot: SlotData) => {
+    const subject  = lookupMaps.subjects.get(slot.subject_id);
+    const cls      = lookupMaps.classes.get(slot.class_id);
+    const room     = lookupMaps.rooms.get(slot.room_id);
+    const trainer  = lookupMaps.trainers.get(slot.employee_id);
+
+    const gc = slot.session_group_id ? groupColorMap.get(slot.session_group_id) : null;
+
+    const groupSpan = slot.session_group_id
+      ? slots.filter(s =>
+          s.session_group_id === slot.session_group_id &&
+          s.day_of_week === slot.day_of_week &&
+          s.class_id === slot.class_id
+        ).length
+      : 1;
+
+    const cardStyle: React.CSSProperties = gc
+      ? { background: gc.light, borderLeft: `3px solid ${gc.accent}` }
+      : { background: '#ffffff', borderLeft: '3px solid #e5e7eb' };
+
+    return (
+      <div
+        key={slot.id}
+        className="rounded-md border border-gray-200 px-2 py-1.5 text-xs flex flex-col gap-1"
+        style={cardStyle}
+      >
+        {/* Top: code + badges */}
+        <div className="flex items-start justify-between gap-1">
+          <span className="font-mono font-bold text-[12px] text-gray-900 leading-tight">
+            {subject?.code ?? `SUB-${slot.subject_id}`}
+          </span>
+          <div className="flex items-center gap-1 shrink-0">
+            {groupSpan > 1 && gc && (
+              <span
+                className="inline-flex items-center gap-0.5 rounded text-[9px] font-bold px-1 py-0.5 text-white leading-none"
+                style={{ background: gc.accent }}
+              >
+                <Link2 className="h-2 w-2" />
+                {groupSpan === 2 ? 'DBL' : 'TRP'}
+              </span>
+            )}
+            {slot.is_online_session && (
+              <span className="inline-flex items-center gap-0.5 rounded text-[9px] font-bold px-1 py-0.5 bg-sky-500 text-white leading-none">
+                <Wifi className="h-2 w-2" />
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Subject name */}
+        <div className="text-[11px] text-gray-700 font-medium leading-tight line-clamp-2">
+          {subject?.name ?? '—'}
+        </div>
+
+        {/* Class */}
+        <div className="flex items-center gap-1 text-[11px] text-gray-600">
+          <BookOpen className="h-2.5 w-2.5 shrink-0 text-gray-400" />
+          <span
+            className="font-mono font-semibold text-[10px] px-1 py-0.5 rounded"
+            style={gc
+              ? { background: gc.light, color: gc.text, border: `1px solid ${gc.border}` }
+              : { background: '#f3f4f6', color: '#374151' }
+            }
+          >
+            {cls?.code ?? '—'}
+          </span>
+          <span className="truncate text-[10px] text-gray-500">{cls?.name ?? '—'}</span>
+        </div>
+
+        {/* Trainer */}
+        <div className="flex items-center gap-1 text-[11px] text-gray-600">
+          <User className="h-2.5 w-2.5 shrink-0 text-gray-400" />
+          <span className="truncate">{trainer?.name ?? '—'}</span>
+        </div>
+
+        {/* Room */}
+        <div className="flex items-center gap-1 text-[11px] text-gray-600">
+          <MapPin className="h-2.5 w-2.5 shrink-0 text-gray-400" />
+          <span className="truncate">{room?.name ?? '—'}</span>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Render a continuation cell ────────────────────────────────────────────
+  const renderContinuationCell = (slot: SlotData) => {
+    const subject = lookupMaps.subjects.get(slot.subject_id);
+    const gc = slot.session_group_id ? groupColorMap.get(slot.session_group_id) : null;
+
+    return (
+      <div
+        key={slot.id}
+        className="rounded-md border border-dashed px-2 py-2 flex items-center gap-2 text-[11px] min-h-[56px]"
+        style={{
+          background: gc?.light ?? '#f9fafb',
+          borderColor: gc?.border ?? '#d1d5db',
+          color: gc?.text ?? '#6b7280',
+        }}
+      >
+        <Link2 className="h-3 w-3 shrink-0 opacity-50" />
+        <div>
+          <div className="font-mono font-bold text-[11px]">
+            {subject?.code ?? '—'}
+          </div>
+          <div className="text-[10px] opacity-60 italic">continues…</div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -205,37 +343,29 @@ export default function DraftTimetablePreview({
               </DialogTitle>
             </div>
 
-            {/* Draft navigation */}
             <div className="flex items-center gap-2">
               <Button
-                variant="outline"
-                size="sm"
+                variant="outline" size="sm"
                 onClick={() => navigate('prev')}
                 disabled={currentIndex === 0}
                 className="h-8 w-8 p-0"
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-
-              {/* Dot indicators */}
               <div className="flex gap-1.5">
                 {drafts.map((_, i) => (
                   <button
                     key={i}
                     onClick={() => setCurrentIndex(i)}
-                    className={`h-2.5 w-2.5 rounded-full transition-all ${
-                      i === currentIndex
-                        ? 'scale-125'
-                        : 'bg-gray-300 hover:bg-gray-400'
-                    }`}
-                    style={i === currentIndex ? { backgroundColor: color.accent } : {}}
+                    className="h-2.5 w-2.5 rounded-full transition-all bg-gray-300 hover:bg-gray-400"
+                    style={i === currentIndex
+                      ? { backgroundColor: color.accent, transform: 'scale(1.25)' }
+                      : {}}
                   />
                 ))}
               </div>
-
               <Button
-                variant="outline"
-                size="sm"
+                variant="outline" size="sm"
                 onClick={() => navigate('next')}
                 disabled={currentIndex === drafts.length - 1}
                 className="h-8 w-8 p-0"
@@ -246,7 +376,7 @@ export default function DraftTimetablePreview({
           </div>
 
           {/* Stats strip */}
-          <div className="flex items-center gap-6 mt-2 text-xs text-gray-500 flex-wrap">
+          <div className="flex items-center gap-5 mt-2 text-xs text-gray-500 flex-wrap">
             <span className="flex items-center gap-1">
               <BookOpen className="h-3 w-3" />
               <strong className="text-gray-700">{draft.stats.slots_created}</strong> slots
@@ -261,23 +391,22 @@ export default function DraftTimetablePreview({
             </span>
             <span className="flex items-center gap-1">
               Coverage:
-              <strong
-                className={
-                  coveragePercent === 100 ? 'text-emerald-600' :
-                  coveragePercent >= 80 ? 'text-amber-600' : 'text-red-500'
-                }
-              >
+              <strong className={
+                coveragePercent === 100 ? 'text-emerald-600'
+                : coveragePercent >= 80 ? 'text-amber-600'
+                : 'text-red-500'
+              }>
                 {coveragePercent}%
               </strong>
             </span>
             {draft.skipped_count > 0 && (
-              <span className="text-amber-600">
-                ⚠ {draft.skipped_count} partially scheduled
-              </span>
+              <span className="text-amber-600">⚠ {draft.skipped_count} partially scheduled</span>
             )}
-            <span className="ml-auto text-gray-400 italic hidden sm:block">
-              ← → arrow keys to navigate
+            <span className="flex items-center gap-1 text-gray-400">
+              <Link2 className="h-3 w-3" />
+              DBL/TRP = double/triple block
             </span>
+            <span className="ml-auto text-gray-400 italic hidden sm:block">← → arrow keys to navigate</span>
           </div>
         </DialogHeader>
 
@@ -288,112 +417,68 @@ export default function DraftTimetablePreview({
               No periods found in this draft.
             </div>
           ) : (
-            <div
-              className="inline-grid gap-px bg-gray-200 rounded-lg overflow-hidden min-w-full border border-gray-200"
-              style={{
-                gridTemplateColumns: `180px repeat(${DAYS.length}, minmax(180px, 1fr))`,
-              }}
-            >
-              {/* Corner cell */}
-              <div className="bg-gray-800 p-3 flex items-center justify-center">
-                <Clock className="h-4 w-4 text-gray-400" />
-              </div>
-
-              {/* Day headers */}
-              {DAYS.map(day => (
-                <div
-                  key={day.value}
-                  className="bg-gray-800 p-3 text-center"
-                >
-                  <div className="text-white font-semibold text-sm">{day.label}</div>
-                </div>
-              ))}
-
-              {/* Period rows */}
-              {periods.map(period => (
-                <>
-                  {/* Period label */}
-                  <div
-                    key={`period-${period.id}`}
-                    className="bg-white p-3 flex flex-col justify-center border-r border-gray-200"
-                  >
-                    <div className="font-semibold text-sm text-gray-800">{period.name}</div>
-                    <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {formatTime(period.start_time)} – {formatTime(period.end_time)}
-                    </div>
-                  </div>
-
-                  {/* Day cells */}
-                  {DAYS.map(day => {
-                    const cellSlots = getSlots(day.value, period.id);
-
-                    return (
-                      <div
-                        key={`${day.value}-${period.id}`}
-                        className="bg-white p-1.5 min-h-[100px] flex flex-col gap-1"
+            <div className="rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <table className="w-full border-collapse text-sm bg-white" style={{ minWidth: 900 }}>
+                <thead>
+                  <tr className="bg-gray-800 text-white">
+                    <th className="w-[130px] px-3 py-3 text-left font-semibold text-xs tracking-wide text-gray-300 border-r border-gray-700">
+                      Period
+                    </th>
+                    {DAYS.map(day => (
+                      <th
+                        key={day.value}
+                        className="px-3 py-3 text-center font-semibold text-sm border-r border-gray-700 last:border-r-0"
                       >
-                        {cellSlots.length === 0 ? (
-                          <div className="flex-1 flex items-center justify-center text-gray-300 text-xs border border-dashed border-gray-200 rounded-md">
-                            Free
-                          </div>
-                        ) : (
-                          cellSlots.map(slot => {
-                            const subject = lookupMaps.subjects.get(slot.subject_id);
-                            const cls = lookupMaps.classes.get(slot.class_id);
-                            const room = lookupMaps.rooms.get(slot.room_id);
-                            const trainer = lookupMaps.trainers.get(slot.employee_id);
-                            const dept = subject?.department ?? '';
-                            const colorClass = deptColor(dept);
+                        {day.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
 
-                            return (
-                              <div
-                                key={slot.id}
-                                className={`rounded-md border p-2 flex flex-col gap-1 text-xs ${colorClass}`}
-                              >
-                                {/* Subject code + online badge */}
-                                <div className="flex items-start justify-between gap-1">
-                                  <span className="font-bold font-mono text-[11px] leading-tight">
-                                    {subject?.code ?? `SUB-${slot.subject_id}`}
-                                  </span>
-                                  {slot.is_online_session && (
-                                    <span className="flex items-center gap-0.5 text-[9px] bg-blue-100 text-blue-700 border border-blue-200 rounded px-1 py-0.5 shrink-0">
-                                      <Wifi className="h-2.5 w-2.5" />Online
-                                    </span>
-                                  )}
-                                </div>
+                <tbody>
+                  {periods.map((period, pIdx) => (
+                    <tr key={period.id} className={pIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'}>
+                      {/* Period label */}
+                      <td className="px-3 py-2 border-r border-b border-gray-200 align-top bg-gray-50">
+                        <div className="font-semibold text-xs text-gray-800">{period.name}</div>
+                        <div className="flex items-center gap-1 text-[11px] text-gray-500 mt-0.5">
+                          <Clock className="h-2.5 w-2.5 shrink-0" />
+                          {formatTime(period.start_time)}
+                          <span className="text-gray-400">–</span>
+                          {formatTime(period.end_time)}
+                        </div>
+                      </td>
 
-                                {/* Subject name */}
-                                <div className="font-medium leading-tight line-clamp-2 text-[11px]">
-                                  {subject?.name ?? '—'}
-                                </div>
+                      {/* Day cells */}
+                      {DAYS.map(day => {
+                        const cellSlots = getSlots(day.value, period.id);
 
-                                {/* Class */}
-                                <div className="flex items-center gap-1 opacity-80">
-                                  <BookOpen className="h-2.5 w-2.5 shrink-0" />
-                                  <span className="truncate">{cls?.code ?? '—'} · {cls?.name ?? '—'}</span>
-                                </div>
-
-                                {/* Trainer */}
-                                <div className="flex items-center gap-1 opacity-80">
-                                  <User className="h-2.5 w-2.5 shrink-0" />
-                                  <span className="truncate">{trainer?.name ?? '—'}</span>
-                                </div>
-
-                                {/* Room */}
-                                <div className="flex items-center gap-1 opacity-80">
-                                  <MapPin className="h-2.5 w-2.5 shrink-0" />
-                                  <span className="truncate">{room?.name ?? '—'}</span>
-                                </div>
+                        return (
+                          <td
+                            key={`${day.value}-${period.id}`}
+                            className="px-1.5 py-1.5 border-r border-b border-gray-200 last:border-r-0 align-top"
+                            style={{ minWidth: 160, verticalAlign: 'top' }}
+                          >
+                            {cellSlots.length === 0 ? (
+                              <div className="min-h-[64px] flex items-center justify-center text-[11px] text-gray-300">
+                                —
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    );
-                  })}
-                </>
-              ))}
+                            ) : (
+                              <div className="space-y-1">
+                                {cellSlots.map(slot =>
+                                  continuationSlotIds.has(slot.id)
+                                    ? renderContinuationCell(slot)
+                                    : renderSlotCard(slot)
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -403,24 +488,17 @@ export default function DraftTimetablePreview({
           <div className="text-sm text-gray-500">
             Viewing <strong style={{ color: color.accent }}>{color.label}</strong> of {drafts.length} options
           </div>
-
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Close Preview
             </Button>
             <Button
-              onClick={() => {
-                onSelectDraft(draft.draft_id);
-                onOpenChange(false);
-              }}
-              className={`${isSelected ? 'bg-emerald-600 hover:bg-emerald-700' : ''}`}
+              onClick={() => { onSelectDraft(draft.draft_id); onOpenChange(false); }}
+              className={isSelected ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
               style={!isSelected ? { backgroundColor: color.accent } : {}}
             >
               {isSelected ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                  Selected
-                </>
+                <><CheckCircle2 className="h-4 w-4 mr-2" />Selected</>
               ) : (
                 <>Select {color.label}</>
               )}

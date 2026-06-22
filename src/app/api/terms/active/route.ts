@@ -22,8 +22,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log('✅ Fetching active term for user:', authResult.user.id);
-
     const today = new Date();
 
     // Find term that is active and current date falls within its range
@@ -43,7 +41,6 @@ export async function GET(request: NextRequest) {
     });
 
     if (!activeTerm) {
-      console.log('⚠️ No active term found for current date');
       return NextResponse.json(
         {
           success: false,
@@ -53,9 +50,7 @@ export async function GET(request: NextRequest) {
         { status: 404 }
       );
     }
-
-    console.log('✅ Active term found:', activeTerm.name);
-
+    
     return NextResponse.json({
       success: true,
       data: activeTerm

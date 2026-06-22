@@ -43,13 +43,23 @@ export async function GET(request: Request) {
     }
 
     // Verify token and check if admin
-    const decodedToken = await verifyJwtToken(token);
-    if (!decodedToken || decodedToken.role !== 'admin') {
-      return NextResponse.json(
-        { error: "Unauthorized: Admin access required" },
-        { status: 401 }
-      );
-    }
+const decodedToken = await verifyJwtToken(token);
+if (!decodedToken) {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
+
+const { searchParams } = new URL(request.url);
+const roleFilter = searchParams.get('role');
+const isTimetableAdmin = !!decodedToken.has_timetable_admin;
+
+if (decodedToken.role !== 'admin') {
+  if (!isTimetableAdmin || roleFilter !== 'employee') {
+    return NextResponse.json(
+      { error: "Unauthorized: Admin access required" },
+      { status: 401 }
+    );
+  }
+}
 
     const users = await db.users.findMany({
       include: {

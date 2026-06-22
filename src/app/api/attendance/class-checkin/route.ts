@@ -30,9 +30,9 @@ const mobileClassAttendanceSchema = z.object({
 
 // Geofence configuration
 const GEOFENCE = {
-    latitude: -0.028622,  
-    longitude: 37.658329,
-    radius: 100_000, // meters
+    latitude: -1.295926,
+    longitude: 36.734582,
+    radius: 130,
 };
 
 // Simplified authentication
@@ -182,8 +182,6 @@ async function markMissedClassesAsAbsent(currentTime: Date) {
             work_attendance_id: null
           }
         });
-        
-        console.log(`✅ Marked absence for trainer ${slot.employee_id}, slot ${slot.id}`);
       }
     }
   } catch (error) {

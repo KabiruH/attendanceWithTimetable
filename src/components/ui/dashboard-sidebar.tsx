@@ -217,6 +217,16 @@ export function DashboardSidebar() {
       href: '/classes'
     },
     {
+  label: 'Trainer Load',
+  icon: <Users size={18} />,
+  href: '/timetable/trainer-load'
+},
+  {
+  label: 'Class Load',
+  icon: <BookOpen size={18} />,
+  href: '/timetable/class-load'
+},
+    {
       label: 'Online Classes',
       icon: <Laptop size={18} />,
       href: '/timetable/online-classes'
