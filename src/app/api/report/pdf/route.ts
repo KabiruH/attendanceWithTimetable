@@ -501,7 +501,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { startDate, endDate } = body;
+const { startDate, endDate, includeInactive = false } = body;
 
     const dateFilter: any = {};
     if (startDate) {
@@ -517,33 +517,40 @@ export async function POST(request: NextRequest) {
     };
 
     let attendanceData: AttendanceRecord[];
+
+    // Exclude inactive users unless explicitly requested
+const userFilter = includeInactive ? {} : { users: { is_active: true } };
    
     if (user.role === 'admin') {
-      attendanceData = await db.attendance.findMany({
-        where: Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {},
-        include: {
-          users: {
-            select: { id: true, name: true },
-          },
-        },
-        orderBy: [
-          { date: 'desc' },
-          { users: { name: 'asc' } },
-        ],
-      });
+   attendanceData = await db.attendance.findMany({
+  where: {
+    ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+    ...userFilter,
+  },
+  include: {
+    users: {
+      select: { id: true, name: true },
+    },
+  },
+  orderBy: [
+    { date: 'desc' },
+    { users: { name: 'asc' } },
+  ],
+});
     } else {
-      attendanceData = await db.attendance.findMany({
-        where: {
-          employee_id: user.id,
-          ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-        },
-        include: {
-          users: {
-            select: { id: true, name: true },
-          },
-        },
-        orderBy: { date: 'desc' },
-      });
+  attendanceData = await db.attendance.findMany({
+  where: {
+    employee_id: user.id,
+    ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+    ...userFilter,
+  },
+  include: {
+    users: {
+      select: { id: true, name: true },
+    },
+  },
+  orderBy: { date: 'desc' },
+});
     }
 
     // ✅ Filter out weekends before any processing
