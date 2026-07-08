@@ -444,6 +444,7 @@ model users {
   webauthncredentialchallenge webauthncredentialchallenge?
   webauthncredentials         webauthncredentials[]
   timetabledrafts  timetabledrafts[]
+  kiosk_devices kiosk_devices[]
   
   // Block relations - changed User to users
   blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
@@ -565,4 +566,17 @@ model subjectcombinations {
   @@index([subject_id])
   @@index([primary_assignment_id])
   @@index([combined_assignment_id])
+}
+
+model kiosk_devices {
+  id           Int      @id @default(autoincrement())
+  device_uuid  String   @unique @db.VarChar(100)
+  device_name  String   @db.VarChar(100)
+  device_token String   @unique @db.VarChar(255)
+  registered_by Int     // users.id of admin who registered it
+  is_active    Boolean  @default(true)
+  last_seen_at DateTime?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @default(now())
+  users        users    @relation(fields: [registered_by], references: [id])
 }
