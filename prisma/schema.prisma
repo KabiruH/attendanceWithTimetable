@@ -445,7 +445,9 @@ model users {
   webauthncredentials         webauthncredentials[]
   timetabledrafts  timetabledrafts[]
   kiosk_devices kiosk_devices[]
-  
+  kiosk_settings      kiosk_settings[]
+  kiosk_settings_log  kiosk_settings_log[]
+
   // Block relations - changed User to users
   blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
   users_blocked           users[]    @relation("BlockedUsers")
@@ -579,4 +581,29 @@ model kiosk_devices {
   created_at   DateTime @default(now())
   updated_at   DateTime @default(now())
   users        users    @relation(fields: [registered_by], references: [id])
+}
+
+model kiosk_settings {
+  id              Int       @id @default(autoincrement())
+  nfc_enabled     Boolean   @default(true)
+  updated_at      DateTime  @default(now()) @updatedAt
+  updated_by      Int?
+  updated_by_name String?   @db.VarChar(100)
+  users           users?    @relation(fields: [updated_by], references: [id], onDelete: SetNull, map: "KioskSettings_updated_by_fkey")
+
+  @@index([updated_by], map: "KioskSettings_updated_by_idx")
+}
+
+model kiosk_settings_log {
+  id              Int      @id @default(autoincrement())
+  setting         String   @db.VarChar(50)   // e.g. "nfc_enabled"
+  new_value       String   @db.VarChar(20)   // "true" / "false"
+  changed_by      Int
+  changed_by_name String   @db.VarChar(100)
+  created_at      DateTime @default(now())
+  users           users    @relation(fields: [changed_by], references: [id], onDelete: Cascade, map: "KioskSettingsLog_changed_by_fkey")
+
+  @@index([changed_by], map: "KioskSettingsLog_changed_by_idx")
+  @@index([created_at], map: "KioskSettingsLog_created_at_idx")
+  @@index([setting], map: "KioskSettingsLog_setting_idx")
 }
