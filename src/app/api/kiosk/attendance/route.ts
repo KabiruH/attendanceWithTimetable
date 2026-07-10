@@ -13,9 +13,9 @@ import { Prisma } from '@prisma/client';
 // Mirrors the time constraints in your existing attendance route
 // Adjusted for Africa/Nairobi (server is UTC-3 offset from your comments)
 const TIME_CONSTRAINTS = {
-  CHECK_IN_START: 4,   // 7 AM Nairobi
-  WORK_START: 5,       // 9 AM Nairobi (late threshold)
-  WORK_END: 15,        // 6 PM Nairobi (auto checkout)
+  CHECK_IN_START: 7,   // 7 AM Nairobi
+  WORK_START: 9,       // 9 AM Nairobi (late threshold)
+  WORK_END: 18,        // 6 PM Nairobi (auto checkout)
 };
 
 // ── Single attendance record ───────────────────────────────────────────────────
