@@ -13,10 +13,18 @@ import { Prisma } from '@prisma/client';
 // Mirrors the time constraints in your existing attendance route
 // Adjusted for Africa/Nairobi (server is UTC-3 offset from your comments)
 const TIME_CONSTRAINTS = {
-  CHECK_IN_START: 7,   // 7 AM Nairobi
-  WORK_START: 9,       // 9 AM Nairobi (late threshold)
-  WORK_END: 18,        // 6 PM Nairobi (auto checkout)
+  CHECK_IN_START: 4,   // 7 AM Nairobi
+  WORK_START: 5,       // 9 AM Nairobi (late threshold)
+  WORK_END: 15,        // 6 PM Nairobi (auto checkout)
 };
+
+// Minimum minutes that must pass after check-in before a check-out is allowed.
+// Prevents a double-scan from instantly checking someone out.
+const MIN_CHECKOUT_GAP_MINUTES = 30;
+
+// The hour (Nairobi) before which an early check-out needs confirmation.
+// 17 = 5 PM. (Stored in server-offset terms via TIME_CONSTRAINTS if needed.)
+const EARLY_CHECKOUT_HOUR = 14; // 5 PM Nairobi given the -3 server offset
 
 // ── Single attendance record ───────────────────────────────────────────────────
 
@@ -25,9 +33,10 @@ async function processAttendance(
   action: 'check-in' | 'check-out',
   method: 'fingerprint' | 'nfc',
   device: { id: number; device_name: string; device_uuid: string },
-  recordedAt?: Date   // for offline queue: the actual time it happened on the tablet
-): Promise<{ success: boolean; message?: string; data?: any; error?: string }> {
-    
+  recordedAt?: Date,       // for offline queue: the actual time it happened on the tablet
+  confirmEarly = false     // set true when the user has confirmed an early check-out
+): Promise<{ success: boolean; message?: string; data?: any; error?: string; code?: string }> {
+
   const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
   const currentTime = recordedAt || nowInKenya.toJSDate();
   const currentDate = DateTime.fromJSDate(currentTime)
@@ -78,7 +87,8 @@ async function processAttendance(
       if (existingAttendance.check_in_time) {
         return {
           success: false,
-          error: `${user.name} has already checked in today`,
+          code: 'ALREADY_CHECKED_IN',
+          error: `${user.name}, you already checked in today`,
           data: {
             check_in_time: existingAttendance.check_in_time,
             status: existingAttendance.status,
@@ -101,6 +111,7 @@ async function processAttendance(
 
       return {
         success: true,
+        code: 'CHECKED_IN',
         message: status === 'Late'
           ? `Welcome ${user.name}. You are late.`
           : `Welcome ${user.name}!`,
@@ -133,6 +144,7 @@ async function processAttendance(
 
     return {
       success: true,
+      code: 'CHECKED_IN',
       message: status === 'Late'
         ? `Welcome ${user.name}. You are late.`
         : `Welcome ${user.name}!`,
@@ -147,14 +159,54 @@ async function processAttendance(
     });
 
     if (!existingAttendance || !existingAttendance.check_in_time) {
-      return { success: false, error: `${user.name} has not checked in today` };
+      return {
+        success: false,
+        code: 'NOT_CHECKED_IN',
+        error: `${user.name}, you have not checked in today`,
+      };
     }
 
     if (existingAttendance.check_out_time) {
       return {
         success: false,
-        error: `${user.name} has already checked out today`,
+        code: 'ALREADY_CHECKED_OUT',
+        error: `${user.name}, you already checked out today`,
         data: { check_out_time: existingAttendance.check_out_time },
+      };
+    }
+
+    // ── 30-minute guard: block checkout too soon after check-in ───────────────
+    const checkInTime = DateTime.fromJSDate(existingAttendance.check_in_time);
+    const nowTime = DateTime.fromJSDate(currentTime);
+    const minutesSinceCheckIn = nowTime.diff(checkInTime, 'minutes').minutes;
+
+    if (minutesSinceCheckIn < MIN_CHECKOUT_GAP_MINUTES) {
+      const checkInLabel = checkInTime
+        .setZone('Africa/Nairobi')
+        .toFormat('h:mm a');
+      const waitMore = Math.ceil(MIN_CHECKOUT_GAP_MINUTES - minutesSinceCheckIn);
+      return {
+        success: false,
+        code: 'TOO_SOON',
+        error: `${user.name}, you checked in at ${checkInLabel}. You can check out in about ${waitMore} min.`,
+        data: {
+          check_in_time: existingAttendance.check_in_time,
+          minutes_since_check_in: Math.floor(minutesSinceCheckIn),
+        },
+      };
+    }
+
+    // ── Early check-out confirmation (before configured hour) ─────────────────
+    // If it's before the early-checkout hour and the user hasn't confirmed,
+    // ask the tablet to confirm rather than checking out immediately.
+    const isEarly = currentTime.getHours() < EARLY_CHECKOUT_HOUR;
+    if (isEarly && !confirmEarly && !recordedAt) {
+      // recordedAt present = offline-queued, already committed → don't re-prompt
+      return {
+        success: false,
+        code: 'CONFIRM_EARLY_CHECKOUT',
+        error: `${user.name}, it's before 5 PM. Confirm early check-out?`,
+        data: { check_in_time: existingAttendance.check_in_time },
       };
     }
 
@@ -191,6 +243,7 @@ async function processAttendance(
 
     return {
       success: true,
+      code: 'CHECKED_OUT',
       message: `Goodbye ${user.name}. Checked out successfully.`,
       data: { ...updated, user_name: user.name },
     };
@@ -223,7 +276,8 @@ export async function POST(request: NextRequest) {
             record.action,
             record.method,
             deviceResult.device!,
-            record.recorded_at ? new Date(record.recorded_at) : undefined
+            record.recorded_at ? new Date(record.recorded_at) : undefined,
+            true   // queued records are already user-confirmed; don't re-prompt
           )
         )
       );
@@ -248,8 +302,8 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Single mode (live check-in/out) ────────────────────────────────────────
-    // Tablet sends: { user_id, action, method }
-    const { user_id, action, method } = body;
+    // Tablet sends: { user_id, action, method, confirm_early? }
+    const { user_id, action, method, confirm_early } = body;
 
     if (!user_id || !action || !method) {
       return NextResponse.json(
@@ -276,7 +330,9 @@ export async function POST(request: NextRequest) {
       user_id,
       action,
       method,
-      deviceResult.device!
+      deviceResult.device!,
+      undefined,
+      confirm_early === true
     );
 
     return NextResponse.json(result, {
@@ -328,19 +384,30 @@ export async function GET(request: NextRequest) {
       orderBy: { check_in_time: 'asc' },
     });
 
-    const formatted = records.map(r => ({
-      id: r.id,
-      user_id: r.users.id,
-      user_name: r.users.name,
-      user_id_number: r.users.id_number,
-      user_role: r.users.role,
-      user_department: r.users.department,
-      passport_photo: r.users.employees?.passport_photo || null,
-      date: r.date.toISOString().split('T')[0],
-      check_in_time: r.check_in_time?.toISOString() || null,
-      check_out_time: r.check_out_time?.toISOString() || null,
-      status: r.status,
-    }));
+    const formatted = records.map(r => {
+      // Pull the check-in/out method from the sessions JSON so the admin
+      // view can show HOW each person checked in (fingerprint vs nfc).
+      const sessions = (r.sessions as any[]) || [];
+      const firstSession = sessions[0] || {};
+      const checkInMethod = firstSession?.metadata?.method || null;
+      const checkOutMethod = firstSession?.checkout_metadata?.method || null;
+
+      return {
+        id: r.id,
+        user_id: r.users.id,
+        user_name: r.users.name,
+        user_id_number: r.users.id_number,
+        user_role: r.users.role,
+        user_department: r.users.department,
+        passport_photo: r.users.employees?.passport_photo || null,
+        date: r.date.toISOString().split('T')[0],
+        check_in_time: r.check_in_time?.toISOString() || null,
+        check_out_time: r.check_out_time?.toISOString() || null,
+        check_in_method: checkInMethod,      // 'fingerprint' | 'nfc' | null
+        check_out_method: checkOutMethod,    // 'fingerprint' | 'nfc' | null
+        status: r.status,
+      };
+    });
 
     const summary = {
       total: formatted.length,
