@@ -624,6 +624,9 @@ model leaverecords {
   cancelled_by Int?
   users        users     @relation("LeaveUser", fields: [user_id], references: [id], onDelete: Cascade)
   granted_by   users     @relation("LeaveGrantedBy", fields: [created_by], references: [id])
+  reviewed_by  Int?       // admin who approved/rejected
+  reviewed_at  DateTime?
+  review_note  String?    @db.Text  // rejection reason, visible to the applicant
 
   @@index([user_id, status])
   @@index([start_date, end_date])

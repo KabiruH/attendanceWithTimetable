@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import EmployeeTable from "@/components/employees/EmployeeTable";
 import LeaveManagement from "@/components/attendance/LeaveManagement";
+import LeaveApplication from "@/components/attendance/LeaveApplication";
 import { toast } from "sonner";
 
 // UPDATED: Add sessions support to Employee interface
@@ -42,14 +43,14 @@ interface AttendanceResponse {
   isCheckedIn?: boolean;
 }
 
-type AdminTab = 'records' | 'leave';
+type AttendanceTab = 'records' | 'leave';
 
 function Attendance() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [isCheckedIn, setIsCheckedIn] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<AdminTab>('records');
+  const [activeTab, setActiveTab] = useState<AttendanceTab>('records');
 
   const authenticateAndFetchAttendance = async () => {
     try {
@@ -141,34 +142,32 @@ function Attendance() {
         <p>Loading...</p>
       ) : (
         <div>
-          {/* Admin-only tabs: attendance records | leave & official duty */}
-          {userRole === "admin" && (
-            <div className="mb-6 border-b flex gap-6">
-              <button
-                onClick={() => setActiveTab('records')}
-                className={`pb-2 -mb-px font-medium ${
-                  activeTab === 'records'
-                    ? 'border-b-2 border-blue-600 text-blue-600'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Attendance records
-              </button>
-              <button
-                onClick={() => setActiveTab('leave')}
-                className={`pb-2 -mb-px font-medium ${
-                  activeTab === 'leave'
-                    ? 'border-b-2 border-blue-600 text-blue-600'
-                    : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Leave &amp; official duty
-              </button>
-            </div>
-          )}
+          {/* Tabs: attendance records | leave (admins manage, employees apply) */}
+          <div className="mb-6 border-b flex gap-6">
+            <button
+              onClick={() => setActiveTab('records')}
+              className={`pb-2 -mb-px font-medium ${
+                activeTab === 'records'
+                  ? 'border-b-2 border-blue-600 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Attendance records
+            </button>
+            <button
+              onClick={() => setActiveTab('leave')}
+              className={`pb-2 -mb-px font-medium ${
+                activeTab === 'leave'
+                  ? 'border-b-2 border-blue-600 text-blue-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {userRole === "admin" ? "Leave & official duty" : "Apply for leave"}
+            </button>
+          </div>
 
-          {userRole === "admin" && activeTab === 'leave' ? (
-            <LeaveManagement />
+          {activeTab === 'leave' ? (
+            userRole === "admin" ? <LeaveManagement /> : <LeaveApplication />
           ) : (
             <div>
               {userRole === "admin" && <p className="text-xl mb-4">Viewing all employees</p>}
