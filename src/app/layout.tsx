@@ -45,7 +45,7 @@ export default function RootLayout({
           
 <Toaster
   richColors
-  position="top-right"
+  position="top-center"
   toastOptions={{
     className: "!w-[500px] !py-6 !px-6 !text-lg",
   }}
