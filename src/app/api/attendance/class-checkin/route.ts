@@ -1,10 +1,63 @@
 // app/api/attendance/class-checkin/route.ts - Online class support
+// TIMEZONE APPROACH: explicit EAT offset, same convention as the work
+// attendance route. We shift the current instant by +3h ONCE, then read it
+// ONLY with getUTC* methods (identical behavior on Vercel/UTC and local/EAT).
+// Timestamps stored in the DB remain real instants.
 import { NextRequest, NextResponse } from 'next/server';
-import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EAT time helpers — Kenya is UTC+3 with no daylight saving
+// ─────────────────────────────────────────────────────────────────────────────
+const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/** Shift a real instant to an "EAT wall clock" Date. Read it ONLY with getUTC*. */
+function toEAT(d: Date): Date {
+  return new Date(d.getTime() + EAT_OFFSET_MS);
+}
+
+/** Everything time-related the route needs, computed once per request. */
+function getEATClock() {
+  const utcNow = new Date();          // real instant — this is what we STORE
+  const eatNow = toEAT(utcNow);       // wall clock — this is what we COMPARE
+  return {
+    utcNow,
+    eatNow,
+    dateString: eatNow.toISOString().split('T')[0],       // Nairobi calendar date
+    currentDate: new Date(eatNow.toISOString().split('T')[0]), // for `date` columns
+    dayOfWeek: eatNow.getUTCDay(),                          // Nairobi weekday, 0 = Sunday
+  };
+}
+
+/**
+ * lessonperiods.start_time / end_time are naive time-of-day values; Prisma
+ * surfaces them as JS Dates pinned to UTC, so getUTC* returns the raw digits
+ * exactly as entered in the timetable (e.g. 08:00 for an 8 AM class).
+ * Place those digits on today's EAT wall-clock date so the result is directly
+ * comparable with eatNow.
+ * NOTE: if lesson times in the DB were ever stored pre-shifted, adjust here
+ * (single place) — verify by comparing start_time_display against the printed
+ * timetable after deploying.
+ */
+function lessonTimeToday(stored: Date, eatNow: Date): Date {
+  const d = new Date(eatNow);
+  d.setUTCHours(stored.getUTCHours(), stored.getUTCMinutes(), 0, 0);
+  return d;
+}
+
+/** Format an EAT-shifted Date as e.g. "8:00 AM" without relying on server locale/zone. */
+function formatEAT(d: Date): string {
+  let h = d.getUTCHours();
+  const m = d.getUTCMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Type definitions
 type TimetableSlotWithRelations = any & {
@@ -12,7 +65,7 @@ type TimetableSlotWithRelations = any & {
   subjects?: { name: string; code?: string; can_be_online?: boolean } | null;
   rooms?: { name: string } | null;
   lessonperiods?: { start_time: Date; end_time: Date; name: string } | null;
-  is_online_session?: boolean; // ✅ NEW
+  is_online_session?: boolean;
 };
 
 // Mobile request validation schema
@@ -23,7 +76,7 @@ const mobileClassAttendanceSchema = z.object({
     longitude: z.number(),
     accuracy: z.number(),
     timestamp: z.number(),
-  }).optional(), // ✅ CHANGED: Optional for online classes
+  }).optional(), // Optional for online classes
   biometric_verified: z.boolean(),
   timetable_slot_id: z.string(),
 });
@@ -32,19 +85,19 @@ const mobileClassAttendanceSchema = z.object({
 const GEOFENCE = {
     latitude: -1.295926,
     longitude: 36.734582,
-    radius: 130,
+    radius: 1060, // ← set to your increased value
 };
 
 // Simplified authentication
-async function getAuthenticatedUser(req: NextRequest): Promise<{ 
-  id: number; 
-  name: string; 
-  role: string; 
+async function getAuthenticatedUser(req: NextRequest): Promise<{
+  id: number;
+  name: string;
+  role: string;
   is_active: boolean;
   authMethod: 'jwt' | 'mobile_jwt';
 }> {
   const token = req.cookies.get('token')?.value;
-  
+
   if (token) {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { userId: number };
@@ -80,10 +133,13 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
   throw new Error('No valid authentication method provided');
 }
 
-// Geofence helpers
-function verifyGeofence(lat: number, lng: number): boolean {
+// Geofence helpers — GPS accuracy-aware
+function verifyGeofence(lat: number, lng: number, accuracy?: number): boolean {
   const distance = calculateDistance(lat, lng, GEOFENCE.latitude, GEOFENCE.longitude);
-  return distance <= GEOFENCE.radius;
+  // Allow for reported GPS accuracy (capped at 100m so a wildly inaccurate
+  // fix can't be used to check in from far away)
+  const buffer = Math.min(accuracy || 0, 100);
+  return distance <= GEOFENCE.radius + buffer;
 }
 
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -101,12 +157,11 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-// NEW: Function to mark absences for closed check-in windows
-async function markMissedClassesAsAbsent(currentTime: Date) {
+// Mark absences for closed check-in windows (EAT-correct)
+async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) {
   try {
-    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
-    const dayOfWeek = currentTime.getDay();
-    
+    const { eatNow, currentDate, dayOfWeek } = clock;
+
     // Get active term
     const activeTerm = await db.terms.findFirst({
       where: { is_active: true }
@@ -139,21 +194,13 @@ async function markMissedClassesAsAbsent(currentTime: Date) {
     for (const slot of todaySlots) {
       if (!slot.lessonperiods) continue;
 
-      const startTime = new Date(slot.lessonperiods.start_time);
-      const lessonStart = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth(),
-        currentDate.getDate(),
-        startTime.getHours(),
-        startTime.getMinutes(),
-        0
-      );
+      const lessonStart = lessonTimeToday(slot.lessonperiods.start_time, eatNow);
 
-      // Calculate when check-in window closes (start time + late threshold)
+      // Check-in window closes at start time + late threshold
       const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
 
       // Only process if check-in window has closed
-      if (currentTime < checkInWindowClosed) continue;
+      if (eatNow < checkInWindowClosed) continue;
 
       // Check if trainer has attendance record for this slot
       const existingAttendance = await db.classattendance.findFirst({
@@ -191,9 +238,7 @@ async function markMissedClassesAsAbsent(currentTime: Date) {
 
 
 // Get trainer's schedule for today from timetable
-async function getTodaySchedule(trainerId: number, currentDate: Date) {
-  const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
-  
+async function getTodaySchedule(trainerId: number, dayOfWeek: number) {
   // Get active term
   const activeTerm = await db.terms.findFirst({
     where: { is_active: true }
@@ -228,7 +273,7 @@ async function getTodaySchedule(trainerId: number, currentDate: Date) {
           name: true,
           code: true,
           department: true,
-          can_be_online: true // ✅ NEW: Include can_be_online flag
+          can_be_online: true
         }
       },
       rooms: {
@@ -258,52 +303,41 @@ async function getTodaySchedule(trainerId: number, currentDate: Date) {
   return slots;
 }
 
-// Check if trainer can check in to this slot
-function canCheckIn(slot: TimetableSlotWithRelations, currentTime: Date, settings: any) {
+// Check if trainer can check in to this slot (all math in EAT wall-clock space)
+function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: any) {
   if (!slot.lessonperiods) return { canCheckIn: false, reason: 'No lesson period found' };
 
-  const startTime = new Date(slot.lessonperiods.start_time);
-  const today = new Date(currentTime);
-  
-  // Combine today's date with lesson start time
-  const lessonStart = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate(),
-    startTime.getHours(),
-    startTime.getMinutes(),
-    0
-  );
+  const lessonStart = lessonTimeToday(slot.lessonperiods.start_time, eatNow);
 
-  // Calculate check-in window (default 15 minutes before)
+  // Check-in window (default 15 minutes before)
   const checkInWindow = settings?.attendance_check_in_window || 15;
   const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
-  
-  // Calculate late threshold (default 10 minutes after)
+
+  // Late threshold (default 10 minutes after)
   const lateThreshold = settings?.attendance_late_threshold || 10;
   const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
 
-  const now = currentTime.getTime();
+  const now = eatNow.getTime();
 
   if (now < earliestCheckIn.getTime()) {
     const minutesUntil = Math.ceil((earliestCheckIn.getTime() - now) / (60 * 1000));
-    return { 
-      canCheckIn: false, 
+    return {
+      canCheckIn: false,
       reason: `Too early. Check-in opens ${minutesUntil} minute${minutesUntil !== 1 ? 's' : ''} before class`,
-      earliestCheckIn 
+      earliestCheckIn
     };
   }
 
   if (now > latestCheckIn.getTime()) {
-    return { 
-      canCheckIn: false, 
+    return {
+      canCheckIn: false,
       reason: 'Check-in window closed. Class has started',
-      isLate: true 
+      isLate: true
     };
   }
 
   const isLate = now > lessonStart.getTime();
-  
+
   return { canCheckIn: true, isLate };
 }
 
@@ -311,26 +345,25 @@ function canCheckIn(slot: TimetableSlotWithRelations, currentTime: Date, setting
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
-    const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
-    const currentTime = nowInKenya.toJSDate();
-    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
+    const clock = getEATClock();
+    const { utcNow, eatNow, currentDate, dayOfWeek } = clock;
 
-    // ✅ NEW: Mark absences for all trainers before returning schedule
-    await markMissedClassesAsAbsent(currentTime);
+    // Mark absences for all trainers before returning schedule
+    await markMissedClassesAsAbsent(clock);
 
     const url = new URL(request.url);
     const queryEmployeeId = url.searchParams.get('employee_id');
-    
-    const userIdToUse = user.role === 'admin' && queryEmployeeId ? 
+
+    const userIdToUse = user.role === 'admin' && queryEmployeeId ?
       Number(queryEmployeeId) : user.id;
 
     // Get timetable settings
     const settings = await db.timetablesettings.findFirst();
 
     // Get today's schedule from timetable
-    const todaySchedule = await getTodaySchedule(userIdToUse, currentTime);
+    const todaySchedule = await getTodaySchedule(userIdToUse, dayOfWeek);
 
-    // Get today's attendance records (INCLUDING ABSENCES NOW)
+    // Get today's attendance records (INCLUDING ABSENCES)
     const todayAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: userIdToUse,
@@ -342,7 +375,7 @@ export async function GET(request: NextRequest) {
         timetable_slot_id: true,
         check_in_time: true,
         check_out_time: true,
-        status: true, // Will now include 'Absent'
+        status: true,
         auto_checkout: true,
         location_verified: true,
         is_online_attendance: true
@@ -352,18 +385,29 @@ export async function GET(request: NextRequest) {
     // Enrich schedule with attendance status and check-in eligibility
     const enrichedSchedule = todaySchedule.map(slot => {
       const attendance = todayAttendance.find(att => att.timetable_slot_id === slot.id);
-      const checkInStatus = canCheckIn(slot, currentTime, settings);
-      
+      const checkInStatus = canCheckIn(slot, eatNow, settings);
+
+      // Pre-formatted Nairobi wall-clock times — the mobile app should display
+      // these verbatim instead of converting the raw start_time/end_time Dates
+      const startDisplay = slot.lessonperiods
+        ? formatEAT(lessonTimeToday(slot.lessonperiods.start_time, eatNow))
+        : null;
+      const endDisplay = slot.lessonperiods
+        ? formatEAT(lessonTimeToday(slot.lessonperiods.end_time, eatNow))
+        : null;
+
       return {
         ...slot,
         attendance,
-        canCheckIn: attendance?.status === 'Absent' ? false : checkInStatus.canCheckIn, // ✅ Can't check in if marked absent
+        canCheckIn: attendance?.status === 'Absent' ? false : checkInStatus.canCheckIn,
         checkInReason: attendance?.status === 'Absent' ? 'Marked as absent' : checkInStatus.reason,
         isLate: checkInStatus.isLate || false,
         hasCheckedIn: !!attendance?.check_in_time,
         hasCheckedOut: !!attendance?.check_out_time,
-        isAbsent: attendance?.status === 'Absent', // ✅ NEW: Flag for UI
-        isOnlineSession: slot.is_online_session || false
+        isAbsent: attendance?.status === 'Absent',
+        isOnlineSession: slot.is_online_session || false,
+        start_time_display: startDisplay,
+        end_time_display: endDisplay
       };
     });
 
@@ -371,7 +415,8 @@ export async function GET(request: NextRequest) {
       success: true,
       schedule: enrichedSchedule,
       todayAttendance,
-      currentTime: currentTime.toISOString(),
+      currentTime: utcNow.toISOString(),
+      currentTimeDisplay: formatEAT(eatNow), // Nairobi wall clock for the app
       settings: {
         check_in_window: settings?.attendance_check_in_window || 15,
         late_threshold: settings?.attendance_late_threshold || 10,
@@ -397,10 +442,10 @@ export async function POST(request: NextRequest) {
     const user = await getAuthenticatedUser(request);
 
     const { timetable_slot_id, action, type } = body;
-    
+
     // Normalize action
-    const normalizedAction = type === 'class_checkin' ? 'check-in' : 
-                            type === 'class_checkout' ? 'check-out' : 
+    const normalizedAction = type === 'class_checkin' ? 'check-in' :
+                            type === 'class_checkout' ? 'check-out' :
                             action;
 
     if (!timetable_slot_id) {
@@ -410,9 +455,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
-    const currentTime = nowInKenya.toJSDate();
-    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
+    const clock = getEATClock();
+    const { utcNow, eatNow, currentDate, dayOfWeek } = clock;
+    const currentTime = utcNow; // real instant — stored in DB
 
     // Get timetable slot with all details INCLUDING is_online_session
     const slot = await db.timetableslots.findUnique({
@@ -431,7 +476,7 @@ export async function POST(request: NextRequest) {
             id: true,
             name: true,
             code: true,
-            can_be_online: true // ✅ NEW
+            can_be_online: true
           }
         },
         rooms: {
@@ -465,7 +510,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ✅ NEW: Check if this is an online session
+    // Check if this is an online session
     const isOnlineSession = slot.is_online_session === true;
 
     // Verify this slot belongs to the trainer
@@ -476,16 +521,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify slot is for today
-    const todayDayOfWeek = currentTime.getDay();
-    if (slot.day_of_week !== todayDayOfWeek) {
+    // Verify slot is for today (EAT calendar day, not server-local)
+    if (slot.day_of_week !== dayOfWeek) {
       return NextResponse.json(
         { success: false, error: 'This class is not scheduled for today' },
         { status: 400 }
       );
     }
 
-    // ✅ NEW: Validate based on session type
+    // Validate based on session type
     if (isMobileRequest) {
       if (isOnlineSession) {
         // Online session: Only biometric required, location optional
@@ -508,13 +552,14 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Verify location for physical classes
+        // Verify location for physical classes (accuracy-aware)
         if (body.location) {
           const isWithinGeofence = verifyGeofence(
             body.location.latitude,
-            body.location.longitude
+            body.location.longitude,
+            body.location.accuracy
           );
-          
+
           if (!isWithinGeofence) {
             const distance = calculateDistance(
               body.location.latitude,
@@ -522,7 +567,7 @@ export async function POST(request: NextRequest) {
               GEOFENCE.latitude,
               GEOFENCE.longitude
             );
-            
+
             return NextResponse.json({
               success: false,
               error: 'You must be within the school premises to record attendance',
@@ -544,7 +589,7 @@ export async function POST(request: NextRequest) {
     // Get settings
     const settings = await db.timetablesettings.findFirst();
 
-    // ✅ NEW: Work attendance check ONLY for physical classes
+    // Work attendance check ONLY for physical classes
     let workAttendance = null;
     if (!isOnlineSession) {
       const employee = await db.employees.findFirst({
@@ -560,7 +605,7 @@ export async function POST(request: NextRequest) {
 
       workAttendance = await db.attendance.findFirst({
         where: {
-          employee_id: employee.employee_id, 
+          employee_id: employee.employee_id,
           date: currentDate
         }
       });
@@ -584,19 +629,22 @@ export async function POST(request: NextRequest) {
     });
 
     if (normalizedAction === 'check-in') {
-      // Verify check-in window
-      const checkInStatus = canCheckIn(slot, currentTime, settings);
-      
-      if (!checkInStatus.canCheckIn) {
+      // Block re-check-in only if actually checked in — an auto-marked 'Absent'
+      // record (no check_in_time) should not permanently lock the trainer out
+      // if the window is somehow still open
+      if (existingAttendance?.check_in_time && !existingAttendance.check_out_time) {
         return NextResponse.json(
-          { success: false, error: checkInStatus.reason },
+          { success: false, error: 'You have already checked in to this class' },
           { status: 400 }
         );
       }
 
-      if (existingAttendance?.check_in_time && !existingAttendance.check_out_time) {
+      // Verify check-in window
+      const checkInStatus = canCheckIn(slot, eatNow, settings);
+
+      if (!checkInStatus.canCheckIn) {
         return NextResponse.json(
-          { success: false, error: 'You have already checked in to this class' },
+          { success: false, error: checkInStatus.reason },
           { status: 400 }
         );
       }
@@ -607,13 +655,14 @@ export async function POST(request: NextRequest) {
           trainer_id: user.id,
           date: currentDate,
           check_out_time: null,
+          check_in_time: { not: null }, // ignore auto-Absent rows (both times null)
           timetable_slot_id: { not: timetable_slot_id }
         },
         include: {
-          classes: { 
-            select: { 
-              name: true 
-            } 
+          classes: {
+            select: {
+              name: true
+            }
           }
         }
       });
@@ -634,34 +683,51 @@ export async function POST(request: NextRequest) {
         }
 
         return NextResponse.json(
-          { 
-            success: false, 
-            error: `You are already checked into ${activeSubjectName}. Please check out first.` 
+          {
+            success: false,
+            error: `You are already checked into ${activeSubjectName}. Please check out first.`
           },
           { status: 400 }
         );
       }
 
-      // ✅ NEW: Create attendance record with online flag
-      const attendance = await db.classattendance.create({
-        data: {
-          trainer_id: user.id,
-          class_id: slot.class_id,
-          date: currentDate,
-          check_in_time: currentTime,
-          timetable_slot_id: timetable_slot_id,
-          status: checkInStatus.isLate ? 'Late' : 'Present',
-          location_verified: isOnlineSession ? false : (isMobileRequest ? true : false), // ✅ NEW
-          is_online_attendance: isOnlineSession, // ✅ NEW: Mark as online attendance
-          check_in_latitude: isOnlineSession ? null : body.location?.latitude, // ✅ NEW: No GPS for online
-          check_in_longitude: isOnlineSession ? null : body.location?.longitude, // ✅ NEW: No GPS for online
-          work_attendance_id: workAttendance?.id || null // ✅ NEW: Can be null for online
-        }
-      });
+      // If an auto-Absent record exists but the window is still open, upgrade it
+      // to a real check-in instead of creating a duplicate row
+      let attendance;
+      if (existingAttendance && existingAttendance.status === 'Absent' && !existingAttendance.check_in_time) {
+        attendance = await db.classattendance.update({
+          where: { id: existingAttendance.id },
+          data: {
+            check_in_time: currentTime,
+            status: checkInStatus.isLate ? 'Late' : 'Present',
+            location_verified: isOnlineSession ? false : (isMobileRequest ? true : false),
+            is_online_attendance: isOnlineSession,
+            check_in_latitude: isOnlineSession ? null : body.location?.latitude,
+            check_in_longitude: isOnlineSession ? null : body.location?.longitude,
+            work_attendance_id: workAttendance?.id || null
+          }
+        });
+      } else {
+        attendance = await db.classattendance.create({
+          data: {
+            trainer_id: user.id,
+            class_id: slot.class_id,
+            date: currentDate,
+            check_in_time: currentTime,
+            timetable_slot_id: timetable_slot_id,
+            status: checkInStatus.isLate ? 'Late' : 'Present',
+            location_verified: isOnlineSession ? false : (isMobileRequest ? true : false),
+            is_online_attendance: isOnlineSession,
+            check_in_latitude: isOnlineSession ? null : body.location?.latitude,
+            check_in_longitude: isOnlineSession ? null : body.location?.longitude,
+            work_attendance_id: workAttendance?.id || null
+          }
+        });
+      }
 
       const subjectName = slot.subjects?.name || slot.classes?.name;
       const sessionType = isOnlineSession ? ' (Online)' : '';
-      const responseMessage = checkInStatus.isLate 
+      const responseMessage = checkInStatus.isLate
         ? `Checked in late to ${subjectName}${sessionType}`
         : `Checked in to ${subjectName}${sessionType}`;
 
@@ -676,10 +742,11 @@ export async function POST(request: NextRequest) {
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
             room_name: slot.rooms?.name,
-            location_verified: !isOnlineSession && isMobileRequest, // ✅ NEW
-            is_online_session: isOnlineSession, // ✅ NEW
+            location_verified: !isOnlineSession && isMobileRequest,
+            is_online_session: isOnlineSession,
             is_late: checkInStatus.isLate,
-            check_in_time: currentTime
+            check_in_time: currentTime,
+            check_in_time_display: formatEAT(eatNow)
           }
         });
       } else {
@@ -693,7 +760,7 @@ export async function POST(request: NextRequest) {
             room: slot.rooms,
             check_in_time: currentTime.toISOString(),
             is_late: checkInStatus.isLate,
-            is_online_session: isOnlineSession // ✅ NEW
+            is_online_session: isOnlineSession
           }
         });
       }
@@ -713,20 +780,19 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Calculate duration
+      // Calculate duration (real instants — no shift needed for differences)
       const timeDiff = currentTime.getTime() - existingAttendance.check_in_time.getTime();
       const minutesDiff = Math.floor(timeDiff / (1000 * 60));
       const hoursDiff = Math.floor(minutesDiff / 60);
       const remainingMinutes = minutesDiff % 60;
 
-      // ✅ NEW: Update with online-aware GPS data
       await db.classattendance.update({
         where: { id: existingAttendance.id },
         data: {
           check_out_time: currentTime,
           auto_checkout: false,
-          check_out_latitude: isOnlineSession ? null : body.location?.latitude, // ✅ NEW
-          check_out_longitude: isOnlineSession ? null : body.location?.longitude // ✅ NEW
+          check_out_latitude: isOnlineSession ? null : body.location?.latitude,
+          check_out_longitude: isOnlineSession ? null : body.location?.longitude
         }
       });
 
@@ -744,9 +810,10 @@ export async function POST(request: NextRequest) {
             timetable_slot_id,
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
-            location_verified: !isOnlineSession && isMobileRequest, // ✅ NEW
-            is_online_session: isOnlineSession, // ✅ NEW
+            location_verified: !isOnlineSession && isMobileRequest,
+            is_online_session: isOnlineSession,
             check_out_time: currentTime,
+            check_out_time_display: formatEAT(eatNow),
             duration
           }
         });
@@ -755,7 +822,7 @@ export async function POST(request: NextRequest) {
           success: true,
           message: `Successfully checked out from ${subjectName}${sessionType}`,
           duration,
-          is_online_session: isOnlineSession // ✅ NEW
+          is_online_session: isOnlineSession
         });
       }
     } else {
@@ -767,14 +834,14 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('Class attendance error:', error);
-    
+
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { success: false, error: error.issues[0].message },
         { status: 400 }
       );
     }
-    
+
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Failed to record class attendance' },
       { status: 500 }
@@ -841,11 +908,11 @@ export async function PATCH(request: NextRequest) {
         }
       });
       subjectName = slot?.subjects?.name;
-      isOnlineSession = slot?.is_online_session || false; // ✅ NEW
+      isOnlineSession = slot?.is_online_session || false;
     }
 
-    const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
-    const currentTime = nowInKenya.toJSDate();
+    const clock = getEATClock();
+    const currentTime = clock.utcNow;
 
     await db.classattendance.update({
       where: { id: attendance_id },
@@ -856,7 +923,7 @@ export async function PATCH(request: NextRequest) {
     });
 
     const displayName = subjectName || attendance.classes.name;
-    const sessionType = isOnlineSession ? ' (Online)' : ''; // ✅ NEW
+    const sessionType = isOnlineSession ? ' (Online)' : '';
 
     return NextResponse.json({
       success: true,

@@ -447,6 +447,8 @@ model users {
   kiosk_devices kiosk_devices[]
   kiosk_settings      kiosk_settings[]
   kiosk_settings_log  kiosk_settings_log[]
+  leaves          leaverecords[] @relation("LeaveUser")
+  leaves_granted  leaverecords[] @relation("LeaveGrantedBy")
 
   // Block relations - changed User to users
   blocked_by_user         users?     @relation("BlockedUsers", fields: [blocked_by], references: [id], onDelete: SetNull)
@@ -606,4 +608,23 @@ model kiosk_settings_log {
   @@index([changed_by], map: "KioskSettingsLog_changed_by_idx")
   @@index([created_at], map: "KioskSettingsLog_created_at_idx")
   @@index([setting], map: "KioskSettingsLog_setting_idx")
+}
+
+model leaverecords {
+  id           Int       @id @default(autoincrement())
+  user_id      Int
+  type         String    @db.VarChar(20)   // 'official_duty' | 'leave'
+  start_date   DateTime  @db.Date
+  end_date     DateTime  @db.Date
+  reason       String?   @db.Text
+  status       String    @default("active") @db.VarChar(20) // 'active' | 'cancelled'
+  created_by   Int
+  created_at   DateTime  @default(now())
+  cancelled_at DateTime?
+  cancelled_by Int?
+  users        users     @relation("LeaveUser", fields: [user_id], references: [id], onDelete: Cascade)
+  granted_by   users     @relation("LeaveGrantedBy", fields: [created_by], references: [id])
+
+  @@index([user_id, status])
+  @@index([start_date, end_date])
 }

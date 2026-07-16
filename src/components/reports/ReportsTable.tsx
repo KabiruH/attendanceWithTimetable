@@ -33,55 +33,55 @@ const ReportsTable: React.FC<ReportsTableProps> = ({ data }) => {
     return cutoff;
   };
 
-// Helper function to safely parse sessions from data
-const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] => {
-  // If sessions exist and are an array, normalize them
-  if (record.sessions && Array.isArray(record.sessions)) {
-    return record.sessions.map((session) => ({
-      check_in: session.check_in instanceof Date 
-        ? session.check_in.toISOString() 
-        : session.check_in,
+  // Helper function to safely parse sessions from data
+  const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] => {
+    // If sessions exist and are an array, normalize them
+    if (record.sessions && Array.isArray(record.sessions)) {
+      return record.sessions.map((session) => ({
+        check_in: session.check_in instanceof Date
+          ? session.check_in.toISOString()
+          : session.check_in,
 
-      check_out: session.check_out
-        ? (session.check_out instanceof Date 
-            ? session.check_out.toISOString() 
+        check_out: session.check_out
+          ? (session.check_out instanceof Date
+            ? session.check_out.toISOString()
             : session.check_out)
-        : null,
+          : null,
 
-      metadata: session.metadata,
-      checkout_metadata: session.checkout_metadata
-    }));
-  }
+        metadata: session.metadata,
+        checkout_metadata: session.checkout_metadata
+      }));
+    }
 
-  // Fallback: Convert old format to sessions format
-  if (record.check_in_time) {
-    return [
-      {
-        check_in:
-          record.check_in_time instanceof Date
-            ? record.check_in_time.toISOString()
-            : record.check_in_time,
+    // Fallback: Convert old format to sessions format
+    if (record.check_in_time) {
+      return [
+        {
+          check_in:
+            record.check_in_time instanceof Date
+              ? record.check_in_time.toISOString()
+              : record.check_in_time,
 
-        check_out: record.check_out_time
-          ? record.check_out_time instanceof Date
-            ? record.check_out_time.toISOString()
-            : record.check_out_time
-          : null
-      }
-    ];
-  }
+          check_out: record.check_out_time
+            ? record.check_out_time instanceof Date
+              ? record.check_out_time.toISOString()
+              : record.check_out_time
+            : null
+        }
+      ];
+    }
 
-  return [];
-};
+    return [];
+  };
 
 
   // Helper function to check if a session should be considered ongoing
   const isSessionOngoing = (session: AttendanceSession, currentTime: Date): boolean => {
     if (!session.check_in || session.check_out) return false;
-    
+
     const checkInTime = new Date(session.check_in);
     const sixPM = getSixPMCutoff(checkInTime);
-    
+
     // If current time is past 6PM on the same day, session should not be ongoing
     return currentTime < sixPM;
   };
@@ -90,24 +90,24 @@ const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] =>
   const hasActiveSession = (record: AttendanceRecord): boolean => {
     const currentTime = new Date();
     const sessions = parseSessionsFromData(record);
-    
+
     // Check for active session in sessions data
     if (sessions.length > 0) {
-      return sessions.some((session: AttendanceSession) => 
+      return sessions.some((session: AttendanceSession) =>
         isSessionOngoing(session, currentTime)
       );
     }
-    
+
     // Fallback to old format
     const recordDate = new Date(record.date).toDateString();
     const today = new Date().toDateString();
     const isToday = recordDate === today;
-    
+
     if (!record.check_in_time || record.check_out_time || !isToday) return false;
-    
+
     const checkInTime = new Date(record.check_in_time);
     const sixPM = getSixPMCutoff(checkInTime);
-    
+
     return currentTime < sixPM;
   };
 
@@ -115,19 +115,19 @@ const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] =>
   const calculateHoursWorked = (record: AttendanceRecord): string => {
     const currentTime = new Date();
     const sessions = parseSessionsFromData(record);
-    
+
     // If sessions data exists, use that (new format)
     if (sessions.length > 0) {
       let totalMinutes = 0;
       let hasOngoingSession = false;
-      
+
       sessions.forEach((session: AttendanceSession) => {
         if (session.check_in) {
           const checkIn = new Date(session.check_in);
           const sixPM = getSixPMCutoff(checkIn);
-          
+
           let effectiveCheckOut: Date;
-          
+
           if (session.check_out) {
             // Use the actual check-out time, but cap it at 6PM
             const actualCheckOut = new Date(session.check_out);
@@ -143,38 +143,38 @@ const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] =>
               hasOngoingSession = true;
             }
           }
-          
+
           // Calculate minutes worked for this session
           const diffInMs = effectiveCheckOut.getTime() - checkIn.getTime();
           const diffInMinutes = Math.max(0, Math.floor(diffInMs / (1000 * 60)));
           totalMinutes += diffInMinutes;
         }
       });
-      
+
       const hours = Math.floor(totalMinutes / 60);
       const minutes = totalMinutes % 60;
-      
+
       return hasOngoingSession ? `${hours}h ${minutes}m *` : `${hours}h ${minutes}m`;
     }
-    
+
     // Fallback to old format for backward compatibility
     if (!record.check_in_time) return '-';
-    
+
     // Convert to string if it's a Date object
     const checkInStr = record.check_in_time instanceof Date ? record.check_in_time.toISOString() : record.check_in_time;
     const checkOutStr = record.check_out_time instanceof Date ? record.check_out_time.toISOString() : record.check_out_time;
-    
+
     // Check if it's today's date
     const recordDate = new Date(record.date).toDateString();
     const today = new Date().toDateString();
     const isToday = recordDate === today;
-    
+
     const checkIn = new Date(checkInStr);
     const sixPM = getSixPMCutoff(checkIn);
-    
+
     let effectiveCheckOut: Date;
     let isOngoing = false;
-    
+
     if (checkOutStr) {
       // Use the actual check-out time, but cap it at 6PM
       const actualCheckOut = new Date(checkOutStr);
@@ -192,16 +192,16 @@ const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] =>
     } else {
       return '-';
     }
-    
+
     // Only calculate if check-out is after check-in
     if (effectiveCheckOut <= checkIn) return '-';
-    
+
     const diffInMs = effectiveCheckOut.getTime() - checkIn.getTime();
     const diffInMinutes = Math.max(0, Math.floor(diffInMs / (1000 * 60)));
-    
+
     const hours = Math.floor(diffInMinutes / 60);
     const minutes = diffInMinutes % 60;
-    
+
     return isOngoing ? `${hours}h ${minutes}m *` : `${hours}h ${minutes}m`;
   };
 
@@ -224,6 +224,10 @@ const parseSessionsFromData = (record: AttendanceRecord): AttendanceSession[] =>
         return 'bg-yellow-500 hover:bg-yellow-600';
       default:
         return 'bg-gray-500 hover:bg-gray-600';
+      case 'on duty':
+        return 'bg-blue-500 hover:bg-blue-600';
+      case 'leave':
+        return 'bg-purple-500 hover:bg-purple-600';
     }
   };
 

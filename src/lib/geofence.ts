@@ -18,7 +18,7 @@ const CENTER_COORDINATES: Coordinates = {
     longitude: 36.734582,
 };
 
-const MAX_DISTANCE_METERS = 130; // 70m radius
+const MAX_DISTANCE_METERS = 1030; // 70m radius
 
 // Haversine formula to calculate distance between two points in meters
 function getDistanceInMeters(

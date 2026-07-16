@@ -213,8 +213,9 @@ export default function ReportsPage() {
       const statusMatch = filters.status === 'all' || record.status.toLowerCase() === filters.status.toLowerCase();
       const dateMatch = (!filters.startDate || record.date >= filters.startDate) &&
                        (!filters.endDate || record.date <= filters.endDate);
-      const notCheckedInMatch = !showNotCheckedIn || record.status.toLowerCase() !== 'present';
-
+const notCheckedInMatch = !showNotCheckedIn ||
+  !['present', 'on duty', 'leave'].includes(record.status.toLowerCase());
+  
       return nameMatch && statusMatch && dateMatch && notCheckedInMatch;
     });
 

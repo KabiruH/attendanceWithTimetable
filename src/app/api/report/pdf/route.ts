@@ -41,8 +41,21 @@ interface AnalyticsData {
     present: number;
     late: number;
     absent: number;
+    onDuty: number;
+    leave: number;
     totalHours: number;
   }>;
+}
+
+// Leave & official duty statuses (lowercased) — never counted as absent
+const LEAVE_STATUSES = ['on duty', 'leave'];
+
+// Title-case a status for display: 'on duty' → 'On Duty'
+function displayStatus(status: string): string {
+  return status
+    .split(' ')
+    .map(w => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
 }
 
 // Authenticate user using JWT
@@ -73,44 +86,44 @@ function getEmployeeName(record: AttendanceRecord): string {
 // Calculate hours worked with 6PM cutoff
 function calculateHours(record: AttendanceRecord): number {
   const currentTime = new Date();
-  
+
   // Use sessions data if available
   if (record.sessions && Array.isArray(record.sessions) && record.sessions.length > 0) {
     let totalMinutes = 0;
-    
+
     record.sessions.forEach((session: any) => {
       if (session.check_in) {
         const checkIn = new Date(session.check_in);
         const sixPM = new Date(checkIn);
         sixPM.setHours(18, 0, 0, 0);
-        
+
         let effectiveCheckOut: Date;
-        
+
         if (session.check_out) {
           const actualCheckOut = new Date(session.check_out);
           effectiveCheckOut = actualCheckOut > sixPM ? sixPM : actualCheckOut;
         } else {
           effectiveCheckOut = currentTime >= sixPM ? sixPM : currentTime;
         }
-        
+
         const diffInMs = effectiveCheckOut.getTime() - checkIn.getTime();
         const diffInMinutes = Math.max(0, Math.floor(diffInMs / (1000 * 60)));
         totalMinutes += diffInMinutes;
       }
     });
-    
+
     return totalMinutes / 60;
   }
-  
+
   // Fallback to old format
   if (!record.check_in_time) return 0;
-  
+
   const checkIn = new Date(record.check_in_time);
   const sixPM = new Date(checkIn);
   sixPM.setHours(18, 0, 0, 0);
-  
+
   let effectiveCheckOut: Date;
-  
+
   if (record.check_out_time) {
     const actualCheckOut = new Date(record.check_out_time);
     effectiveCheckOut = actualCheckOut > sixPM ? sixPM : actualCheckOut;
@@ -123,27 +136,28 @@ function calculateHours(record: AttendanceRecord): number {
       return 0;
     }
   }
-  
+
   const diffInMs = effectiveCheckOut.getTime() - checkIn.getTime();
   const diffInMinutes = Math.max(0, Math.floor(diffInMs / (1000 * 60)));
-  
+
   return diffInMinutes / 60;
 }
 
 // Calculate comprehensive analytics
 function calculateAnalytics(data: AttendanceRecord[]): AnalyticsData {
   const totalRecords = data.length;
-   
+
   // Status distribution - treat "not checked in" as "absent"
+  // 'on duty' and 'leave' are their own statuses, NEVER folded into absent
   const statusCounts: Record<string, number> = {};
   data.forEach(record => {
     let status = record.status.toLowerCase().trim();
-    
+
     // Treat "not checked in" as "absent" for reporting
     if (status.includes('not check') || status === 'not checked in') {
       status = 'absent';
     }
-    
+
     statusCounts[status] = (statusCounts[status] || 0) + 1;
   });
 
@@ -153,7 +167,7 @@ data.forEach(record => {
   if (record.check_in_time || (record.sessions && record.sessions[0]?.check_in)) {
     const checkInTime = record.sessions?.[0]?.check_in || record.check_in_time;
     const date = new Date(checkInTime);
-    
+
     // Convert UTC to Nairobi time properly
     const nairobiHour = new Date(date.toLocaleString('en-US', { timeZone: 'Africa/Nairobi' })).getHours();
     const timeSlot = `${nairobiHour.toString().padStart(2, '0')}:00`;
@@ -171,31 +185,38 @@ data.forEach(record => {
   const workHours = data
     .map(record => calculateHours(record))
     .filter(hours => hours > 0);
-  const avgWorkHours = workHours.length > 0 
-    ? workHours.reduce((sum, h) => sum + h, 0) / workHours.length 
+  const avgWorkHours = workHours.length > 0
+    ? workHours.reduce((sum, h) => sum + h, 0) / workHours.length
     : 0;
 
   // Employee-specific stats
   const employeeStats: Record<string, any> = {};
   data.forEach(record => {
     const empName = getEmployeeName(record);
-    
+
     if (!employeeStats[empName]) {
       employeeStats[empName] = {
         totalDays: 0,
         present: 0,
         late: 0,
         absent: 0,
+        onDuty: 0,
+        leave: 0,
         totalHours: 0,
       };
     }
-    
+
     employeeStats[empName].totalDays++;
-    
+
     let status = record.status.toLowerCase().trim();
-    
-    // Flexible matching for status
-    if (status.includes('not check') || status === 'not checked in' || status === 'absent') {
+
+    // Flexible matching for status — leave/official duty are counted in their
+    // own columns and are NOT absences
+    if (status === 'on duty') {
+      employeeStats[empName].onDuty++;
+    } else if (status === 'leave') {
+      employeeStats[empName].leave++;
+    } else if (status.includes('not check') || status === 'not checked in' || status === 'absent') {
       employeeStats[empName].absent++;
     } else if (status === 'present') {
       employeeStats[empName].present++;
@@ -204,7 +225,7 @@ data.forEach(record => {
     } else {
       employeeStats[empName].absent++;
     }
-    
+
     employeeStats[empName].totalHours += calculateHours(record);
   });
 
@@ -312,6 +333,9 @@ function generatePDF(
   doc.text('Executive Summary', 14, yPosition);
   yPosition += 8;
 
+  const onDutyTotal = analytics.statusCounts['on duty'] || 0;
+  const leaveTotal = analytics.statusCounts['leave'] || 0;
+
   autoTable(doc, {
     startY: yPosition,
     head: [['Metric', 'Value']],
@@ -320,6 +344,8 @@ function generatePDF(
       ['Average Work Hours', `${analytics.avgWorkHours} hours`],
       ['Peak Check-In Time', analytics.peakCheckInTime],
       ['Late Arrivals', `${analytics.lateCount} (${analytics.latePercentage}%)`],
+      ['Official Duty Days', onDutyTotal.toString()],
+      ['Leave Days', leaveTotal.toString()],
     ],
     theme: 'grid',
     headStyles: { fillColor: [30, 64, 175], textColor: 255 },
@@ -337,7 +363,7 @@ function generatePDF(
   yPosition += 8;
 
   const statusData = Object.entries(analytics.statusCounts).map(([status, count]) => [
-    status.charAt(0).toUpperCase() + status.slice(1),
+    displayStatus(status),
     count.toString(),
     `${analytics.statusPercentages[status]}%`
   ]);
@@ -394,25 +420,29 @@ function generatePDF(
       stats.present.toString(),
       stats.late.toString(),
       stats.absent.toString(),
+      stats.onDuty.toString(),
+      stats.leave.toString(),
       `${avgHours.toFixed(1)}h`
     ];
   });
 
   autoTable(doc, {
     startY: yPosition,
-    head: [['Employee', 'Total Days', 'Present', 'Late', 'Absent', 'Avg Hours']],
+    head: [['Employee', 'Days', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Avg Hours']],
     body: empData,
     theme: 'grid',
     headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 8 },
     alternateRowStyles: { fillColor: [243, 244, 246] },
     styles: { fontSize: 7, cellPadding: 2 },
     columnStyles: {
-      0: { cellWidth: 40, halign: 'left' },
-      1: { cellWidth: 20, halign: 'center' },
-      2: { cellWidth: 20, halign: 'center' },
-      3: { cellWidth: 20, halign: 'center' },
-      4: { cellWidth: 20, halign: 'center' },
-      5: { cellWidth: 20, halign: 'center' },
+      0: { cellWidth: 36, halign: 'left' },
+      1: { cellWidth: 17, halign: 'center' },
+      2: { cellWidth: 19, halign: 'center' },
+      3: { cellWidth: 15, halign: 'center' },
+      4: { cellWidth: 18, halign: 'center' },
+      5: { cellWidth: 19, halign: 'center' },
+      6: { cellWidth: 16, halign: 'center' },
+      7: { cellWidth: 21, halign: 'center' },
     },
   });
 
@@ -427,12 +457,13 @@ function generatePDF(
   const detailData = data.map(record => {
     const empName = getEmployeeName(record);
     const date = formatDate(record.date);
-    const checkIn = formatTime(record.check_in_time);
-    const checkOut = formatTime(record.check_out_time);
-    const status = record.status.charAt(0).toUpperCase() + record.status.slice(1);
+    const isLeaveDay = LEAVE_STATUSES.includes(record.status.toLowerCase().trim());
+    const checkIn = isLeaveDay ? '-' : formatTime(record.check_in_time);
+    const checkOut = isLeaveDay ? '-' : formatTime(record.check_out_time);
+    const status = displayStatus(record.status.toLowerCase().trim());
     const hours = calculateHours(record);
     const hoursStr = hours > 0 ? `${hours.toFixed(1)}h` : '-';
-    
+
     return [
       empName.substring(0, 20),
       date,
@@ -456,7 +487,7 @@ function generatePDF(
     }
 
     const chunk = detailData.slice(i, i + chunkSize);
-    
+
     autoTable(doc, {
       startY: yPosition,
       head: [['Employee', 'Date', 'Check In', 'Check Out', 'Status', 'Hours']],
@@ -492,7 +523,7 @@ function generatePDF(
 export async function POST(request: NextRequest) {
   try {
     const user = await authenticateUser(request);
-    
+
     if (!user) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -501,7 +532,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-const { startDate, endDate, includeInactive = false } = body;
+    const { startDate, endDate } = body;
 
     const dateFilter: any = {};
     if (startDate) {
@@ -518,39 +549,32 @@ const { startDate, endDate, includeInactive = false } = body;
 
     let attendanceData: AttendanceRecord[];
 
-    // Exclude inactive users unless explicitly requested
-const userFilter = includeInactive ? {} : { users: { is_active: true } };
-   
     if (user.role === 'admin') {
-   attendanceData = await db.attendance.findMany({
-  where: {
-    ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-    ...userFilter,
-  },
-  include: {
-    users: {
-      select: { id: true, name: true },
-    },
-  },
-  orderBy: [
-    { date: 'desc' },
-    { users: { name: 'asc' } },
-  ],
-});
+      attendanceData = await db.attendance.findMany({
+        where: Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {},
+        include: {
+          users: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: [
+          { date: 'desc' },
+          { users: { name: 'asc' } },
+        ],
+      });
     } else {
-  attendanceData = await db.attendance.findMany({
-  where: {
-    employee_id: user.id,
-    ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-    ...userFilter,
-  },
-  include: {
-    users: {
-      select: { id: true, name: true },
-    },
-  },
-  orderBy: { date: 'desc' },
-});
+      attendanceData = await db.attendance.findMany({
+        where: {
+          employee_id: user.id,
+          ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+        },
+        include: {
+          users: {
+            select: { id: true, name: true },
+          },
+        },
+        orderBy: { date: 'desc' },
+      });
     }
 
     // ✅ Filter out weekends before any processing
@@ -573,7 +597,7 @@ const userFilter = includeInactive ? {} : { users: { is_active: true } };
     );
 
     const filename = `attendance_report_${new Date().toISOString().split('T')[0]}.pdf`;
-    
+
     const arrayBuffer = pdfBuffer.buffer.slice(
       pdfBuffer.byteOffset,
       pdfBuffer.byteOffset + pdfBuffer.byteLength

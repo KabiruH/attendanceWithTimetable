@@ -27,6 +27,8 @@ const Filters: React.FC<FiltersProps> = ({
   const statusOptions: { value: AttendanceStatus; label: string }[] = [
     { value: 'all', label: 'All Status' },
     { value: 'present', label: 'Present' },
+    { value: 'on duty', label: 'On Duty' },
+    { value: 'leave', label: 'Leave' },
     { value: 'late', label: 'Late' },
     { value: 'absent', label: 'Absent' },
   ];

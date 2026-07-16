@@ -55,7 +55,7 @@ const TIME_CONSTRAINTS = {
 const GEOFENCE = {
     latitude: -1.295926,
     longitude: 36.734582,
-    radius: 130,
+    radius: 1060,
 };
 
 

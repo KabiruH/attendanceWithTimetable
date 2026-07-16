@@ -32,7 +32,7 @@ interface Employee {
   check_out_time: string | null;    // NEW: Changed from timeOut
   timeIn?: string | null;           // Keep for backward compatibility
   timeOut?: string | null;          // Keep for backward compatibility
-  status: 'present' | 'absent' | 'late' | 'Present' | 'Absent' | 'Late'; // Allow both cases
+  status: string;
   sessions?: AttendanceSession[];   // Sessions support
 }
 

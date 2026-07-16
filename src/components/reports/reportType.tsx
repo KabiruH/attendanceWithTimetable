@@ -65,7 +65,7 @@ export interface FilterState {
   endDate: string;
 }
 
-export type AttendanceStatus = 'all' | 'present' | 'late' | 'absent';
+export type AttendanceStatus = 'all' | 'present' | 'late' | 'absent' | 'on duty' | 'leave';
 
 // ✅ Helper type for API responses
 export interface AttendanceAPIResponse {
