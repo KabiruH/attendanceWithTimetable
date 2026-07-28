@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Edit, Trash2, Book, Power, Eye } from "lucide-react"; // Added Eye icon
+import { Edit, Trash2, Book, Power, Eye, Copy } from "lucide-react"; // Added Eye icon
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +42,8 @@ interface TermsTableProps {
   onDelete: (term: Term) => void;
   onToggleActive: (term: Term) => void;
   onAssignClasses: (term: Term) => void;
-  onViewClasses: (term: Term) => void; // New prop
+  onViewClasses: (term: Term) => void;
+  onCopySettings: (term: Term) => void; // ← here
 }
 
 export default function TermsTable({
@@ -51,7 +52,8 @@ export default function TermsTable({
   onDelete,
   onToggleActive,
   onAssignClasses,
-  onViewClasses, // New prop
+  onViewClasses, 
+  onCopySettings,
 }: TermsTableProps) {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -141,6 +143,10 @@ export default function TermsTable({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={() => onCopySettings(term)}>
+  <Copy className="mr-2 h-4 w-4" />
+  Copy Settings
+</DropdownMenuItem>
                       <DropdownMenuItem onClick={() => onViewClasses(term)}>
                         <Eye className="mr-2 h-4 w-4" />
                         View Classes
@@ -166,6 +172,7 @@ export default function TermsTable({
                         <Trash2 className="mr-2 h-4 w-4" />
                         Delete
                       </DropdownMenuItem>
+                      
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>

@@ -6,7 +6,8 @@ import { PlusCircle } from "lucide-react";
 import TermsTable from '@/components/terms/TermTable';
 import CreateTermDialog from '@/components/terms/CreateTermDialog';
 import AssignClassesDialog from '@/components/terms/AssignClassesDialog';
-import ViewTermClassesDialog from '@/components/terms/ViewTermClassesDialog'; // New import
+import ViewTermClassesDialog from '@/components/terms/ViewTermClassesDialog'; 
+import CopyTermSettingsDialog from '@/components/terms/CopyTermSettingsDialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,6 +52,10 @@ export default function TermsPage() {
   const [deletingTerm, setDeletingTerm] = useState<Term | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+//Copy settings dialog
+const [isCopySettingsDialogOpen, setIsCopySettingsDialogOpen] = useState(false);
+const [selectedTermForCopy, setSelectedTermForCopy] = useState<Term | null>(null);
+
   useEffect(() => {
     fetchTerms();
   }, []);
@@ -89,6 +94,11 @@ export default function TermsPage() {
     setSelectedTermForViewing(term);
     setIsViewClassesDialogOpen(true);
   };
+
+  const handleCopySettings = (term: Term) => {
+  setSelectedTermForCopy(term);
+  setIsCopySettingsDialogOpen(true);
+};
 
   const handleToggleActive = async (term: Term) => {
     try {
@@ -169,14 +179,15 @@ export default function TermsPage() {
         </Alert>
       )}
 
-      <TermsTable
-        terms={terms}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        onToggleActive={handleToggleActive}
-        onAssignClasses={handleAssignClasses}
-        onViewClasses={handleViewClasses} // New prop
-      />
+<TermsTable
+  terms={terms}
+  onEdit={handleEdit}
+  onDelete={handleDelete}
+  onToggleActive={handleToggleActive}
+  onAssignClasses={handleAssignClasses}
+  onViewClasses={handleViewClasses}
+  onCopySettings={handleCopySettings}   
+/>
 
       <CreateTermDialog
         open={isCreateDialogOpen}
@@ -193,6 +204,16 @@ export default function TermsPage() {
           onSuccess={fetchTerms}
         />
       )}
+
+      {selectedTermForCopy && (
+  <CopyTermSettingsDialog
+    open={isCopySettingsDialogOpen}
+    onOpenChange={setIsCopySettingsDialogOpen}
+    targetTerm={selectedTermForCopy}
+    terms={terms}
+    onSuccess={fetchTerms}
+  />
+)}
 
       {/* New View Classes Dialog */}
       {selectedTermForViewing && (
