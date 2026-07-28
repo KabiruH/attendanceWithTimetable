@@ -1,6 +1,7 @@
 // components/terms/CopyTermSettingsDialog.tsx
 'use client';
 import { useState, useEffect, useMemo } from 'react';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -162,20 +163,23 @@ export default function CopyTermSettingsDialog({
     }
   };
 
-  const handleExecute = async () => {
-    if (!sourceTermId || !summary) return;
-    setIsCopying(true);
-    setError('');
-    try {
-      await callApi('execute');
-      setIsDone(true);
-      onSuccess();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsCopying(false);
-    }
-  };
+const handleExecute = async () => {
+  if (!sourceTermId || !summary) return;
+  setIsCopying(true);
+  setError('');
+  try {
+    await callApi('execute');
+    setIsDone(true);
+  toast.success('Settings copied successfully', {
+  description: `${totalToCopy} item${totalToCopy !== 1 ? 's' : ''} copied from ${summary.source_term.name} into ${targetTerm.name}.`,
+});
+    onSuccess();
+  } catch (err: any) {
+    setError(err.message);
+  } finally {
+    setIsCopying(false);
+  }
+};
 
   const totalToCopy = summary
     ? summary.term_classes.to_copy +
