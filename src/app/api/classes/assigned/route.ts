@@ -58,14 +58,32 @@ export async function GET(request: NextRequest) {
     const user = await getAuthenticatedUser(request);
     const trainerId = user.id;
 
-    const currentDate = new Date(new Date().toDateString()); // Keeps only date, drops time
+    const currentDate = new Date(new Date().toDateString());
+
+    const now = new Date();
+const activeTerm = await db.terms.findFirst({
+  where: {
+    is_active: true,
+    start_date: { lte: now },
+    end_date: { gte: now }
+  },
+  orderBy: { start_date: 'desc' }
+});
+
+if (!activeTerm) {
+  return NextResponse.json({
+    success: true,
+    data: { classes: [], total_assigned: 0, date: currentDate }
+  });
+}
 
     // Get assigned classes for the trainer
-    const assignedClasses = await db.trainerclassassignments.findMany({
-      where: {
-        trainer_id: trainerId,
-        is_active: true
-      },
+  const assignedClasses = await db.trainerclassassignments.findMany({
+  where: {
+    trainer_id: trainerId,
+    term_id: activeTerm.id,
+    is_active: true
+  },
       include: {
         classes: {
           select: {

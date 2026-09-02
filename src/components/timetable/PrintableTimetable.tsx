@@ -526,16 +526,13 @@ export default function PrintableTimetable({
 
               <tbody>
                 {DAYS.map((day, dIdx) => {
-                  const date = new Date(currentWeek.start.getTime() + day.value * 24 * 60 * 60 * 1000);
                   const isLastDay = dIdx === DAYS.length - 1;
 
                   return (
                     <tr key={day.value} className={isLastDay ? '' : 'day-sep'}>
                       <td className="c-day">
                         <div style={{ fontWeight: 600 }}>{day.name}</div>
-                        <div style={{ fontWeight: 400, fontSize: 8, marginTop: 1 }}>
-                          {date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                        </div>
+                    
                       </td>
 
                       {colSpecs.map((col, i) => {
