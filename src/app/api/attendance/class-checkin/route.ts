@@ -1,8 +1,5 @@
 // app/api/attendance/class-checkin/route.ts - Online class support
-// TIMEZONE APPROACH: explicit EAT offset, same convention as the work
-// attendance route. We shift the current instant by +3h ONCE, then read it
-// ONLY with getUTC* methods (identical behavior on Vercel/UTC and local/EAT).
-// Timestamps stored in the DB remain real instants.
+
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db/db';
 import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
@@ -38,9 +35,6 @@ function getEATClock() {
  * exactly as entered in the timetable (e.g. 08:00 for an 8 AM class).
  * Place those digits on today's EAT wall-clock date so the result is directly
  * comparable with eatNow.
- * NOTE: if lesson times in the DB were ever stored pre-shifted, adjust here
- * (single place) — verify by comparing start_time_display against the printed
- * timetable after deploying.
  */
 function lessonTimeToday(stored: Date, eatNow: Date): Date {
   const d = new Date(eatNow);
@@ -55,6 +49,82 @@ function formatEAT(d: Date): string {
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
   return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+/** The current term: active flag AND today inside its date range. */
+async function getCurrentTerm() {
+  const now = new Date();
+  return db.terms.findFirst({
+    where: {
+      is_active: true,
+      start_date: { lte: now },
+      end_date: { gte: now }
+    },
+    orderBy: { start_date: 'desc' }
+  });
+}
+
+/**
+ * Group slots into sessions (doubles/triples collapse into one entry keyed on
+ * the earliest period). Returns one entry per session with its sibling slots.
+ */
+function groupIntoSessions<T extends { id: string; class_id: number; session_group_id: string | null; lessonperiods?: { start_time: Date; end_time: Date } | null }>(
+  slots: T[]
+): Array<{ primary: T; siblings: T[] }> {
+  const groups = new Map<string, T[]>();
+
+  slots.forEach(slot => {
+    const key = slot.session_group_id
+      ? `${slot.session_group_id}-${slot.class_id}`
+      : `single-${slot.id}`;
+    groups.set(key, [...(groups.get(key) ?? []), slot]);
+  });
+
+  return Array.from(groups.values()).map(group => {
+    const sorted = [...group].sort(
+      (a, b) =>
+        (a.lessonperiods?.start_time.getTime() ?? 0) -
+        (b.lessonperiods?.start_time.getTime() ?? 0)
+    );
+    return { primary: sorted[0], siblings: sorted };
+  });
+}
+
+/**
+ * For a single slot the user acted on, find the session it belongs to and
+ * return the primary (earliest) slot plus the session's last period.
+ */
+async function resolveSession(slot: any) {
+  if (!slot.session_group_id) {
+    return { primary: slot, siblings: [slot], lastPeriod: slot.lessonperiods };
+  }
+
+  const siblings = await db.timetableslots.findMany({
+    where: {
+      session_group_id: slot.session_group_id,
+      class_id: slot.class_id,
+      day_of_week: slot.day_of_week,
+      term_id: slot.term_id
+    },
+    include: { lessonperiods: true }
+  });
+
+  const sorted = siblings
+    .filter(s => s.lessonperiods)
+    .sort(
+      (a, b) =>
+        a.lessonperiods!.start_time.getTime() - b.lessonperiods!.start_time.getTime()
+    );
+
+  if (sorted.length === 0) {
+    return { primary: slot, siblings: [slot], lastPeriod: slot.lessonperiods };
+  }
+
+  return {
+    primary: sorted[0],
+    siblings: sorted,
+    lastPeriod: sorted[sorted.length - 1].lessonperiods
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -83,9 +153,9 @@ const mobileClassAttendanceSchema = z.object({
 
 // Geofence configuration
 const GEOFENCE = {
-    latitude: -1.295926,
-    longitude: 36.734582,
-    radius: 1060, // ← set to your increased value
+  latitude: -1.295926,
+  longitude: 36.734582,
+  radius: 1060,
 };
 
 // Simplified authentication
@@ -136,8 +206,6 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
 // Geofence helpers — GPS accuracy-aware
 function verifyGeofence(lat: number, lng: number, accuracy?: number): boolean {
   const distance = calculateDistance(lat, lng, GEOFENCE.latitude, GEOFENCE.longitude);
-  // Allow for reported GPS accuracy (capped at 100m so a wildly inaccurate
-  // fix can't be used to check in from far away)
   const buffer = Math.min(accuracy || 0, 100);
   return distance <= GEOFENCE.radius + buffer;
 }
@@ -157,23 +225,17 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-// Mark absences for closed check-in windows (EAT-correct)
+// Mark absences for closed check-in windows (EAT-correct, one per session)
 async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) {
   try {
     const { eatNow, currentDate, dayOfWeek } = clock;
 
-    // Get active term
-    const activeTerm = await db.terms.findFirst({
-      where: { is_active: true }
-    });
-
+    const activeTerm = await getCurrentTerm();
     if (!activeTerm) return;
 
-    // Get timetable settings
     const settings = await db.timetablesettings.findFirst();
     const lateThreshold = settings?.attendance_late_threshold || 10;
 
-    // Get all timetable slots for today
     const todaySlots = await db.timetableslots.findMany({
       where: {
         term_id: activeTerm.id,
@@ -190,11 +252,13 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
       }
     });
 
-    // Check each slot
-    for (const slot of todaySlots) {
-      if (!slot.lessonperiods) continue;
+    // Collapse doubles/triples — one absence per session, keyed on the first period
+    const sessions = groupIntoSessions(todaySlots as any[]);
 
-      const lessonStart = lessonTimeToday(slot.lessonperiods.start_time, eatNow);
+    for (const { primary } of sessions) {
+      if (!primary.lessonperiods) continue;
+
+      const lessonStart = lessonTimeToday(primary.lessonperiods.start_time, eatNow);
 
       // Check-in window closes at start time + late threshold
       const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
@@ -202,28 +266,25 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
       // Only process if check-in window has closed
       if (eatNow < checkInWindowClosed) continue;
 
-      // Check if trainer has attendance record for this slot
       const existingAttendance = await db.classattendance.findFirst({
         where: {
-          trainer_id: slot.employee_id,
-          class_id: slot.class_id,
+          trainer_id: primary.employee_id,
+          class_id: primary.class_id,
           date: currentDate,
-          timetable_slot_id: slot.id
+          timetable_slot_id: primary.id
         }
       });
 
-      // If no attendance record exists, mark as absent
       if (!existingAttendance) {
         await db.classattendance.create({
           data: {
-            trainer_id: slot.employee_id,
-            class_id: slot.class_id,
+            trainer_id: primary.employee_id,
+            class_id: primary.class_id,
             date: currentDate,
-            timetable_slot_id: slot.id,
+            timetable_slot_id: primary.id,
             status: 'Absent',
             location_verified: false,
-            is_online_attendance: slot.is_online_session || false,
-            // No check-in/check-out times for absences
+            is_online_attendance: primary.is_online_session || false,
             check_in_time: null,
             check_out_time: null,
             work_attendance_id: null
@@ -236,19 +297,14 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
   }
 }
 
-
 // Get trainer's schedule for today from timetable
 async function getTodaySchedule(trainerId: number, dayOfWeek: number) {
-  // Get active term
-  const activeTerm = await db.terms.findFirst({
-    where: { is_active: true }
-  });
+  const activeTerm = await getCurrentTerm();
 
   if (!activeTerm) {
     return [];
   }
 
-  // Get all timetable slots for this trainer for today
   const slots = await db.timetableslots.findMany({
     where: {
       employee_id: trainerId,
@@ -309,11 +365,9 @@ function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: an
 
   const lessonStart = lessonTimeToday(slot.lessonperiods.start_time, eatNow);
 
-  // Check-in window (default 15 minutes before)
   const checkInWindow = settings?.attendance_check_in_window || 15;
   const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
 
-  // Late threshold (default 10 minutes after)
   const lateThreshold = settings?.attendance_late_threshold || 10;
   const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
 
@@ -357,13 +411,10 @@ export async function GET(request: NextRequest) {
     const userIdToUse = user.role === 'admin' && queryEmployeeId ?
       Number(queryEmployeeId) : user.id;
 
-    // Get timetable settings
     const settings = await db.timetablesettings.findFirst();
 
-    // Get today's schedule from timetable
     const todaySchedule = await getTodaySchedule(userIdToUse, dayOfWeek);
 
-    // Get today's attendance records (INCLUDING ABSENCES)
     const todayAttendance = await db.classattendance.findMany({
       where: {
         trainer_id: userIdToUse,
@@ -382,22 +433,43 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Collapse doubles/triples into one entry per session
+    const sessions = groupIntoSessions(todaySchedule as any[]);
+
     // Enrich schedule with attendance status and check-in eligibility
-    const enrichedSchedule = todaySchedule.map(slot => {
-      const attendance = todayAttendance.find(att => att.timetable_slot_id === slot.id);
-      const checkInStatus = canCheckIn(slot, eatNow, settings);
+    const enrichedSchedule = sessions.map(({ primary, siblings }) => {
+      const lastPeriod = siblings[siblings.length - 1].lessonperiods;
+      const totalDuration = siblings.reduce(
+        (sum, s) => sum + (s.lessonperiods?.duration ?? 0), 0
+      );
+
+      // Attendance may sit on any slot of the session (older rows), so check all
+      const attendance = siblings
+        .map(s => todayAttendance.find(att => att.timetable_slot_id === s.id))
+        .find(Boolean);
+
+      const checkInStatus = canCheckIn(primary, eatNow, settings);
 
       // Pre-formatted Nairobi wall-clock times — the mobile app should display
       // these verbatim instead of converting the raw start_time/end_time Dates
-      const startDisplay = slot.lessonperiods
-        ? formatEAT(lessonTimeToday(slot.lessonperiods.start_time, eatNow))
+      const startDisplay = primary.lessonperiods
+        ? formatEAT(lessonTimeToday(primary.lessonperiods.start_time, eatNow))
         : null;
-      const endDisplay = slot.lessonperiods
-        ? formatEAT(lessonTimeToday(slot.lessonperiods.end_time, eatNow))
+      const endDisplay = lastPeriod
+        ? formatEAT(lessonTimeToday(lastPeriod.end_time, eatNow))
         : null;
 
       return {
-        ...slot,
+        ...primary,
+        lessonperiods: primary.lessonperiods
+          ? {
+              ...primary.lessonperiods,
+              end_time: lastPeriod?.end_time ?? primary.lessonperiods.end_time,
+              duration: totalDuration
+            }
+          : primary.lessonperiods,
+        sessionSpan: siblings.length,          // 1 = single, 2 = double, 3 = triple
+        sessionSlotIds: siblings.map(s => s.id),
         attendance,
         canCheckIn: attendance?.status === 'Absent' ? false : checkInStatus.canCheckIn,
         checkInReason: attendance?.status === 'Absent' ? 'Marked as absent' : checkInStatus.reason,
@@ -405,11 +477,13 @@ export async function GET(request: NextRequest) {
         hasCheckedIn: !!attendance?.check_in_time,
         hasCheckedOut: !!attendance?.check_out_time,
         isAbsent: attendance?.status === 'Absent',
-        isOnlineSession: slot.is_online_session || false,
+        isOnlineSession: primary.is_online_session || false,
         start_time_display: startDisplay,
         end_time_display: endDisplay
       };
-    });
+    }).sort((a, b) =>
+      (a.lessonperiods?.start_time.getTime() ?? 0) - (b.lessonperiods?.start_time.getTime() ?? 0)
+    );
 
     return NextResponse.json({
       success: true,
@@ -443,7 +517,6 @@ export async function POST(request: NextRequest) {
 
     const { timetable_slot_id, action, type } = body;
 
-    // Normalize action
     const normalizedAction = type === 'class_checkin' ? 'check-in' :
                             type === 'class_checkout' ? 'check-out' :
                             action;
@@ -459,7 +532,6 @@ export async function POST(request: NextRequest) {
     const { utcNow, eatNow, currentDate, dayOfWeek } = clock;
     const currentTime = utcNow; // real instant — stored in DB
 
-    // Get timetable slot with all details INCLUDING is_online_session
     const slot = await db.timetableslots.findUnique({
       where: { id: timetable_slot_id },
       include: {
@@ -510,7 +582,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if this is an online session
     const isOnlineSession = slot.is_online_session === true;
 
     // Verify this slot belongs to the trainer
@@ -529,10 +600,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Doubles/triples: one attendance record per session, keyed on the
+    // earliest slot. The trainer may tap any period of the session.
+    const session = await resolveSession(slot);
+    const attendanceSlotId = session.primary.id;
+    const windowSlot = session.primary;   // check-in window uses the first period
+
     // Validate based on session type
     if (isMobileRequest) {
       if (isOnlineSession) {
-        // Online session: Only biometric required, location optional
         if (!body.biometric_verified) {
           return NextResponse.json({
             success: false,
@@ -540,7 +616,6 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
       } else {
-        // Physical session: Both location and biometric required
         try {
           mobileClassAttendanceSchema.parse(body);
         } catch (error) {
@@ -552,7 +627,6 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Verify location for physical classes (accuracy-aware)
         if (body.location) {
           const isWithinGeofence = verifyGeofence(
             body.location.latitude,
@@ -576,7 +650,6 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Verify biometric
         if (!body.biometric_verified) {
           return NextResponse.json({
             success: false,
@@ -586,7 +659,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get settings
     const settings = await db.timetablesettings.findFirst();
 
     // Work attendance check ONLY for physical classes
@@ -618,20 +690,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check existing attendance
+    // Check existing attendance — against any slot in the session
     const existingAttendance = await db.classattendance.findFirst({
       where: {
         trainer_id: user.id,
         class_id: slot.class_id,
         date: currentDate,
-        timetable_slot_id: timetable_slot_id
+        timetable_slot_id: { in: session.siblings.map(s => s.id) }
       }
     });
 
     if (normalizedAction === 'check-in') {
       // Block re-check-in only if actually checked in — an auto-marked 'Absent'
       // record (no check_in_time) should not permanently lock the trainer out
-      // if the window is somehow still open
       if (existingAttendance?.check_in_time && !existingAttendance.check_out_time) {
         return NextResponse.json(
           { success: false, error: 'You have already checked in to this class' },
@@ -639,8 +710,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Verify check-in window
-      const checkInStatus = canCheckIn(slot, eatNow, settings);
+      // Verify check-in window — based on the session's FIRST period
+      const checkInStatus = canCheckIn(windowSlot, eatNow, settings);
 
       if (!checkInStatus.canCheckIn) {
         return NextResponse.json(
@@ -649,14 +720,14 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Check for active sessions in other classes
+      // Check for active sessions in other classes (exclude this whole session)
       const activeSession = await db.classattendance.findFirst({
         where: {
           trainer_id: user.id,
           date: currentDate,
           check_out_time: null,
           check_in_time: { not: null }, // ignore auto-Absent rows (both times null)
-          timetable_slot_id: { not: timetable_slot_id }
+          timetable_slot_id: { notIn: session.siblings.map(s => s.id) }
         },
         include: {
           classes: {
@@ -668,7 +739,6 @@ export async function POST(request: NextRequest) {
       });
 
       if (activeSession) {
-        // Get subject name from the active session's timetable slot
         let activeSubjectName = activeSession.classes.name;
         if (activeSession.timetable_slot_id) {
           const activeSlot = await db.timetableslots.findUnique({
@@ -714,7 +784,7 @@ export async function POST(request: NextRequest) {
             class_id: slot.class_id,
             date: currentDate,
             check_in_time: currentTime,
-            timetable_slot_id: timetable_slot_id,
+            timetable_slot_id: attendanceSlotId,   // session's first slot
             status: checkInStatus.isLate ? 'Late' : 'Present',
             location_verified: isOnlineSession ? false : (isMobileRequest ? true : false),
             is_online_attendance: isOnlineSession,
@@ -738,7 +808,8 @@ export async function POST(request: NextRequest) {
           data: {
             timestamp: currentTime,
             type: body.type,
-            timetable_slot_id,
+            timetable_slot_id: attendanceSlotId,
+            session_span: session.siblings.length,
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
             room_name: slot.rooms?.name,
@@ -760,7 +831,8 @@ export async function POST(request: NextRequest) {
             room: slot.rooms,
             check_in_time: currentTime.toISOString(),
             is_late: checkInStatus.isLate,
-            is_online_session: isOnlineSession
+            is_online_session: isOnlineSession,
+            session_span: session.siblings.length
           }
         });
       }
@@ -807,7 +879,7 @@ export async function POST(request: NextRequest) {
           data: {
             timestamp: currentTime,
             type: body.type,
-            timetable_slot_id,
+            timetable_slot_id: attendanceSlotId,
             class_name: slot.classes?.name,
             subject_name: slot.subjects?.name,
             location_verified: !isOnlineSession && isMobileRequest,

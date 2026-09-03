@@ -168,9 +168,15 @@ export async function GET(req: NextRequest) {
     ).filter(record => isWeekday(new Date(record.date))); // ✅ Filter weekends
 
     // Get active term
-    const activeTerm = await db.terms.findFirst({
-      where: { is_active: true }
-    });
+   const nowDate = new Date();
+const activeTerm = await db.terms.findFirst({
+  where: {
+    is_active: true,
+    start_date: { lte: nowDate },
+    end_date: { gte: nowDate }
+  },
+  orderBy: { start_date: 'desc' }
+});
 
     // Count scheduled classes for this trainer in active term
     let scheduledClassesCount = 0;
