@@ -37,7 +37,7 @@ async function getAuthenticatedUser(req: NextRequest): Promise<{
     const mobileAuth = await verifyMobileJWT(req);
     if (mobileAuth.success && mobileAuth.payload) {
       const user = await db.users.findUnique({
-        where: { id: mobileAuth.payload.employeeId || mobileAuth.payload.userId },
+        where: { id: mobileAuth.payload.userId },
         select: { id: true, name: true, role: true, is_active: true, has_timetable_admin: true }
       });
 

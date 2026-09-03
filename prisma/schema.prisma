@@ -375,7 +375,7 @@ model trainerclassassignments {
   id          Int      @id @default(autoincrement())
   trainer_id  Int
   class_id    Int
-  term_id      Int     @default(1) 
+  term_id      Int      
   assigned_at DateTime @default(now())
   is_active   Boolean  @default(true)
   assigned_by String   @db.VarChar(100)

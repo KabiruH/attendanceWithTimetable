@@ -168,10 +168,7 @@ const classAssignments = await db.trainerclassassignments.findMany({
           in: dayOfWeekValues
         },
         status: 'scheduled',
-        OR: [
-          { employee_id: user.id },
-          { class_id: { in: assignedClassIds } }
-        ]
+        employee_id: user.id
       },
       include: {
         classes: {
@@ -275,93 +272,114 @@ const classAssignments = await db.trainerclassassignments.findMany({
     const upcomingClasses: any[] = [];
     let currentClass: any = null;
 
-    daysToCheck.forEach(day => {
-      const slotsForDay = allSlots.filter(slot => slot.day_of_week === day.dayOfWeek);
+ daysToCheck.forEach(day => {
+  const slotsForDay = allSlots.filter(
+    slot => slot.day_of_week === day.dayOfWeek && slot.lessonperiods
+  );
 
-      slotsForDay.forEach(slot => {
-        if (!slot.lessonperiods) return;
+  // ── Collapse multi-period sessions (doubles/triples) into one entry ──
+  const sessions = new Map<string, typeof slotsForDay>();
+  slotsForDay.forEach(slot => {
+    const key = slot.session_group_id
+      ? `${slot.session_group_id}-${slot.class_id}`
+      : `single-${slot.id}`;
+    sessions.set(key, [...(sessions.get(key) ?? []), slot]);
+  });
 
-        // Create the actual date/time for this class
-        const startTime = new Date(slot.lessonperiods.start_time);
-        const endTime = new Date(slot.lessonperiods.end_time);
+  sessions.forEach(group => {
+    // Chronological within the session: first period = start, last = end
+    const sorted = [...group].sort(
+      (a, b) =>
+        new Date(a.lessonperiods!.start_time).getTime() -
+        new Date(b.lessonperiods!.start_time).getTime()
+    );
+    const primary = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const spanCount = sorted.length;
 
-        const lessonStart = new Date(
-          day.date.getFullYear(),
-          day.date.getMonth(),
-          day.date.getDate(),
-          startTime.getHours(),
-          startTime.getMinutes(),
-          0
-        );
+    const startRaw = new Date(primary.lessonperiods!.start_time);
+    const endRaw = new Date(last.lessonperiods!.end_time);
 
-        const lessonEnd = new Date(
-          day.date.getFullYear(),
-          day.date.getMonth(),
-          day.date.getDate(),
-          endTime.getHours(),
-          endTime.getMinutes(),
-          0
-        );
+    // ── Times are wall-clock values stored in UTC fields: read with UTC
+    // getters, then pin the datetime to Africa/Nairobi explicitly so this
+    // works no matter what timezone the server runs in ──
+    const lessonStart = DateTime.fromObject(
+      {
+        year: day.date.getFullYear(),
+        month: day.date.getMonth() + 1,
+        day: day.date.getDate(),
+        hour: startRaw.getUTCHours(),
+        minute: startRaw.getUTCMinutes(),
+      },
+      { zone: 'Africa/Nairobi' }
+    ).toJSDate();
 
-        // Check attendance
-        const attendanceKey = `${slot.id}_${day.dateStr}`;
-        const attendance = attendanceMap.get(attendanceKey);
+    const lessonEnd = DateTime.fromObject(
+      {
+        year: day.date.getFullYear(),
+        month: day.date.getMonth() + 1,
+        day: day.date.getDate(),
+        hour: endRaw.getUTCHours(),
+        minute: endRaw.getUTCMinutes(),
+      },
+      { zone: 'Africa/Nairobi' }
+    ).toJSDate();
 
-        // Check if this is the current class (happening now)
-        const isHappeningNow = currentTime >= lessonStart && currentTime <= lessonEnd;
+    // Attendance may be recorded against any slot in the session — check all
+    const attendance = sorted
+      .map(s => attendanceMap.get(`${s.id}_${day.dateStr}`))
+      .find(Boolean);
 
-        // Check-in only applies to lessons this user teaches
-        const isOwnLesson = slot.employee_id === user.id;
-        const checkInStatus = isOwnLesson
-          ? getCheckInStatus(lessonStart, currentTime, settings)
-          : { canCheckIn: false, status: 'view_only', message: 'Not your lesson' };
+    const isHappeningNow = currentTime >= lessonStart && currentTime <= lessonEnd;
 
-        // Skip if in the past and completed
-        if (lessonEnd < currentTime && attendance?.check_out_time) {
-          return;
-        }
+    const isOwnLesson = primary.employee_id === user.id;
+    const checkInStatus = isOwnLesson
+      ? getCheckInStatus(lessonStart, currentTime, settings)
+      : { canCheckIn: false, status: 'view_only', message: 'Not your lesson' };
 
-        const classInfo = {
-          id: slot.id,
-          timetable_slot_id: slot.id,
-          class: slot.classes,
-          subject: slot.subjects,
-          room: slot.rooms,
-          lessonPeriod: slot.lessonperiods,
-          trainer: slot.users,
-          isOwnLesson,
-          scheduledDate: day.dateStr,
-          scheduledDateTime: lessonStart.toISOString(),
-          startTime: lessonStart,
-          endTime: lessonEnd,
-          startTimeFormatted: formatTime(lessonStart),
-          endTimeFormatted: formatTime(lessonEnd),
-          dayOfWeek: day.dayOfWeek,
-          dayName: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.dayOfWeek],
-          isToday: day.dateStr === currentDate.toISOString().split('T')[0],
-          isTomorrow: day.dateStr === new Date(currentTime.getTime() + 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          isHappeningNow,
-          attendance,
-          hasCheckedIn: !!attendance?.check_in_time,
-          hasCheckedOut: !!attendance?.check_out_time,
-          checkInStatus,
-          // Time until class starts
-          minutesUntilStart: Math.ceil((lessonStart.getTime() - currentTime.getTime()) / (60 * 1000)),
-          hoursUntilStart: Math.floor((lessonStart.getTime() - currentTime.getTime()) / (60 * 60 * 1000))
-        };
+    if (lessonEnd < currentTime && attendance?.check_out_time) return;
 
-        // Set as current class if happening now — only the user's own lesson counts,
-        // otherwise a colleague's parallel lesson could hijack the "Happening Now" card
-        if (isHappeningNow && isOwnLesson) {
-          currentClass = classInfo;
-        }
+    const totalDuration = sorted.reduce(
+      (sum, s) => sum + (s.lessonperiods!.duration ?? 0), 0
+    );
 
-        // Add to upcoming if it hasn't ended yet
-        if (lessonEnd >= currentTime) {
-          upcomingClasses.push(classInfo);
-        }
-      });
-    });
+    const classInfo = {
+      id: primary.id,
+      timetable_slot_id: primary.id,
+      class: primary.classes,
+      subject: primary.subjects,
+      room: primary.rooms,
+      lessonPeriod: {
+        ...primary.lessonperiods,
+        end_time: last.lessonperiods!.end_time, // session's true end
+        duration: totalDuration,                 // e.g. 120 for a double
+      },
+      sessionSpan: spanCount,                    // 1 = single, 2 = double, 3 = triple
+      trainer: primary.users,
+      isOwnLesson,
+      scheduledDate: day.dateStr,
+      scheduledDateTime: lessonStart.toISOString(),
+      startTime: lessonStart,
+      endTime: lessonEnd,
+      startTimeFormatted: formatTime(lessonStart),
+      endTimeFormatted: formatTime(lessonEnd),
+      dayOfWeek: day.dayOfWeek,
+      dayName: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day.dayOfWeek],
+      isToday: day.dateStr === currentDate.toISOString().split('T')[0],
+      isTomorrow: day.dateStr === new Date(currentTime.getTime() + 24*60*60*1000).toISOString().split('T')[0],
+      isHappeningNow,
+      attendance,
+      hasCheckedIn: !!attendance?.check_in_time,
+      hasCheckedOut: !!attendance?.check_out_time,
+      checkInStatus,
+      minutesUntilStart: Math.ceil((lessonStart.getTime() - currentTime.getTime()) / 60000),
+      hoursUntilStart: Math.floor((lessonStart.getTime() - currentTime.getTime()) / 3600000),
+    };
+
+    if (isHappeningNow && isOwnLesson) currentClass = classInfo;
+    if (lessonEnd >= currentTime) upcomingClasses.push(classInfo);
+  });
+});
 
     // Sort by scheduled time
     upcomingClasses.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());

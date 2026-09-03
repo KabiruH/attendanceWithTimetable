@@ -7,6 +7,10 @@ import { db } from '@/lib/db/db';
  * POST /api/terms
  * Create a new term
  */
+/**
+ * POST /api/terms
+ * Create a new term
+ */
 export async function POST(request: NextRequest) {
   try {
     const authResult = await verifyAuth(request);
@@ -27,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, start_date, end_date, working_days, holidays } = body;
+    const { name, start_date, end_date, working_days, holidays, carry_class_assignments = true } = body;
 
     // Validation
     if (!name || !start_date || !end_date) {
@@ -78,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     if (overlappingTerm) {
       return NextResponse.json(
-        { 
+        {
           error: 'Term dates overlap with an existing active term',
           overlapping_term: overlappingTerm
         },
@@ -93,30 +97,80 @@ export async function POST(request: NextRequest) {
         name,
         start_date: startDate,
         end_date: endDate,
-        working_days: working_days || [1, 2, 3, 4, 5], 
+        working_days: working_days || [1, 2, 3, 4, 5],
         holidays: holidays || [],
         is_active: true,
         updated_at: now
       }
     });
 
+    // ── Carry over class assignments from the most recent previous term ──
+    // Only trainer-class assignments are copied. Subjects, timetables, and
+    // other settings are NOT touched — those remain a per-term decision.
+    let carriedOver = 0;
+    let carriedFrom: string | null = null;
+
+    if (carry_class_assignments) {
+      const previousTerm = await db.terms.findFirst({
+        where: {
+          id: { not: term.id },
+          is_active: true,
+          start_date: { lt: startDate }
+        },
+        orderBy: { start_date: 'desc' }
+      });
+
+      if (previousTerm) {
+        const prevAssignments = await db.trainerclassassignments.findMany({
+          where: { term_id: previousTerm.id, is_active: true },
+          select: { trainer_id: true, class_id: true }
+        });
+
+        if (prevAssignments.length > 0) {
+          const result = await db.trainerclassassignments.createMany({
+            data: prevAssignments.map(a => ({
+              trainer_id: a.trainer_id,
+              class_id: a.class_id,
+              term_id: term.id,
+              is_active: true,
+              assigned_by: `${user.name} (carried over from ${previousTerm.name})`,
+              assigned_at: now
+            })),
+            skipDuplicates: true
+          });
+          carriedOver = result.count;
+          carriedFrom = previousTerm.name;
+        }
+      }
+    }
+
     // ✅ Type guard for holidays count
     const holidaysCount = Array.isArray(term.holidays) ? term.holidays.length : 0;
+
+    const assignmentNote = carry_class_assignments
+      ? carriedOver > 0
+        ? ` ${carriedOver} class assignment${carriedOver !== 1 ? 's' : ''} carried over from ${carriedFrom}.`
+        : ' No class assignments were carried over — assign trainers to classes before generating the timetable.'
+      : ' Class assignments were not carried over (opted out) — assign trainers to classes before generating the timetable.';
 
     return NextResponse.json(
       {
         success: true,
-        message: `Term created successfully with ${holidaysCount} holiday${holidaysCount !== 1 ? 's' : ''}`,
-        data: term
+        message: `Term created successfully with ${holidaysCount} holiday${holidaysCount !== 1 ? 's' : ''}.${assignmentNote}`,
+        data: {
+          ...term,
+          class_assignments_carried_over: carriedOver,
+          carried_over_from: carriedFrom
+        }
       },
       { status: 201 }
     );
   } catch (error: any) {
     console.error('❌ Error creating term:', error);
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to create term',
-        details: error.message 
+        details: error.message
       },
       { status: 500 }
     );

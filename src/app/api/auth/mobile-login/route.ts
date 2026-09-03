@@ -243,7 +243,7 @@ async function createMobileJWT(payload: {
   }
   
   const token = await new SignJWT({
-    id: payload.employeeId,
+    id: payload.userId,
     userId: payload.userId,
     employeeId: payload.employeeId,
     email: payload.email,
