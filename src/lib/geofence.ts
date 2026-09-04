@@ -4,7 +4,7 @@ interface Coordinates {
   longitude: number;
 }
 
-interface LocationResult {
+export interface LocationResult {
   isWithinArea: boolean;
   distanceFromCenter: number;
   distanceFromEdge: number;
@@ -54,8 +54,9 @@ function formatDistance(distanceFromEdge: number): string {
 }
 
 // Enhanced location check with distance calculation
-export const checkLocationWithDistance = async (): Promise<LocationResult> => {
-  return new Promise((resolve, reject) => {
+export const checkLocationWithDistance = async (
+  opts: { maximumAge?: number } = {}
+): Promise<LocationResult> => {  return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('Geolocation is not supported by your browser'));
       return;
@@ -109,10 +110,10 @@ export const checkLocationWithDistance = async (): Promise<LocationResult> => {
 
         reject(new Error(errorMessage));
       },
-      {
+           {
         enableHighAccuracy: true,
         timeout: 10000,
-        maximumAge: 60000,
+        maximumAge: opts.maximumAge ?? 60000,
       }
     );
   });
@@ -153,3 +154,7 @@ export const getLocationDebugInfo = async () => {
     };
   }
 };
+
+// Fresh fix, no cache. Use this for check-in and check-out only.
+export const verifyAttendanceLocation = (): Promise<LocationResult> =>
+  checkLocationWithDistance({ maximumAge: 0 });

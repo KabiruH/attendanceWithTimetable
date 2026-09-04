@@ -11,6 +11,7 @@ import ClassAnalyticsCards from './employee/ClassAnalyticsCards';
 import UpcomingClassesWidget from './employee/UpcomingClassesWidget';
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
+import { LocationResult } from '@/lib/geofence'
 
 interface EmployeeDashboardProps {
   data?: {
@@ -29,7 +30,7 @@ interface ActiveClassSession {
   check_in_time: Date;
   check_out_time?: Date | null;
   status: string;
-  auto_checkout: boolean; // ADD THIS
+  auto_checkout: boolean; 
   location_verified: boolean;
   classes: {
     id: number;
@@ -171,8 +172,8 @@ const EmployeeDashboard: React.FC<EmployeeDashboardProps> = ({ data }) => {
     }
   }, [employee_id, isTrainer]);
 
-  const handleCheckIn = () => handleAttendance('check-in');
-  const handleCheckOut = () => handleAttendance('check-out');
+const handleCheckIn = (location: LocationResult) => handleAttendance('check-in', location);
+const handleCheckOut = (location: LocationResult) => handleAttendance('check-out', location);
 
   // Toggle between compact and full analytics view
   if (showFullAnalytics) {

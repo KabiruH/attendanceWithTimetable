@@ -120,7 +120,6 @@ useEffect(() => {
         </div>
       )}
 
-      {(!checkFailed || isDevEnvironment) && children}
     </>
   );
 }

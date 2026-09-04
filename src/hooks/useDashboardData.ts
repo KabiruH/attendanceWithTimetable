@@ -16,6 +16,7 @@ import {
   processWeeklyHours, 
   calculateAttendanceStats 
 } from '../lib/utils/dashboardUtils';
+import { LocationResult } from '@/lib/geofence';
 
 export const useDashboardData = () => {
   const [isCheckedIn, setIsCheckedIn] = useState(false);
@@ -126,33 +127,44 @@ export const useDashboardData = () => {
     }
   };
 
-  const handleAttendance = async (action: 'check-in' | 'check-out') => {
+  const handleAttendance = async (
+    action: 'check-in' | 'check-out',
+    location: LocationResult
+  ) => {
     setIsLoading(true);
     try {
       if (!employee_id) throw new Error('Employee ID is missing');
-  
+
       const response = await fetch('/api/attendance', {
         method: 'POST',
         credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ action, employee_id }),
+        body: JSON.stringify({
+          action,
+          employee_id,
+          location: {
+            latitude: location.userLocation.latitude,
+            longitude: location.userLocation.longitude,
+            timestamp: Date.now(),
+          },
+        }),
       });
-  
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to process attendance');
       }
-  
+
       // Wait for the status update
       await fetchAttendanceStatus();
-  
+
       toast({
         title: 'Success',
         description: `Successfully ${action === 'check-in' ? 'checked in' : 'checked out'}`,
       });
-  
+
     } catch (error) {
       console.error('Error handling attendance:', error);
       toast({
@@ -164,7 +176,7 @@ export const useDashboardData = () => {
       setIsLoading(false);
     }
   };
-
+    
   useEffect(() => {
     // Initial fetch
     fetchTokenAndUser();

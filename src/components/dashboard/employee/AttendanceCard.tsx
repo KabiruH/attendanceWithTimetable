@@ -8,15 +8,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Timer, BookOpen, MapPin, AlertTriangle, RefreshCw, Clock, Calendar } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 import TimetableClassCheckInModal from './TimetableClassCheckInModal';
-import { checkLocationWithDistance } from '@/lib/geofence';
+import { checkLocationWithDistance, verifyAttendanceLocation, LocationResult } from '@/lib/geofence';
 
-interface LocationResult {
-  isWithinArea: boolean;
-  distanceFromCenter: number;
-  distanceFromEdge: number;
-  userLocation: { latitude: number; longitude: number };
-  formattedDistance: string;
-}
 
 interface UpcomingClass {
   id: string;
@@ -48,8 +41,8 @@ interface AttendanceCardProps {
   isCheckedIn: boolean;
   isLoading: boolean;
   todayHours: string;
-  onCheckIn: () => void;
-  onCheckOut: () => void;
+  onCheckIn: (location: LocationResult) => void;
+  onCheckOut: (location: LocationResult) => void;
   userRole?: string;
   isClassLoading?: boolean;
   hasActiveSession?: boolean;
@@ -78,6 +71,7 @@ const AttendanceCard: React.FC<AttendanceCardProps> = ({
   const [nextClass, setNextClass] = useState<UpcomingClass | null>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
   const { toast } = useToast();
+  const [verifying, setVerifying] = useState(false);
 
   // Check if user is a trainer
   const isTrainer = userRole === 'admin' || userRole === 'employee' || userRole === 'trainer';
@@ -123,42 +117,75 @@ const AttendanceCard: React.FC<AttendanceCardProps> = ({
   };
 
   // Enhanced check-in handler with location verification
-  const handleCheckIn = () => {
-    if (!locationResult?.isWithinArea) {
+
+const handleCheckIn = async () => {
+  setVerifying(true);
+
+  try {
+    const location = await verifyAttendanceLocation();
+
+    if (!location.isWithinArea) {
       toast({
-        title: 'Location Required',
-        description: `You must be on campus to check in. Currently ${locationResult?.formattedDistance || 'location unknown'}.`,
+        title: 'Outside the check-in area',
+        description: `You are ${location.formattedDistance}. Move within range and try again.`,
         variant: 'destructive',
       });
       return;
     }
-    onCheckIn();
-  };
+
+    onCheckIn(location);
+  } catch (error) {
+    toast({
+      title: 'Location required',
+      description: error instanceof Error ? error.message : 'Could not verify your location.',
+      variant: 'destructive',
+    });
+  } finally {
+    setVerifying(false);
+  }
+};
 
   // Enhanced check-out handler with location verification
-  const handleCheckOut = () => {
-    if (!locationResult?.isWithinArea) {
-      toast({
-        title: 'Location Required',
-        description: `You must be on campus to check out. Currently ${locationResult?.formattedDistance || 'location unknown'}.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-    onCheckOut();
-  };
-
-  const handleQuickCheckIn = async (timetableSlotId: string) => {
-    if (!locationResult?.isWithinArea) {
-      toast({
-        title: 'Location Required',
-        description: 'You must be on campus to check into subjects.',
-        variant: 'destructive',
-      });
-      return;
-    }
+  const handleCheckOut = async () => {
+    setVerifying(true);
 
     try {
+      const location = await verifyAttendanceLocation();
+
+      if (!location.isWithinArea) {
+        toast({
+          title: 'Outside the check-out area',
+          description: `You are ${location.formattedDistance}. Move within range and try again.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      onCheckOut(location);
+    } catch (error) {
+      toast({
+        title: 'Location required',
+        description: error instanceof Error ? error.message : 'Could not verify your location.',
+        variant: 'destructive',
+      });
+    } finally {
+      setVerifying(false);
+    }
+  };
+  
+  const handleQuickCheckIn = async (timetableSlotId: string) => {
+    try {
+      const location = await verifyAttendanceLocation();
+
+      if (!location.isWithinArea) {
+        toast({
+          title: 'Outside the check-in area',
+          description: `You are ${location.formattedDistance}. Move within range and try again.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const response = await fetch('/api/attendance/class-checkin', {
         method: 'POST',
         credentials: 'include',
@@ -177,13 +204,12 @@ const AttendanceCard: React.FC<AttendanceCardProps> = ({
       }
 
       const result = await response.json();
-      
+
       toast({
         title: 'Success',
         description: result.message || 'Successfully checked in to subject',
       });
 
-      // Refresh schedule
       await fetchUpcomingSchedule();
     } catch (error) {
       console.error('Error checking in:', error);
@@ -235,10 +261,7 @@ const AttendanceCard: React.FC<AttendanceCardProps> = ({
 
   useEffect(() => {
     checkUserLocation();
-    
-    // Refresh location every 5 minutes
-    const locationInterval = setInterval(checkUserLocation, 300000);
-    return () => clearInterval(locationInterval);
+   
   }, []);
 
   useEffect(() => {
@@ -298,22 +321,22 @@ const AttendanceCard: React.FC<AttendanceCardProps> = ({
           <div className="mb-6">
             <h3 className="text-sm font-medium text-gray-700 mb-3">Work Attendance</h3>
             <div className="flex justify-center space-x-4 mb-4">
-              <Button
+                           <Button
                 size="lg"
                 onClick={handleCheckIn}
-                disabled={isCheckedIn || isLoading || !canMarkAttendance}
+                disabled={isCheckedIn || isLoading || verifying}
                 className={`w-32 font-bold ${
-                  isCheckedIn || !canMarkAttendance ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'
+                  isCheckedIn ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
                 }`}
               >
-                {isLoading ? 'Processing...' : 'Check In'}
+                {verifying ? 'Verifying...' : isLoading ? 'Processing...' : 'Check In'}
               </Button>
               <Button
                 size="lg"
                 onClick={handleCheckOut}
-                disabled={!isCheckedIn || isLoading || !canMarkAttendance}
+                               disabled={!isCheckedIn || isLoading || verifying}
                 className={`w-32 font-bold ${
-                  !isCheckedIn || !canMarkAttendance ? 'bg-gray-400' : 'bg-red-600 hover:bg-red-700'
+                  !isCheckedIn ? 'bg-gray-400' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
                 {isLoading ? 'Processing...' : 'Check Out'}
