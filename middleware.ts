@@ -92,14 +92,6 @@ if (token && isPublicPath) {
         const hasTimetableAdmin = payload.has_timetable_admin === true; // ✅ Explicit boolean check
         const isBlocked = payload.is_blocked as boolean;
 
-        console.log('Middleware check:', {
-          pathname,
-          userRole,
-          hasTimetableAdmin,
-          isTimetableSetupPath,
-          isTimetableViewPath
-        });
-
         // Check if user is blocked and trying to access restricted paths
         if (isBlocked && isBlockedUserRestrictedPath) {
           const dashboardUrl = new URL('/dashboard', request.url);
@@ -109,7 +101,6 @@ if (token && isPublicPath) {
 
         // Full admin-only path check (like timetable settings)
         if (isFullAdminOnlyPath && userRole !== 'admin') {
-          console.log('Blocked: Full admin only path');
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 
@@ -118,21 +109,17 @@ if (token && isPublicPath) {
           const canAccessSetup = userRole === 'admin' || hasTimetableAdmin === true;
           
           if (!canAccessSetup) {
-            console.log('Blocked: No timetable setup access');
             return NextResponse.redirect(new URL('/dashboard', request.url));
           }
         }
 
         // Timetable VIEW path - all authenticated employees can view their own timetable
         if (isTimetableViewPath && !isTimetableSetupPath && !isFullAdminOnlyPath) {
-          // Everyone who is authenticated can view their timetable
-          // This includes admin, timetable admins, and regular employees
-          // No additional check needed - just being authenticated is enough
+   
         }
 
         // Regular admin-only path check
         if (isAdminPath && userRole !== 'admin') {
-          console.log('Blocked: Admin only path');
           return NextResponse.redirect(new URL('/dashboard', request.url));
         }
 

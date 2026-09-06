@@ -81,8 +81,6 @@ function LeaveApplication() {
   const requestedDays =
     startDate && endDate && endDate >= startDate ? dayCount(startDate, endDate) : null;
 
-
-    console.log({ startDate, endDate, today, reason: reason.trim(), requestedDays });
   const handleApply = async () => {
     if (!startDate || !endDate) {
       toast.error('Select both dates');
