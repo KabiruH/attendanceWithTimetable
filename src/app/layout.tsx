@@ -3,7 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 // @ts-ignore: Allow side-effect import of global CSS without type declarations
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
-import { Toaster } from 'sonner';
+import { Toaster as SonnerToaster } from 'sonner';
+import { Toaster } from "@/components/ui/toaster";
 import { SpeedInsights } from "@vercel/speed-insights/next"
 
 const geistSans = Geist({
@@ -19,7 +20,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Employee Attendance",
   description: "To check the attendance of employees",
-    viewport: "width=device-width, initial-scale=1", 
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
@@ -28,13 +33,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-   <html lang="en">
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <link rel="preload" as="image" href="/logo2.png" />  
-      </head>
+    <html lang="en">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
       >
         <div className="flex min-h-screen flex-col">
           <div className="sticky top-0 z-50 w-full">
@@ -43,14 +45,20 @@ export default function RootLayout({
           <main className="flex-1 w-full overflow-x-auto">
             {children}
           </main>
-          
-<Toaster
-  richColors
-  position="top-center"
-  toastOptions={{
-    className: "!w-[500px] !py-6 !px-6 !text-lg",
-  }}
-/>          <SpeedInsights />
+
+          {/* sonner — used by components importing `toast` from 'sonner' */}
+          <SonnerToaster
+            richColors
+            position="top-center"
+            toastOptions={{
+              className: "!w-[500px] !py-6 !px-6 !text-lg",
+            }}
+          />
+
+          {/* shadcn — required by components using `useToast` from '@/components/ui/use-toast' */}
+          <Toaster />
+
+          <SpeedInsights />
         </div>
       </body>
     </html>
