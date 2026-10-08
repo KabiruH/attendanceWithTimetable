@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     }
 
         // Every tablet sync doubles as the auto-close run for kiosk class sessions
-    await closeExpiredKioskSessions().catch(e => console.error('Kiosk auto-close failed:', e));great
+    await closeExpiredKioskSessions().catch(e => console.error('Kiosk auto-close failed:', e));
 
     // ── Optional: only return templates updated since last sync ───────────────
     // The tablet can send ?since=<ISO timestamp> to get only new/changed records

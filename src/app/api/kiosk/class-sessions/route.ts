@@ -171,7 +171,7 @@ export async function POST(request: NextRequest) {
 
     if (typeof timetable_slot_id !== 'string' || !trainer_id || !KIOSK_METHODS.includes(method as KioskMethod)) {
       return NextResponse.json(
-        { success: false, error: 'timetable_slot_id, trainer_id and method (fingerprint or card) are required' },
+        { success: false, error: 'timetable_slot_id, trainer_id and method (fingerprint or nfc) are required' },
         { status: 400 }
       );
     }

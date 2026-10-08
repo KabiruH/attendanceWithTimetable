@@ -10,7 +10,7 @@ import { db } from '@/lib/db/db';
 export const EAT_OFFSET_MS = 3 * 60 * 60 * 1000;
 
 /** Methods the kiosk records. Rows with one of these are kiosk rows; mobile rows have null. */
-export const KIOSK_METHODS = ['fingerprint', 'card'] as const;
+export const KIOSK_METHODS = ['fingerprint', 'nfc'] as const;
 export type KioskMethod = (typeof KIOSK_METHODS)[number];
 
 /** Shift a real instant to an "EAT wall clock" Date. Read it ONLY with getUTC*. */
@@ -76,6 +76,8 @@ export async function getKioskSettings() {
     cutoff: s?.attendance_checkin_cutoff ?? 30,      // minutes after start check-in closes
   };
 }
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sessions and lessons
