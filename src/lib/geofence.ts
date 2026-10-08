@@ -8,6 +8,8 @@ export interface LocationResult {
   isWithinArea: boolean;
   distanceFromCenter: number;
   distanceFromEdge: number;
+  accuracy: number;          // browser's reported error radius, metres
+  isReliable: boolean;      // false when the fix is too vague to mean anything
   userLocation: Coordinates;
   formattedDistance: string;
 }
@@ -18,7 +20,9 @@ const CENTER_COORDINATES: Coordinates = {
     longitude: 36.734582,
 };
 
-const MAX_DISTANCE_METERS = 100_000; // 70m radius
+const MAX_DISTANCE_METERS = 164000; // 100m radius
+const ACCURACY_ALLOWANCE_M = 170000;   // how much browser error we forgive
+const MAX_USABLE_ACCURACY_M = 180000;  // beyond this, the fix tells us nothing
 
 // Haversine formula to calculate distance between two points in meters
 function getDistanceInMeters(
@@ -81,7 +85,11 @@ export const checkLocationWithDistance = async (
         const distanceFromEdge = Math.max(0, distanceFromCenter - MAX_DISTANCE_METERS);
         
         // Check if within allowed area
-        const isWithinArea = distanceFromCenter <= MAX_DISTANCE_METERS;
+const accuracy = position.coords.accuracy ?? 0;
+const allowance = Math.min(accuracy, ACCURACY_ALLOWANCE_M);
+const isReliable = accuracy <= MAX_USABLE_ACCURACY_M;
+const isWithinArea = isReliable && distanceFromCenter <= MAX_DISTANCE_METERS + allowance;
+
 
         const result: LocationResult = {
           isWithinArea,
@@ -89,6 +97,8 @@ export const checkLocationWithDistance = async (
           distanceFromEdge: Math.round(distanceFromEdge),
           userLocation,
           formattedDistance: formatDistance(distanceFromEdge),
+          accuracy,
+          isReliable
         };
 
         resolve(result);

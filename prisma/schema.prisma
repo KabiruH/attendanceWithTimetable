@@ -428,6 +428,7 @@ model users {
   department                  String?                      @db.VarChar(100)
   gender                      String                       @db.VarChar(10)
   email                       String?                      @unique(map: "Users_email_key") @db.VarChar(100)
+  nfc_card_id                 String?                      @unique(map: "Users_nfc_card_id_key") @db.VarChar(32)
   is_active                   Boolean                      @default(true)
   created_at                  DateTime                     @default(now())
   updated_at                  DateTime                     @default(now())

@@ -124,6 +124,15 @@ const handleCheckIn = async () => {
   try {
     const location = await verifyAttendanceLocation();
 
+     if (!location.isReliable) {
+      toast({
+        title: 'Location could not be determined',
+        description: 'Your device cannot pinpoint your position. Please use the mobile app to check in.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     if (!location.isWithinArea) {
       toast({
         title: 'Outside the check-in area',
@@ -152,6 +161,15 @@ const handleCheckIn = async () => {
     try {
       const location = await verifyAttendanceLocation();
 
+       if (!location.isReliable) {
+      toast({
+        title: 'Location could not be determined',
+        description: 'Your device cannot pinpoint your position. Please use the mobile app to check in.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
       if (!location.isWithinArea) {
         toast({
           title: 'Outside the check-out area',
@@ -176,6 +194,15 @@ const handleCheckIn = async () => {
   const handleQuickCheckIn = async (timetableSlotId: string) => {
     try {
       const location = await verifyAttendanceLocation();
+
+       if (!location.isReliable) {
+      toast({
+        title: 'Location could not be determined',
+        description: 'Your device cannot pinpoint your position. Please use the mobile app to check in.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
       if (!location.isWithinArea) {
         toast({
@@ -324,8 +351,7 @@ const handleCheckIn = async () => {
                            <Button
                 size="lg"
                 onClick={handleCheckIn}
-                disabled={isCheckedIn || isLoading || verifying}
-                className={`w-32 font-bold ${
+  disabled={isCheckedIn || isLoading || verifying || !canMarkAttendance}                className={`w-32 font-bold ${
                   isCheckedIn ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
                 }`}
               >
@@ -334,8 +360,7 @@ const handleCheckIn = async () => {
               <Button
                 size="lg"
                 onClick={handleCheckOut}
-                               disabled={!isCheckedIn || isLoading || verifying}
-                className={`w-32 font-bold ${
+  disabled={!isCheckedIn || isLoading || verifying || !canMarkAttendance}                className={`w-32 font-bold ${
                   !isCheckedIn ? 'bg-gray-400' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >

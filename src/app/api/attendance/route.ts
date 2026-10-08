@@ -608,8 +608,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     
     // Detect if this is a mobile request
-    const isMobileRequest = body?.type?.startsWith('work_') || !!body?.location;
-
+const isMobileRequest = body?.type?.startsWith('work_') === true;
 
     // Validate mobile requests
     if (isMobileRequest) {
