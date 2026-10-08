@@ -1,9 +1,10 @@
 // app/api/kiosk/enroll/route.ts
 // Saves a fingerprint template (and optionally NFC card ID) for a user.
-// Uses the existing biometricenrollments table.
+// Fingerprints go in biometricenrollments; the card lives on users.nfc_card_id (unique).
 // Admin-only — requires device token + admin session.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db/db';
 import { verifyKioskAdmin } from '@/lib/auth/kiosk-auth';
 
@@ -19,10 +20,12 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { user_id, template_string, nfc_card_id } = body;
-
-    // template_string = the ISO8859-1 fingerprint template from the HF SDK
-    // nfc_card_id = hex string of NFC card hardware ID (optional)
+    const { user_id, template_string } = body;
+    // Normalise so "04a2b9" and "04A2B9" can never count as different cards
+    const nfc_card_id: string | null =
+      typeof body.nfc_card_id === 'string' && body.nfc_card_id.trim()
+        ? body.nfc_card_id.trim().toUpperCase()
+        : null;
 
     if (!user_id || !template_string) {
       return NextResponse.json(
@@ -51,29 +54,55 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Deactivate any existing enrollment for this user ──────────────────────
-    // We replace rather than stack — one active fingerprint per user
-    await db.biometricenrollments.updateMany({
-      where: { user_id, is_active: true },
-      data: { is_active: false },
-    });
+    // ── Refuse a card that already belongs to someone else ────────────────────
+    if (nfc_card_id) {
+      const owner = await db.users.findFirst({
+        where: { nfc_card_id, id: { not: user_id } },
+        select: { name: true },
+      });
+      if (owner) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `This card is already registered to ${owner.name}. Use a different card.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
 
-    // ── Save new fingerprint enrollment ───────────────────────────────────────
-    const enrollment = await db.biometricenrollments.create({
-      data: {
-        user_id,
-        biometric_hash: template_string,   // the raw ISO8859-1 fingerprint template
-        is_active: true,
-        device_info: {
-          device_id: auth.device!.id,
-          device_name: auth.device!.device_name,
-          device_uuid: auth.device!.device_uuid,
-          enrolled_by_admin_id: auth.adminId,
-          nfc_card_id: nfc_card_id || null,   // store NFC card ID inside device_info JSON
+    // ── Replace enrollment and set the card together ──────────────────────────
+    const enrollment = await db.$transaction(async (tx) => {
+      // We replace rather than stack — one active fingerprint per user
+      await tx.biometricenrollments.updateMany({
+        where: { user_id, is_active: true },
+        data: { is_active: false },
+      });
+
+      const created = await tx.biometricenrollments.create({
+        data: {
+          user_id,
+          biometric_hash: template_string,   // the raw ISO8859-1 fingerprint template
+          is_active: true,
+          device_info: {
+            device_id: auth.device!.id,
+            device_name: auth.device!.device_name,
+            device_uuid: auth.device!.device_uuid,
+            enrolled_by_admin_id: auth.adminId,
+            nfc_card_id,                      // kept for audit history only
+          },
+          ip_address: request.headers.get('x-forwarded-for') || 'kiosk',
+          user_agent: `TAMS-Kiosk/${auth.device!.device_name}`,
         },
-        ip_address: request.headers.get('x-forwarded-for') || 'kiosk',
-        user_agent: `TAMS-Kiosk/${auth.device!.device_name}`,
-      },
+      });
+
+      // Skipping the card step clears any old card, as it did before
+      await tx.users.update({
+        where: { id: user_id },
+        data: { nfc_card_id },
+      });
+
+      return created;
     });
 
     // ── Log the enrollment action ─────────────────────────────────────────────
@@ -105,6 +134,13 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    // Two enrollments racing for the same card: the unique index catches it
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return NextResponse.json(
+        { success: false, error: 'This card is already registered to another user.' },
+        { status: 409 }
+      );
+    }
     console.error('Kiosk enroll error:', error);
     return NextResponse.json(
       { success: false, error: 'Enrollment failed' },
@@ -134,10 +170,17 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    await db.biometricenrollments.updateMany({
-      where: { user_id, is_active: true },
-      data: { is_active: false },
-    });
+    await db.$transaction([
+      db.biometricenrollments.updateMany({
+        where: { user_id, is_active: true },
+        data: { is_active: false },
+      }),
+      // Free the card so it can be issued to someone else
+      db.users.update({
+        where: { id: user_id },
+        data: { nfc_card_id: null },
+      }),
+    ]);
 
     await db.biometriclogs.create({
       data: {

@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
             id_number: true,
             role: true,
             department: true,
+            nfc_card_id: true,
             employees: {
               select: { passport_photo: true },
             },
@@ -67,8 +68,7 @@ export async function GET(request: NextRequest) {
         user_department: e.users.department,
         passport_photo: e.users.employees?.passport_photo || null,
         template_string: e.biometric_hash,          // ISO8859-1 fingerprint template
-        nfc_card_id: deviceInfo?.nfc_card_id || null,
-        enrolled_at: e.enrolled_at.toISOString(),
+        nfc_card_id: e.users.nfc_card_id,        enrolled_at: e.enrolled_at.toISOString(),
         updated_at: e.updated_at.toISOString(),
       };
     });
