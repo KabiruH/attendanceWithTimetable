@@ -88,6 +88,7 @@ model classattendance {
   classes             classes          @relation(fields: [class_id], references: [id], onDelete: Cascade, map: "ClassAttendance_class_id_fkey")
   users               users            @relation(fields: [trainer_id], references: [id], onDelete: Cascade, map: "ClassAttendance_trainer_id_fkey")
   timetableslots      timetableslots?  @relation(fields: [timetable_slot_id], references: [id], onDelete: SetNull, map: "ClassAttendance_timetable_slot_id_fkey") // ✅ NEW: Relation to timetable
+  check_in_method     String?          @db.VarChar(20) // 'fingerprint' | 'card' for kiosk; null for mobile
 
   @@unique([trainer_id, class_id, date, timetable_slot_id], map: "ClassAttendance_unique_attendance") // ✅ UPDATED: More specific uniqueness
   @@index([auto_checkout], map: "ClassAttendance_auto_checkout_idx")
@@ -98,6 +99,7 @@ model classattendance {
   @@index([timetable_slot_id], map: "ClassAttendance_timetable_slot_id_idx") // ✅ NEW: Index for timetable lookup
   @@index([location_verified], map: "ClassAttendance_location_verified_idx") // ✅ NEW: Index for location queries
   @@index([is_online_attendance], map: "ClassAttendance_is_online_attendance_idx")
+  @@index([check_in_method], map: "ClassAttendance_check_in_method_idx")
 }
 
 model classes {
@@ -515,6 +517,8 @@ model timetablesettings {
   attendance_location_required    Boolean   @default(true) // Require location verification using existing geofence
   created_at                      DateTime  @default(now())
   updated_at                      DateTime  @updatedAt
+    kiosk_checkin_window          Int       @default(5)  // Minutes before a lesson starts that kiosk check-in opens
+  attendance_checkin_cutoff       Int       @default(30) // Minutes after a lesson starts that check-in closes
 }
 
 model subjectassignmentlog {

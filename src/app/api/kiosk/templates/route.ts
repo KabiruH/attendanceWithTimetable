@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db/db';
 import { verifyDeviceToken } from '@/lib/auth/kiosk-auth';
+import { closeExpiredKioskSessions } from '@/lib/attendance/kiosk-class-sessions';
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,6 +18,9 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+        // Every tablet sync doubles as the auto-close run for kiosk class sessions
+    await closeExpiredKioskSessions().catch(e => console.error('Kiosk auto-close failed:', e));great
 
     // ── Optional: only return templates updated since last sync ───────────────
     // The tablet can send ?since=<ISO timestamp> to get only new/changed records

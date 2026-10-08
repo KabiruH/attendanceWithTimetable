@@ -234,7 +234,7 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
     if (!activeTerm) return;
 
     const settings = await db.timetablesettings.findFirst();
-    const lateThreshold = settings?.attendance_late_threshold || 10;
+       const checkInCutoff = settings?.attendance_checkin_cutoff ?? 30;
 
     const todaySlots = await db.timetableslots.findMany({
       where: {
@@ -261,7 +261,7 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
       const lessonStart = lessonTimeToday(primary.lessonperiods.start_time, eatNow);
 
       // Check-in window closes at start time + late threshold
-      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+            const checkInWindowClosed = new Date(lessonStart.getTime() + (checkInCutoff * 60 * 1000));
 
       // Only process if check-in window has closed
       if (eatNow < checkInWindowClosed) continue;
@@ -368,8 +368,8 @@ function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: an
   const checkInWindow = settings?.attendance_check_in_window || 15;
   const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
 
-  const lateThreshold = settings?.attendance_late_threshold || 10;
-  const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+  const checkInCutoff = settings?.attendance_checkin_cutoff ?? 30;
+  const latestCheckIn = new Date(lessonStart.getTime() + (checkInCutoff * 60 * 1000));
 
   const now = eatNow.getTime();
 
