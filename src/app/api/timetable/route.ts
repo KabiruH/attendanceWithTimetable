@@ -1,62 +1,15 @@
 // app/api/timetable/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
-import { jwtVerify } from 'jose';
+import { verifyAuth } from '@/lib/auth/verify-auth';
 import { db } from '@/lib/db/db';
-
-// Helper function to verify authentication
-async function verifyAuth() {
-  try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get('token');
-
-    if (!token) {
-      return { error: 'No token found', status: 401 };
-    }
-
-    const { payload } = await jwtVerify(
-      token.value,
-      new TextEncoder().encode(process.env.JWT_SECRET)
-    );
-
-    const userId = Number(payload.id);
-    const role = payload.role as string;
-    const name = payload.name as string;
-
-    // Verify user is still active and fetch has_timetable_admin
-    const user = await db.users.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        role: true,
-        department: true,
-        is_active: true,
-        has_timetable_admin: true
-      }
-    });
-
-    if (!user || !user.is_active) {
-      return { error: 'User not found or inactive', status: 401 };
-    }
-
-    return { user: { ...user, id: userId, role, name } };
-  } catch (error) {
-    return { error: 'Invalid token', status: 401 };
-  }
-}
+import { findConflicts, invalidCombinedClasses } from '@/lib/timetable/conficts';
 
 /**
  * GET /api/timetable
  * Fetch timetable slots with filters
  * Query params:
- * - term_id: Filter by term
- * - trainer_id: Filter by trainer/employee
- * - department: Filter by department
- * - day_of_week: Filter by specific day (0-6)
- * - class_id: Filter by specific class
- * - subject_id: Filter by specific subject
- * - is_online_session: Filter by online/physical sessions (true/false)
+ * - term_id, trainer_id, day_of_week, class_id, subject_id, room_id,
+ *   is_online_session, department, status, is_room_fallback
  */
 export async function GET(request: NextRequest) {
   try {
@@ -75,60 +28,37 @@ export async function GET(request: NextRequest) {
     // Build filter conditions
     const whereConditions: any = {};
 
-    // Term filter
     const termId = searchParams.get('term_id');
-    if (termId) {
-      whereConditions.term_id = parseInt(termId);
-    }
+    if (termId) whereConditions.term_id = parseInt(termId);
 
-    // Trainer filter
     const trainerId = searchParams.get('trainer_id');
-    if (trainerId) {
-      whereConditions.employee_id = parseInt(trainerId);
-    }
+    if (trainerId) whereConditions.employee_id = parseInt(trainerId);
 
-    // Day of week filter
     const dayOfWeek = searchParams.get('day_of_week');
-    if (dayOfWeek) {
-      whereConditions.day_of_week = parseInt(dayOfWeek);
-    }
+    if (dayOfWeek) whereConditions.day_of_week = parseInt(dayOfWeek);
 
-    // Class filter
     const classId = searchParams.get('class_id');
-    if (classId) {
-      whereConditions.class_id = parseInt(classId);
-    }
+    if (classId) whereConditions.class_id = parseInt(classId);
 
-    // Subject filter
     const subjectId = searchParams.get('subject_id');
-    if (subjectId) {
-      whereConditions.subject_id = parseInt(subjectId);
-    }
+    if (subjectId) whereConditions.subject_id = parseInt(subjectId);
 
-    // Room filter 
     const roomId = searchParams.get('room_id');
-    if (roomId) {
-      whereConditions.room_id = parseInt(roomId);
-    }
+    if (roomId) whereConditions.room_id = parseInt(roomId);
 
-    // ✅ NEW: Online session filter
     const isOnlineSession = searchParams.get('is_online_session');
     if (isOnlineSession !== null) {
       whereConditions.is_online_session = isOnlineSession === 'true';
     }
 
-    // Department filter (filter by class department)
+    // Department filter (by subject department)
     const department = searchParams.get('department');
     if (department) {
-      whereConditions.subjects = {
-        department: department
-      };
+      whereConditions.subjects = { department };
     }
 
     const status = searchParams.get('status');
-    if (status) {
-      whereConditions.status = status;
-    }
+    if (status) whereConditions.status = status;
 
     const isRoomFallback = searchParams.get('is_room_fallback');
     if (isRoomFallback !== null) {
@@ -137,12 +67,11 @@ export async function GET(request: NextRequest) {
 
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
 
-    // If user doesn't have timetable access, only show their own slots
+    // Without timetable access, users only see their own slots
     if (!hasTimetableAccess) {
       whereConditions.employee_id = user.id;
     }
 
-    // Fetch timetable slots
     const timetableSlots = await db.timetableslots.findMany({
       where: whereConditions,
       include: {
@@ -219,10 +148,7 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     console.error('Error fetching timetable:', error);
     return NextResponse.json(
-      {
-        error: 'Failed to fetch timetable',
-        details: error.message
-      },
+      { error: 'Failed to fetch timetable', details: error.message },
       { status: 500 }
     );
   }
@@ -230,7 +156,12 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/timetable
- * Create a new timetable slot (Admin or Timetable Admin only)
+ * Create a new timetable slot (Admin or Timetable Admin only).
+ *
+ * Optional combined_class_ids: other classes taught together with the primary
+ * class in the same slot (same trainer, room, day and period). Each class gets
+ * its own row, all sharing one session_group_id — the same structure the
+ * generator produces.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -244,7 +175,6 @@ export async function POST(request: NextRequest) {
     }
 
     const { user } = authResult;
-
     const hasTimetableAccess = user.role === 'admin' || user.has_timetable_admin === true;
 
     if (!hasTimetableAccess) {
@@ -264,7 +194,7 @@ export async function POST(request: NextRequest) {
       lesson_period_id,
       day_of_week,
       status = 'scheduled',
-      is_online_session = false // ✅ NEW: Default to false (physical class)
+      is_online_session = false
     } = body;
 
     // Validation
@@ -275,7 +205,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate day_of_week is between 0-6
     if (day_of_week < 0 || day_of_week > 6) {
       return NextResponse.json(
         { error: 'day_of_week must be between 0 (Sunday) and 6 (Saturday)' },
@@ -301,26 +230,13 @@ export async function POST(request: NextRequest) {
       db.lessonperiods.findUnique({ where: { id: lesson_period_id } })
     ]);
 
-    if (!term) {
-      return NextResponse.json({ error: 'Term not found' }, { status: 404 });
-    }
-    if (!classRecord) {
-      return NextResponse.json({ error: 'Class not found' }, { status: 404 });
-    }
-    if (!subject) {
-      return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
-    }
-    if (!trainer) {
-      return NextResponse.json({ error: 'Trainer not found' }, { status: 404 });
-    }
-    if (!room) {
-      return NextResponse.json({ error: 'Room not found' }, { status: 404 });
-    }
-    if (!lessonPeriod) {
-      return NextResponse.json({ error: 'Lesson period not found' }, { status: 404 });
-    }
+    if (!term) return NextResponse.json({ error: 'Term not found' }, { status: 404 });
+    if (!classRecord) return NextResponse.json({ error: 'Class not found' }, { status: 404 });
+    if (!subject) return NextResponse.json({ error: 'Subject not found' }, { status: 404 });
+    if (!trainer) return NextResponse.json({ error: 'Trainer not found' }, { status: 404 });
+    if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    if (!lessonPeriod) return NextResponse.json({ error: 'Lesson period not found' }, { status: 404 });
 
-    // ✅ NEW: Validate subject can be online if is_online_session is true
     if (is_online_session && !subject.can_be_online) {
       return NextResponse.json({
         error: 'Subject cannot be online',
@@ -328,14 +244,9 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Check if the class is assigned to this term
+    // Class must be assigned to this term
     const termClass = await db.termclasses.findUnique({
-      where: {
-        term_id_class_id: {
-          term_id: term_id,
-          class_id: class_id
-        }
-      }
+      where: { term_id_class_id: { term_id, class_id } }
     });
 
     if (!termClass) {
@@ -345,13 +256,9 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Check if the subject is assigned to this class for this term
+    // Subject must be assigned to this class for this term
     const classSubject = await db.classsubjects.findFirst({
-      where: {
-        class_id: class_id,
-        subject_id: subject_id,
-        term_id: term_id
-      }
+      where: { class_id, subject_id, term_id }
     });
 
     if (!classSubject) {
@@ -361,89 +268,97 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Check for conflicts (same room, same time, same day OR same trainer, same time, same day)
-    const existingSlot = await db.timetableslots.findFirst({
-      where: {
-        term_id,
-        day_of_week,
-        lesson_period_id,
-        OR: [
-          { room_id }, // Same room
-          { employee_id }, // Same trainer
-          { class_id }
-        ]
-      },
-      include: {
-        classes: { select: { name: true, code: true } },
-        subjects: { select: { name: true, code: true } },
-        rooms: { select: { name: true } },
-        users: { select: { name: true } }
-      }
+    // ── Combined classes ──────────────────────────────────────────────────
+    const combinedIds: number[] = [...new Set<number>((body.combined_class_ids ?? []).map(Number))]
+      .filter(id => id !== class_id);
+
+    const badCodes = await invalidCombinedClasses(term_id, subject_id, combinedIds);
+    if (badCodes.length) {
+      return NextResponse.json({
+        error: 'Cannot combine these classes',
+        details: `${badCodes.join(', ')} ${badCodes.length === 1 ? 'does' : 'do'} not take ${subject.name} this term`
+      }, { status: 400 });
+    }
+
+    // ── Conflicts: trainer, room (non-workshop), and every class involved ──
+    const conflicts = await findConflicts({
+      termId: term_id,
+      day: day_of_week,
+      periodId: lesson_period_id,
+      roomId: room_id,
+      trainerId: employee_id,
+      classIds: [class_id, ...combinedIds],
     });
 
-    if (existingSlot) {
-      let conflictMessage = '';
-      if (existingSlot.room_id === room_id) {
-        conflictMessage = `Room ${existingSlot.rooms.name} is already booked for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
-      } else if (existingSlot.employee_id === employee_id) {
-        conflictMessage = `Trainer ${existingSlot.users.name} is already scheduled for ${existingSlot.subjects.name} (${existingSlot.classes.name}) at this time`;
-      } else if (existingSlot.class_id === class_id) {
-        conflictMessage = `Class ${classRecord.name} is already scheduled for ${existingSlot.subjects.name} at this time`;
-      }
-
+    if (conflicts.length) {
       return NextResponse.json(
-        { error: 'Scheduling conflict', details: conflictMessage },
+        { error: 'Scheduling conflict', details: conflicts.join('\n'), conflicts },
         { status: 409 }
       );
     }
 
-    // Create timetable slot
-    const timetableSlot = await db.timetableslots.create({
-      data: {
-        id: crypto.randomUUID(),
-        term_id,
-        class_id,
-        subject_id,
-        employee_id,
-        room_id,
-        lesson_period_id,
-        day_of_week,
-        status,
-        is_online_session, // ✅ NEW: Set online flag
-        created_at: new Date(),
-        updated_at: new Date()
-      },
-      include: {
-        classes: true,
-        subjects: true,
-        rooms: true,
-        lessonperiods: true,
-        users: true,
-        terms: true
-      }
-    });
+    // ── Create one row per class, sharing a session group ─────────────────
+    const now = new Date();
+    const sessionGroupId = combinedIds.length ? crypto.randomUUID() : null;
+    const base = {
+      term_id,
+      subject_id,
+      employee_id,
+      room_id,
+      lesson_period_id,
+      day_of_week,
+      status,
+      is_online_session,
+      ...(sessionGroupId && {
+        session_group_id: sessionGroupId,
+        combined_class_ids: [class_id, ...combinedIds],
+      }),
+      created_at: now,
+      updated_at: now,
+    };
+
+    const [timetableSlot] = await db.$transaction([
+      db.timetableslots.create({
+        data: { ...base, id: crypto.randomUUID(), class_id },
+        include: {
+          classes: true,
+          subjects: true,
+          rooms: true,
+          lessonperiods: true,
+          users: true,
+          terms: true
+        }
+      }),
+      ...combinedIds.map(cid =>
+        db.timetableslots.create({
+          data: { ...base, id: crypto.randomUUID(), class_id: cid }
+        })
+      ),
+    ]);
+
+    const combinedNote = combinedIds.length
+      ? ` (combined with ${combinedIds.length} class${combinedIds.length > 1 ? 'es' : ''})`
+      : '';
 
     return NextResponse.json({
       success: true,
-      message: `Timetable slot created successfully${is_online_session ? ' (Online Session)' : ''}`,
+      message: `Timetable slot created successfully${combinedNote}${is_online_session ? ' (Online Session)' : ''}`,
       data: timetableSlot
     }, { status: 201 });
 
   } catch (error: any) {
     console.error('Error creating timetable slot:', error);
     return NextResponse.json(
-      {
-        error: 'Failed to create timetable slot',
-        details: error.message
-      },
+      { error: 'Failed to create timetable slot', details: error.message },
       { status: 500 }
     );
   }
 }
 
-
- // PATCH /api/timetable
-  
+/**
+ * PATCH /api/timetable
+ * Quick updates to a slot: online flag, status, or room.
+ */
 export async function PATCH(request: NextRequest) {
   try {
     const authResult = await verifyAuth();
@@ -467,10 +382,7 @@ export async function PATCH(request: NextRequest) {
     const { id, is_online_session, status, room_id } = body;
 
     if (!id) {
-      return NextResponse.json(
-        { error: 'Timetable slot ID is required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Timetable slot ID is required' }, { status: 400 });
     }
 
     const existingSlot = await db.timetableslots.findUnique({
@@ -506,31 +418,25 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: 'Room not found' }, { status: 404 });
       }
 
-      // Workshop rooms allow multiple simultaneous bookings — skip room conflict check.
-      // All other rooms must be free at this time slot.
-      const isWorkshop = newRoom.room_type === 'workshop';
+      // Workshops are exempt inside findConflicts. The slot's own combined
+      // siblings are excluded so a group can be moved one row at a time.
+      const conflicts = await findConflicts({
+        termId: existingSlot.term_id,
+        day: existingSlot.day_of_week,
+        periodId: existingSlot.lesson_period_id,
+        roomId: room_id,
+        trainerId: existingSlot.employee_id,
+        classIds: [],                                   // only the room is changing
+        excludeIds: [id],
+        excludeGroupId: existingSlot.session_group_id,
+        skipTrainer: true,
+      });
 
-      if (!isWorkshop) {
-        const roomConflict = await db.timetableslots.findFirst({
-          where: {
-            id: { not: id }, // exclude current slot
-            term_id: existingSlot.term_id,
-            day_of_week: existingSlot.day_of_week,
-            lesson_period_id: existingSlot.lesson_period_id,
-            room_id
-          },
-          include: {
-            classes: { select: { name: true, code: true } },
-            subjects: { select: { name: true } }
-          }
-        });
-
-        if (roomConflict) {
-          return NextResponse.json({
-            error: 'Room conflict',
-            details: `${newRoom.name} is already booked for ${roomConflict.subjects.name} (${roomConflict.classes.name}) at this time`
-          }, { status: 409 });
-        }
+      if (conflicts.length) {
+        return NextResponse.json(
+          { error: 'Room conflict', details: conflicts.join('\n'), conflicts },
+          { status: 409 }
+        );
       }
 
       // Auto-flag RNA: if the new room is named RNA, mark as room fallback
@@ -538,7 +444,7 @@ export async function PATCH(request: NextRequest) {
         newRoom.name?.toUpperCase() === 'RNA' ||
         newRoom.name?.toUpperCase().includes('RNA');
 
-      isRoomFallback = isRna ? true : false;
+      isRoomFallback = isRna;
     }
 
     // ── Build update payload ──────────────────────────────────────────────
@@ -567,10 +473,10 @@ export async function PATCH(request: NextRequest) {
       message: [
         'Timetable slot updated successfully',
         is_online_session !== undefined
-          ? is_online_session ? '— marked as ONLINE' : '— marked as PHYSICAL'
+          ? is_online_session ? '(marked as online)' : '(marked as physical)'
           : null,
         room_id !== undefined && isRoomFallback
-          ? '— moved to RNA (room fallback)'
+          ? '(moved to RNA room fallback)'
           : null,
       ].filter(Boolean).join(' '),
       data: updatedSlot

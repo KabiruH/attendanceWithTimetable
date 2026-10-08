@@ -232,6 +232,24 @@ function CombineClassesModal({
     }
   };
 
+  // Must match numSlots in the combinations API
+  function getNumSlots(sessionsPerWeek: number, lessonType: string) {
+    const groupSize = lessonType === 'triple' ? 3 : lessonType === 'double' ? 2 : 1;
+    return Math.ceil(sessionsPerWeek / groupSize);
+  }
+
+  // e.g. 3 periods as doubles → [2, 1]  (one double + one single)
+  function getBlockSizes(sessionsPerWeek: number, lessonType: string): number[] {
+    const groupSize = lessonType === 'triple' ? 3 : lessonType === 'double' ? 2 : 1;
+    const sizes: number[] = [];
+    for (let rem = sessionsPerWeek; rem > 0; rem -= groupSize) {
+      sizes.push(Math.min(groupSize, rem));
+    }
+    return sizes;
+  }
+
+  const BLOCK_LABEL: Record<number, string> = { 1: 'single', 2: 'double', 3: 'triple' };
+
   // ── Remove an entire session group ────────────────────────────────────────
   const handleRemoveGroup = async (sessionNum: number) => {
     const group = sessionGroups[sessionNum];
@@ -287,7 +305,12 @@ function CombineClassesModal({
     }
   };
 
-  const maxSessions = subject.default_sessions_per_week;
+  const maxSessions = getNumSlots(
+    subject.default_sessions_per_week,
+    subject.default_lesson_type
+  );
+  const blockSizes = getBlockSizes(subject.default_sessions_per_week, subject.default_lesson_type);
+  const blockLabel = (n: number) => `Block ${n} · ${BLOCK_LABEL[blockSizes[n - 1]] ?? ''}`;
 
   // Sessions that already have a group
   const configuredSessions = new Set(Object.keys(sessionGroups).map(Number));
@@ -303,8 +326,11 @@ function CombineClassesModal({
           <DialogDescription>
             <span className="font-medium text-foreground">{subject.code}</span>
             <span className="mx-2 text-muted-foreground">·</span>
-            {subject.default_sessions_per_week} session
-            {subject.default_sessions_per_week > 1 ? 's' : ''} per week
+            {subject.default_sessions_per_week} period{subject.default_sessions_per_week > 1 ? 's' : ''} per week
+            <span className="mx-2 text-muted-foreground">·</span>
+            {subject.default_lesson_type}
+            <span className="mx-2 text-muted-foreground">·</span>
+            {maxSessions} teaching block{maxSessions > 1 ? 's' : ''}
             <span className="mx-2 text-muted-foreground">·</span>
             {subject.default_lesson_type}
           </DialogDescription>
@@ -443,9 +469,9 @@ function CombineClassesModal({
                   className="h-4 w-4 rounded border-gray-300 text-indigo-600"
                 />
                 <label htmlFor="apply-all-sessions" className="text-xs font-medium cursor-pointer flex-1">
-                  Apply to all {maxSessions} sessions
+                  Apply to all {maxSessions} teaching block{maxSessions > 1 ? 's' : ''}
                   <span className="text-muted-foreground font-normal ml-1">
-                    (recommended — combines these classes for every session of this subject)
+                    (recommended — combines these classes for all {subject.default_sessions_per_week} periods of this subject)
                   </span>
                 </label>
               </div>
@@ -971,7 +997,7 @@ function SubjectTableRow({
 
       {showCombineModal && (
         <CombineClassesModal
-          subject={{ ...subject, default_sessions_per_week: sessions, default_lesson_type: lessonType }}
+          subject={subject}
           onClose={() => setShowCombineModal(false)}
         />
       )}

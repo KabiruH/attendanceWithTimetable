@@ -216,54 +216,55 @@ export async function POST(
       );
     }
 
-    // Verify all classes exist and are active
-    if (class_ids.length > 0) {
+   
+
+        // Skip classes already attached to this term
+    const existing = await db.termclasses.findMany({
+      where: { term_id: termId, class_id: { in: class_ids } },
+      select: { class_id: true },
+    });
+    const alreadyAttached = new Set(existing.map(e => e.class_id));
+    const newIds: number[] = class_ids.filter((id: number) => !alreadyAttached.has(id));
+
+    if (newIds.length > 0) {
+      // Only new classes need to exist and be active
       const validClasses = await db.classes.findMany({
-        where: {
-          id: { in: class_ids },
-          is_active: true
-        }
+        where: { id: { in: newIds }, is_active: true },
+        select: { id: true },
       });
 
-      if (validClasses.length !== class_ids.length) {
-        const foundIds = validClasses.map(c => c.id);
-        const invalidIds = class_ids.filter((id: number) => !foundIds.includes(id));
+      if (validClasses.length !== newIds.length) {
+        const foundIds = new Set(validClasses.map(c => c.id));
         return NextResponse.json(
-          { 
-            error: `Some classes not found or inactive`,
-            invalid_ids: invalidIds 
+          {
+            error: 'Some classes not found or inactive',
+            invalid_ids: newIds.filter(id => !foundIds.has(id)),
           },
           { status: 400 }
         );
       }
-    }
 
-    // Delete existing assignments for this term
-    await db.termclasses.deleteMany({
-      where: { term_id: termId }
-    });
-
-    // Create new assignments (classes can be in multiple terms)
-    if (class_ids.length > 0) {
       await db.termclasses.createMany({
-        data: class_ids.map((class_id: number) => ({
+        data: newIds.map(class_id => ({
           term_id: termId,
-          class_id: class_id,
-          assigned_by: user.name
-        }))
+          class_id,
+          assigned_by: user.name,
+        })),
       });
     }
 
     return NextResponse.json({
       success: true,
-      message: `Successfully assigned ${class_ids.length} classes to ${term.name}`,
+      message: `Added ${newIds.length} class(es) to ${term.name}`,
       data: {
         term_id: termId,
         term_name: term.name,
-        class_count: class_ids.length,
-        class_ids: class_ids
-      }
+        class_count: newIds.length,
+        class_ids: newIds,
+      },
     });
+
+  
 
   } catch (error: any) {
     console.error('Error assigning classes to term:', error);

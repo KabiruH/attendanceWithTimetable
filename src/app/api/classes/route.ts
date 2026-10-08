@@ -268,14 +268,13 @@ export async function DELETE(request: NextRequest) {
         if (authResult.error) {
             return NextResponse.json({ error: authResult.error }, { status: authResult.status });
         }
-
         if (!authResult.user) {
             return NextResponse.json({ error: 'Authentication failed' }, { status: 401 });
         }
 
         const { user } = authResult;
 
-        // Admin only — timetable admins are not permitted to delete classes
+        // Admin only — same as before
         if (user.role !== 'admin') {
             return NextResponse.json(
                 { error: 'Unauthorized. Admin access required.' },
@@ -285,68 +284,76 @@ export async function DELETE(request: NextRequest) {
 
         const url = new URL(request.url);
         const id = Number(url.searchParams.get('id'));
+        const force = url.searchParams.get('force') === 'true';
 
         if (!id || isNaN(id)) {
+            return NextResponse.json({ error: 'Valid class ID is required' }, { status: 400 });
+        }
+
+        const existingClass = await db.classes.findUnique({
+            where: { id },
+            include: {
+                _count: {
+                    select: {
+                        classsubjects: true,
+                        termclasses: true,
+                        timetableslots: true,
+                        timetableslotclasses: true,
+                        trainerclassassignments: true,
+                        classattendance: true,
+                        subjectassignmentlog: true,
+                    }
+                }
+            }
+        });
+
+        if (!existingClass) {
+            return NextResponse.json({ error: 'Class not found' }, { status: 404 });
+        }
+
+        const c = existingClass._count;
+        const blockers: string[] = [];
+
+        if (c.timetableslots > 0 || c.timetableslotclasses > 0) {
+            const total = c.timetableslots + c.timetableslotclasses;
+            blockers.push(`${total} timetable slot${total !== 1 ? 's' : ''}`);
+        }
+        if (c.classsubjects > 0) blockers.push(`${c.classsubjects} subject assignment${c.classsubjects !== 1 ? 's' : ''}`);
+        if (c.termclasses > 0) blockers.push(`${c.termclasses} term assignment${c.termclasses !== 1 ? 's' : ''}`);
+        if (c.trainerclassassignments > 0) blockers.push(`${c.trainerclassassignments} trainer assignment${c.trainerclassassignments !== 1 ? 's' : ''}`);
+        if (c.classattendance > 0) blockers.push(`${c.classattendance} attendance record${c.classattendance !== 1 ? 's' : ''}`);
+
+        // Not forcing yet — return the blocker summary like before, plus raw counts
+        if (blockers.length > 0 && !force) {
             return NextResponse.json(
-                { error: 'Valid class ID is required' },
-                { status: 400 }
+                {
+                    error: `Cannot delete "${existingClass.name}". It has:\n• ${blockers.join('\n• ')}`,
+                    blockers,
+                    counts: c,
+                    forceable: true,
+                },
+                { status: 409 }
             );
         }
 
-  const existingClass = await db.classes.findUnique({
-  where: { id },
-  include: {
-    _count: {
-      select: {
-        classsubjects: true,
-        termclasses: true,
-        timetableslots: true,
-        timetableslotclasses: true,
-        trainerclassassignments: true,
-        classattendance: true,
-        subjectassignmentlog: true,
-      }
-    }
-  }
-});
+        // Force delete: cascade everything tied to this class, then the class itself.
+        // Order matters — delete records that reference timetableslots before the slots themselves.
+        await db.$transaction([
+            db.classattendance.deleteMany({ where: { class_id: id } }),
+            db.timetableslotclasses.deleteMany({ where: { class_id: id } }),
+            db.timetableslots.deleteMany({ where: { class_id: id } }),
+            db.trainerclassassignments.deleteMany({ where: { class_id: id } }),
+            db.subjectassignmentlog.deleteMany({ where: { class_id: id } }),
+            db.classsubjects.deleteMany({ where: { class_id: id } }),
+            db.termclasses.deleteMany({ where: { class_id: id } }),
+            db.classes.delete({ where: { id } }),
+        ]);
 
-if (!existingClass) {
-  return NextResponse.json({ error: 'Class not found' }, { status: 404 });
-}
-
-const c = existingClass._count;
-const blockers: string[] = [];
-
-if (c.timetableslots > 0 || c.timetableslotclasses > 0) {
-  const total = c.timetableslots + c.timetableslotclasses;
-  blockers.push(`${total} timetable slot${total !== 1 ? 's' : ''} — go to Timetable and remove them first`);
-}
-if (c.classsubjects > 0) {
-  blockers.push(`${c.classsubjects} subject assignment${c.classsubjects !== 1 ? 's' : ''} — go to Class Subjects and remove them first`);
-}
-if (c.termclasses > 0) {
-  blockers.push(`${c.termclasses} term assignment${c.termclasses !== 1 ? 's' : ''} — go to Terms and unassign the class first`);
-}
-if (c.trainerclassassignments > 0) {
-  blockers.push(`${c.trainerclassassignments} trainer assignment${c.trainerclassassignments !== 1 ? 's' : ''} — go to Timetable Settings and unassign trainers first`);
-}
-if (c.classattendance > 0) {
-  blockers.push(`${c.classattendance} attendance record${c.classattendance !== 1 ? 's' : ''} — attendance history cannot be deleted`);
-}
-
-if (blockers.length > 0) {
-  return NextResponse.json(
-    {
-      error: `Cannot delete "${existingClass.name}". It has:\n• ${blockers.join('\n• ')}`,
-      blockers,
-    },
-    { status: 409 }
-  );
-}
-
-        await db.classes.delete({ where: { id } });
-
-        return NextResponse.json({ message: 'Class deleted successfully' });
+        return NextResponse.json({
+            message: force && blockers.length > 0
+                ? 'Class and all associated records deleted successfully'
+                : 'Class deleted successfully'
+        });
     } catch (error) {
         console.error('Error deleting class:', error);
         return NextResponse.json(

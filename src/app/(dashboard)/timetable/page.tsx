@@ -194,12 +194,13 @@ const fetchUserData = async () => {
     } catch { /* ignore */ }
   };
 
-  const fetchAllTrainers = async () => {
+ const fetchAllTrainers = async () => {
     try {
-      const response = await fetch('/api/users?role=employee');
+      const response = await fetch('/api/users'); // no role param — gets everyone
       if (!response.ok) return;
       const data = await response.json();
-      setAllTrainers(data.data.map((t: any) => ({ id: t.id, name: t.name })));
+      const filtered = data.filter((u: any) => u.role === 'employee' || u.role === 'admin');
+      setAllTrainers(filtered.map((t: any) => ({ id: t.id, name: t.name })));
     } catch { /* ignore */ }
   };
 
@@ -432,6 +433,13 @@ const handlePrintConfirmed = (filter: SlotTypeFilter) => {
       </div>
     );
   }
+
+  // Merge all fetched trainers and trainers extracted from current slots
+  const mergedTrainers = Array.from(
+    new Map(
+      [...allTrainers, ...availableTrainers].map((t) => [t.id, t])
+    ).values()
+  ).sort((a, b) => a.name.localeCompare(b.name));
 
 const filteredSlots = timetableSlots.filter(s => {
   if (filterSlotType === 'all')     return true;
@@ -696,10 +704,10 @@ isAdmin={hasTimetableAdminAccess}
   />
 )}
 
-      <PrintTrainerDialog
+<PrintTrainerDialog
         open={isPrintTrainerDialogOpen}
         onOpenChange={setIsPrintTrainerDialogOpen}
-        trainers={allTrainers.length > 0 ? allTrainers : availableTrainers}
+        trainers={mergedTrainers}
         onPrint={handlePrintTrainer}
       />
 
