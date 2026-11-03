@@ -263,6 +263,7 @@ const ReportsTable: React.FC<ReportsTableProps> = ({ data }) => {
           <TableRow>
             <TableHead>Employee ID</TableHead>
             <TableHead>Name</TableHead>
+            <TableHead>Department</TableHead>
             <TableHead>Date</TableHead>
             <TableHead>Time In</TableHead>
             <TableHead>Time Out</TableHead>
@@ -275,6 +276,7 @@ const ReportsTable: React.FC<ReportsTableProps> = ({ data }) => {
             <TableRow key={record.id}>
               <TableCell className="font-medium">{record.employee_id}</TableCell>
               <TableCell>{record.Employees?.name || '-'}</TableCell>
+              <TableCell className="text-gray-600">{record.department || 'Unassigned'}</TableCell>
               <TableCell>{formatDate(record.date)}</TableCell>
               <TableCell>{formatTime(record.check_in_time)}</TableCell>
               <TableCell>{formatTime(record.check_out_time)}</TableCell>

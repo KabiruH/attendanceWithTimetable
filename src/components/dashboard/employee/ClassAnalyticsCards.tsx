@@ -149,7 +149,7 @@ const ClassAnalyticsCards: React.FC<ClassAnalyticsCardsProps> = ({
           late: record.status === 'Late' ? 1 : 0,
           color: COLORS[subjectMap.size % COLORS.length]
         });
-      }
+      } 
     });
 
     return Array.from(subjectMap.values()).sort((a, b) => b.hours - a.hours);

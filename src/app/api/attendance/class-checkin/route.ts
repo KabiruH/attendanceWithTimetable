@@ -5,6 +5,7 @@ import { db } from '@/lib/db/db';
 import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { groupIntoSessions, minutesOfDay } from '@/lib/utils/classSessions';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EAT time helpers — Kenya is UTC+3 with no daylight saving
@@ -65,65 +66,35 @@ async function getCurrentTerm() {
 }
 
 /**
- * Group slots into sessions (doubles/triples collapse into one entry keyed on
- * the earliest period). Returns one entry per session with its sibling slots.
- */
-function groupIntoSessions<T extends { id: string; class_id: number; session_group_id: string | null; lessonperiods?: { start_time: Date; end_time: Date } | null }>(
-  slots: T[]
-): Array<{ primary: T; siblings: T[] }> {
-  const groups = new Map<string, T[]>();
-
-  slots.forEach(slot => {
-    const key = slot.session_group_id
-      ? `${slot.session_group_id}-${slot.class_id}`
-      : `single-${slot.id}`;
-    groups.set(key, [...(groups.get(key) ?? []), slot]);
-  });
-
-  return Array.from(groups.values()).map(group => {
-    const sorted = [...group].sort(
-      (a, b) =>
-        (a.lessonperiods?.start_time.getTime() ?? 0) -
-        (b.lessonperiods?.start_time.getTime() ?? 0)
-    );
-    return { primary: sorted[0], siblings: sorted };
-  });
-}
-
-/**
  * For a single slot the user acted on, find the session it belongs to and
  * return the primary (earliest) slot plus the session's last period.
+ * Uses the shared grouping: same trainer + class + subject, back-to-back periods.
  */
 async function resolveSession(slot: any) {
-  if (!slot.session_group_id) {
-    return { primary: slot, siblings: [slot], lastPeriod: slot.lessonperiods };
-  }
-
-  const siblings = await db.timetableslots.findMany({
+  const candidates = await db.timetableslots.findMany({
     where: {
-      session_group_id: slot.session_group_id,
-      class_id: slot.class_id,
+      term_id: slot.term_id,
       day_of_week: slot.day_of_week,
-      term_id: slot.term_id
+      employee_id: slot.employee_id,
+      class_id: slot.class_id,
+      subject_id: slot.subject_id,
+      status: 'scheduled'
     },
     include: { lessonperiods: true }
   });
 
-  const sorted = siblings
-    .filter(s => s.lessonperiods)
-    .sort(
-      (a, b) =>
-        a.lessonperiods!.start_time.getTime() - b.lessonperiods!.start_time.getTime()
-    );
+  const session = groupIntoSessions(candidates).find(g =>
+    g.siblings.some(s => s.id === slot.id)
+  );
 
-  if (sorted.length === 0) {
+  if (!session) {
     return { primary: slot, siblings: [slot], lastPeriod: slot.lessonperiods };
   }
 
   return {
-    primary: sorted[0],
-    siblings: sorted,
-    lastPeriod: sorted[sorted.length - 1].lessonperiods
+    primary: session.primary,
+    siblings: session.siblings,
+    lastPeriod: session.siblings[session.siblings.length - 1].lessonperiods
   };
 }
 
@@ -234,7 +205,7 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
     if (!activeTerm) return;
 
     const settings = await db.timetablesettings.findFirst();
-       const checkInCutoff = settings?.attendance_checkin_cutoff ?? 30;
+    const lateThreshold = settings?.attendance_late_threshold || 10;
 
     const todaySlots = await db.timetableslots.findMany({
       where: {
@@ -255,13 +226,13 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
     // Collapse doubles/triples — one absence per session, keyed on the first period
     const sessions = groupIntoSessions(todaySlots as any[]);
 
-    for (const { primary } of sessions) {
+    for (const { primary, siblings } of sessions) {
       if (!primary.lessonperiods) continue;
 
       const lessonStart = lessonTimeToday(primary.lessonperiods.start_time, eatNow);
 
       // Check-in window closes at start time + late threshold
-            const checkInWindowClosed = new Date(lessonStart.getTime() + (checkInCutoff * 60 * 1000));
+      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
 
       // Only process if check-in window has closed
       if (eatNow < checkInWindowClosed) continue;
@@ -271,7 +242,8 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
           trainer_id: primary.employee_id,
           class_id: primary.class_id,
           date: currentDate,
-          timetable_slot_id: primary.id
+          // Any period of the session counts (older rows may sit on a later slot)
+          timetable_slot_id: { in: siblings.map((sib: any) => sib.id) }
         }
       });
 
@@ -368,8 +340,8 @@ function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: an
   const checkInWindow = settings?.attendance_check_in_window || 15;
   const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
 
-  const checkInCutoff = settings?.attendance_checkin_cutoff ?? 30;
-  const latestCheckIn = new Date(lessonStart.getTime() + (checkInCutoff * 60 * 1000));
+  const lateThreshold = settings?.attendance_late_threshold || 10;
+  const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
 
   const now = eatNow.getTime();
 
@@ -444,9 +416,12 @@ export async function GET(request: NextRequest) {
       );
 
       // Attendance may sit on any slot of the session (older rows), so check all
-      const attendance = siblings
-        .map(s => todayAttendance.find(att => att.timetable_slot_id === s.id))
-        .find(Boolean);
+      // Prefer a real check-in over an auto-Absent row on another period
+      const sessionRows = todayAttendance.filter(att =>
+        siblings.some(s => s.id === att.timetable_slot_id)
+      );
+      const attendance =
+        sessionRows.find(att => att.check_in_time) ?? sessionRows[0];
 
       const checkInStatus = canCheckIn(primary, eatNow, settings);
 
@@ -720,8 +695,8 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Check for active sessions in other classes (exclude this whole session)
-      const activeSession = await db.classattendance.findFirst({
+      // Other sessions this trainer is still checked into (excluding this one)
+      const openSessions = await db.classattendance.findMany({
         where: {
           trainer_id: user.id,
           date: currentDate,
@@ -730,28 +705,37 @@ export async function POST(request: NextRequest) {
           timetable_slot_id: { notIn: session.siblings.map(s => s.id) }
         },
         include: {
-          classes: {
-            select: {
-              name: true
-            }
-          }
+          classes: { select: { name: true } }
         }
       });
 
-      if (activeSession) {
-        let activeSubjectName = activeSession.classes.name;
-        if (activeSession.timetable_slot_id) {
-          const activeSlot = await db.timetableslots.findUnique({
-            where: { id: activeSession.timetable_slot_id },
-            include: {
-              subjects: {
-                select: { name: true }
-              }
-            }
+      // Moving straight on to the next lesson: a session that ends at or before
+      // this one starts is closed automatically instead of blocking the
+      // check-in (trainers don't check out of class themselves)
+      const newSessionStart = windowSlot.lessonperiods
+        ? minutesOfDay(windowSlot.lessonperiods.start_time)
+        : null;
+
+      for (const open of openSessions) {
+        const openSlot = open.timetable_slot_id
+          ? await db.timetableslots.findUnique({
+              where: { id: open.timetable_slot_id },
+              include: { lessonperiods: true, subjects: { select: { name: true } } }
+            })
+          : null;
+
+        const openSession = openSlot ? await resolveSession(openSlot) : null;
+        const openEnd = openSession?.lastPeriod ? minutesOfDay(openSession.lastPeriod.end_time) : null;
+
+        if (openEnd !== null && newSessionStart !== null && openEnd <= newSessionStart) {
+          await db.classattendance.update({
+            where: { id: open.id },
+            data: { check_out_time: currentTime, auto_checkout: true }
           });
-          activeSubjectName = activeSlot?.subjects?.name || activeSession.classes.name;
+          continue;
         }
 
+        const activeSubjectName = openSlot?.subjects?.name || open.classes.name;
         return NextResponse.json(
           {
             success: false,

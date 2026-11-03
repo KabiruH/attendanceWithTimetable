@@ -133,7 +133,7 @@ const AdminSummaryCards: React.FC = () => {
         <CardContent className="pt-6">
           <div className="flex items-center justify-between p-4 bg-gradient-to-r from-green-500 to-green-600 rounded-lg text-white">
             <div>
-              <p className="text-sm font-medium opacity-90">Present Today</p>
+              <p className="text-sm font-medium opacity-90">On Time Today</p>
               <p className="text-3xl font-bold">{metrics.presentToday}</p>
             </div>
             <UserCheck className="w-12 h-12 opacity-80" />

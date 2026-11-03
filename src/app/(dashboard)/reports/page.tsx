@@ -30,6 +30,7 @@ export default function ReportsPage() {
   const [filters, setFilters] = useState<FilterState>({
     employeeName: '',
     status: 'all',
+    department: 'all',
     startDate: '',
     endDate: '',
   });
@@ -41,6 +42,11 @@ export default function ReportsPage() {
   // Utility: Get employee name from record
   const getEmployeeName = (record: AttendanceRecord): string => {
     return record.employee_name || record.users?.name || record.Employees?.name || 'Unknown';
+  };
+
+  // Utility: Get department name from record
+  const getDepartment = (record: AttendanceRecord): string => {
+    return record.department || 'Unassigned';
   };
 
   // Utility: Get 6PM cutoff for a date
@@ -170,6 +176,7 @@ export default function ReportsPage() {
         id: record.id,
         employee_id: record.employee_id,
         employee_name: record.employee_name || record.users?.name || userName || 'Unknown',
+        department: record.employee_department || record.users?.department || null,
         date: new Date(record.date).toISOString().split('T')[0],
         check_in_time: record.check_in_time,
         check_out_time: record.check_out_time,
@@ -211,12 +218,13 @@ export default function ReportsPage() {
       const employeeName = getEmployeeName(record);
       const nameMatch = employeeName.toLowerCase().includes(filters.employeeName.toLowerCase());
       const statusMatch = filters.status === 'all' || record.status.toLowerCase() === filters.status.toLowerCase();
+      const departmentMatch = filters.department === 'all' || getDepartment(record) === filters.department;
       const dateMatch = (!filters.startDate || record.date >= filters.startDate) &&
                        (!filters.endDate || record.date <= filters.endDate);
 const notCheckedInMatch = !showNotCheckedIn ||
   !['present', 'on duty', 'leave'].includes(record.status.toLowerCase());
   
-      return nameMatch && statusMatch && dateMatch && notCheckedInMatch;
+      return nameMatch && statusMatch && departmentMatch && dateMatch && notCheckedInMatch;
     });
 
     if (showNotCheckedIn) {
@@ -238,6 +246,13 @@ const notCheckedInMatch = !showNotCheckedIn ||
 
     return filtered;
   }, [filters, attendanceData, showNotCheckedIn]);
+
+  // Department options, derived from the records themselves
+  const departments = useMemo(() => {
+    const names = new Set<string>();
+    attendanceData.forEach((record) => names.add(getDepartment(record)));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [attendanceData]);
 
   // Pagination
   const totalPages = Math.ceil(filteredData.length / ITEMS_PER_PAGE);
@@ -271,10 +286,11 @@ const notCheckedInMatch = !showNotCheckedIn ||
   };
 
   const exportToCSV = () => {
-    const headers = ['Employee ID', 'Employee Name', 'Date', 'Time In', 'Time Out', 'Status', 'Hours Worked'];
+    const headers = ['Employee ID', 'Employee Name', 'Department', 'Date', 'Time In', 'Time Out', 'Status', 'Hours Worked'];
     const csvData = filteredData.map(record => [
       record.employee_id,
       getEmployeeName(record),
+      getDepartment(record),
       record.date,
       formatTime(record.check_in_time),
       formatTime(record.check_out_time),
@@ -318,7 +334,7 @@ return (
               <Download className="mr-2 h-4 w-4" />
               Export to CSV
             </Button>
-            <PDFReportGenerator />
+            <PDFReportGenerator departments={departments} />
           </div>
         </div>
 
@@ -326,6 +342,7 @@ return (
           filters={filters}
           onFilterChange={handleFilterChange}
           resultCount={filteredData.length}
+          departments={departments}
         />
 
         {loading ? (

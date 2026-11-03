@@ -6,6 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -15,11 +22,16 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/components/ui/use-toast';
 
-export default function PDFReportGenerator() {
+interface PDFReportGeneratorProps {
+  departments: string[];
+}
+
+export default function PDFReportGenerator({ departments }: PDFReportGeneratorProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [department, setDepartment] = useState('all');
   const { toast } = useToast();
 
   const generatePDF = async () => {
@@ -35,6 +47,7 @@ export default function PDFReportGenerator() {
         body: JSON.stringify({
           startDate: startDate || undefined,
           endDate: endDate || undefined,
+          department: department === 'all' ? undefined : department,
         }),
       });
 
@@ -50,7 +63,10 @@ export default function PDFReportGenerator() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `attendance_report_${new Date().toISOString().split('T')[0]}.pdf`;
+      const deptSlug = department === 'all'
+        ? 'all_departments'
+        : department.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      a.download = `attendance_report_${deptSlug}_${new Date().toISOString().split('T')[0]}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -86,10 +102,26 @@ export default function PDFReportGenerator() {
         <DialogHeader>
           <DialogTitle>Generate PDF Report</DialogTitle>
           <DialogDescription>
-            Generate a comprehensive attendance report with analytics and detailed records.
+            Choose a department or include all departments, then pick a date range.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
+          <div className="grid gap-2">
+            <Label htmlFor="department">Department</Label>
+            <Select value={department} onValueChange={setDepartment}>
+              <SelectTrigger id="department">
+                <SelectValue placeholder="All Departments" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Departments</SelectItem>
+                {departments.map((dept) => (
+                  <SelectItem key={dept} value={dept}>
+                    {dept}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid gap-2">
             <Label htmlFor="start-date">Start Date (Optional)</Label>
             <Input

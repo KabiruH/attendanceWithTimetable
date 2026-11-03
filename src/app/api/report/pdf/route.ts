@@ -4,7 +4,7 @@ import { jwtVerify } from 'jose';
 import { db } from '@/lib/db/db';
 import { cookies } from 'next/headers';
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import autoTable, { type Styles } from 'jspdf-autotable';
 
 interface JwtPayload {
   id: number;
@@ -24,7 +24,44 @@ interface AttendanceRecord {
   users?: {
     id: number;
     name: string;
+    department: string | null;
   };
+}
+
+interface DepartmentStats {
+  staff: Set<number>;
+  records: number;
+  present: number;
+  late: number;
+  absent: number;
+  onDuty: number;
+  leave: number;
+}
+
+interface LateDayStats {
+  // Mon–Fri: late count and total records for that weekday
+  byWeekday: { day: string; late: number; records: number }[];
+  // Specific dates with the most late arrivals
+  topDates: { date: string; weekday: string; late: number; records: number }[];
+}
+
+const UNASSIGNED = 'Unassigned';
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+// Normalise a raw status into one of: present, late, absent, on duty, leave
+function normalizeStatus(raw: string): string {
+  const status = raw.toLowerCase().trim();
+  if (status === 'present' || status === 'late' || status === 'on duty' || status === 'leave') {
+    return status;
+  }
+  return 'absent'; // 'absent', 'not checked in' and anything unexpected
+}
+
+// Attendance rate excludes excused days (on duty, leave) from the denominator
+function attendanceRate(s: { records: number; present: number; late: number; onDuty: number; leave: number }): string {
+  const expected = s.records - s.onDuty - s.leave;
+  if (expected <= 0) return '-';
+  return `${(((s.present + s.late) / expected) * 100).toFixed(1)}%`;
 }
 
 interface AnalyticsData {
@@ -252,6 +289,75 @@ data.forEach(record => {
   };
 }
 
+// Attendance per department, sorted by department name
+function calculateDepartmentStats(
+  data: AttendanceRecord[],
+  resolveDept: (raw: string | null | undefined) => string
+): [string, DepartmentStats][] {
+  const stats: Record<string, DepartmentStats> = {};
+
+  data.forEach(record => {
+    const dept = resolveDept(record.users?.department);
+    if (!stats[dept]) {
+      stats[dept] = { staff: new Set(), records: 0, present: 0, late: 0, absent: 0, onDuty: 0, leave: 0 };
+    }
+    const s = stats[dept];
+    s.staff.add(record.employee_id);
+    s.records++;
+
+    switch (normalizeStatus(record.status)) {
+      case 'present': s.present++; break;
+      case 'late': s.late++; break;
+      case 'on duty': s.onDuty++; break;
+      case 'leave': s.leave++; break;
+      default: s.absent++;
+    }
+  });
+
+  return Object.entries(stats).sort((a, b) => {
+    // Keep 'Unassigned' at the bottom
+    if (a[0] === UNASSIGNED) return 1;
+    if (b[0] === UNASSIGNED) return -1;
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+// Which weekdays, and which specific dates, have the most late arrivals
+function calculateLateDays(data: AttendanceRecord[]): LateDayStats {
+  // attendance.date is @db.Date (stored as UTC midnight), so use UTC getters
+  const weekday: Record<number, { late: number; records: number }> = {};
+  const byDate: Record<string, { late: number; records: number; weekday: string }> = {};
+
+  data.forEach(record => {
+    const d = new Date(record.date);
+    const dayIdx = d.getUTCDay();
+    const dateKey = d.toISOString().split('T')[0];
+    const isLate = normalizeStatus(record.status) === 'late';
+
+    weekday[dayIdx] = weekday[dayIdx] || { late: 0, records: 0 };
+    weekday[dayIdx].records++;
+    if (isLate) weekday[dayIdx].late++;
+
+    byDate[dateKey] = byDate[dateKey] || { late: 0, records: 0, weekday: WEEKDAY_NAMES[dayIdx] };
+    byDate[dateKey].records++;
+    if (isLate) byDate[dateKey].late++;
+  });
+
+  const byWeekday = [1, 2, 3, 4, 5].map(idx => ({
+    day: WEEKDAY_NAMES[idx],
+    late: weekday[idx]?.late || 0,
+    records: weekday[idx]?.records || 0,
+  }));
+
+  const topDates = Object.entries(byDate)
+    .filter(([, v]) => v.late > 0)
+    .sort((a, b) => b[1].late - a[1].late || b[0].localeCompare(a[0]))
+    .slice(0, 5)
+    .map(([date, v]) => ({ date, weekday: v.weekday, late: v.late, records: v.records }));
+
+  return { byWeekday, topDates };
+}
+
 // Format time for display
 function formatTime(timeStr: Date | string | null | undefined): string {
   if (!timeStr) return '-';
@@ -286,7 +392,13 @@ function generatePDF(
   data: AttendanceRecord[],
   analytics: AnalyticsData,
   options: { startDate?: string; endDate?: string },
-  userName: string
+  userName: string,
+  extras: {
+    departmentStats: [string, DepartmentStats][];
+    lateDays: LateDayStats;
+    showDepartments: boolean; // true for an admin "All Departments" report
+    resolveDept: (raw: string | null | undefined) => string;
+  }
 ): Buffer {
   const doc = new jsPDF();
   let yPosition = 20;
@@ -327,82 +439,125 @@ function generatePDF(
   doc.text(`Report for: ${userName}`, 105, yPosition + 5, { align: 'center' });
   yPosition += 15;
 
-  // Executive Summary
-  doc.setFontSize(14);
-  doc.setTextColor(30, 64, 175);
-  doc.text('Executive Summary', 14, yPosition);
-  yPosition += 8;
+  const headStyles = { fillColor: [30, 64, 175] as [number, number, number], textColor: 255 };
+  const sectionTitle = (title: string, space = 50) => {
+    checkPageBreak(space);
+    doc.setFontSize(14);
+    doc.setTextColor(30, 64, 175);
+    doc.text(title, 14, yPosition);
+    yPosition += 8;
+  };
+  const afterTable = () => {
+    yPosition = (doc as any).lastAutoTable.finalY + 10;
+  };
 
-  const onDutyTotal = analytics.statusCounts['on duty'] || 0;
-  const leaveTotal = analytics.statusCounts['leave'] || 0;
+  // Overview (one compact table replaces the old executive summary,
+  // status breakdown and check-in distribution sections)
+  sectionTitle('Overview');
+
+  const sc = analytics.statusCounts;
+  const pct = (s: string) => analytics.statusPercentages[s] ? ` (${analytics.statusPercentages[s]}%)` : '';
+  const overallRate = attendanceRate({
+    records: analytics.totalRecords,
+    present: sc['present'] || 0,
+    late: sc['late'] || 0,
+    onDuty: sc['on duty'] || 0,
+    leave: sc['leave'] || 0,
+  });
 
   autoTable(doc, {
     startY: yPosition,
-    head: [['Metric', 'Value']],
-    body: [
-      ['Total Records', analytics.totalRecords.toString()],
-      ['Average Work Hours', `${analytics.avgWorkHours} hours`],
-      ['Peak Check-In Time', analytics.peakCheckInTime],
-      ['Late Arrivals', `${analytics.lateCount} (${analytics.latePercentage}%)`],
-      ['Official Duty Days', onDutyTotal.toString()],
-      ['Leave Days', leaveTotal.toString()],
-    ],
+    head: [['Records', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Attendance', 'Avg Hours']],
+    body: [[
+      analytics.totalRecords.toString(),
+      `${sc['present'] || 0}${pct('present')}`,
+      `${sc['late'] || 0}${pct('late')}`,
+      `${sc['absent'] || 0}${pct('absent')}`,
+      (sc['on duty'] || 0).toString(),
+      (sc['leave'] || 0).toString(),
+      overallRate,
+      `${analytics.avgWorkHours}h`,
+    ]],
     theme: 'grid',
-    headStyles: { fillColor: [30, 64, 175], textColor: 255 },
-    alternateRowStyles: { fillColor: [243, 244, 246] },
-    styles: { fontSize: 9 },
+    headStyles: { ...headStyles, halign: 'center', fontSize: 8 },
+    styles: { fontSize: 8, halign: 'center' },
   });
+  afterTable();
 
-  yPosition = (doc as any).lastAutoTable.finalY + 10;
+  // Attendance by department (only on all-department admin reports)
+  if (extras.showDepartments && extras.departmentStats.length > 0) {
+    sectionTitle('Attendance by Department');
 
-  // Status Breakdown
-  checkPageBreak(50);
-  doc.setFontSize(14);
-  doc.setTextColor(30, 64, 175);
-  doc.text('Attendance Status Breakdown', 14, yPosition);
-  yPosition += 8;
-
-  const statusData = Object.entries(analytics.statusCounts).map(([status, count]) => [
-    displayStatus(status),
-    count.toString(),
-    `${analytics.statusPercentages[status]}%`
-  ]);
-
-  autoTable(doc, {
-    startY: yPosition,
-    head: [['Status', 'Count', 'Percentage']],
-    body: statusData,
-    theme: 'grid',
-    headStyles: { fillColor: [30, 64, 175], textColor: 255, halign: 'center' },
-    alternateRowStyles: { fillColor: [243, 244, 246] },
-    styles: { fontSize: 9, halign: 'center' },
-  });
-
-  yPosition = (doc as any).lastAutoTable.finalY + 10;
-
-  // Check-In Time Distribution
-  checkPageBreak(50);
-  doc.setFontSize(14);
-  doc.setTextColor(30, 64, 175);
-  doc.text('Check-In Time Distribution', 14, yPosition);
-  yPosition += 8;
-
-  const checkInData = Object.entries(analytics.checkInTimes)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([time, count]) => [time, count.toString()]);
-
-  if (checkInData.length > 0) {
     autoTable(doc, {
       startY: yPosition,
-      head: [['Time Slot', 'Number of Check-Ins']],
-      body: checkInData,
+      head: [['Department', 'Staff', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Attendance']],
+      body: extras.departmentStats.map(([dept, s]) => [
+        dept,
+        s.staff.size.toString(),
+        s.present.toString(),
+        s.late.toString(),
+        s.absent.toString(),
+        s.onDuty.toString(),
+        s.leave.toString(),
+        attendanceRate(s),
+      ]),
       theme: 'grid',
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, halign: 'center' },
+      headStyles: { ...headStyles, fontSize: 8 },
       alternateRowStyles: { fillColor: [243, 244, 246] },
-      styles: { fontSize: 9, halign: 'center' },
+      styles: { fontSize: 8, halign: 'center' },
+      columnStyles: { 0: { halign: 'left', cellWidth: 50 } },
     });
-    yPosition = (doc as any).lastAutoTable.finalY + 10;
+    afterTable();
   }
+
+  // Late arrivals by day
+  sectionTitle('Late Arrivals by Day', 60);
+
+  const maxWeekdayLate = Math.max(...extras.lateDays.byWeekday.map(d => d.late));
+  autoTable(doc, {
+    startY: yPosition,
+    head: [['Weekday', 'Late Arrivals', 'Records', 'Late %']],
+    body: extras.lateDays.byWeekday.map(d => [
+      d.late > 0 && d.late === maxWeekdayLate ? `${d.day} (most late)` : d.day,
+      d.late.toString(),
+      d.records.toString(),
+      d.records > 0 ? `${((d.late / d.records) * 100).toFixed(1)}%` : '-',
+    ]),
+    theme: 'grid',
+    headStyles: { ...headStyles, halign: 'center', fontSize: 8 },
+    alternateRowStyles: { fillColor: [243, 244, 246] },
+    styles: { fontSize: 8, halign: 'center' },
+    columnStyles: { 0: { halign: 'left' } },
+  });
+  afterTable();
+
+  if (extras.lateDays.topDates.length > 0) {
+    checkPageBreak(45);
+    doc.setFontSize(10);
+    doc.setTextColor(60, 60, 60);
+    doc.text('Dates with the most late arrivals', 14, yPosition);
+    yPosition += 4;
+
+    autoTable(doc, {
+      startY: yPosition,
+      head: [['Date', 'Weekday', 'Late Arrivals', 'Late %']],
+      body: extras.lateDays.topDates.map(d => [
+        formatDate(d.date),
+        d.weekday,
+        d.late.toString(),
+        `${((d.late / d.records) * 100).toFixed(1)}%`,
+      ]),
+      theme: 'grid',
+      headStyles: { ...headStyles, halign: 'center', fontSize: 8 },
+      styles: { fontSize: 8, halign: 'center' },
+    });
+    afterTable();
+  }
+
+  doc.setFontSize(7);
+  doc.setTextColor(120, 120, 120);
+  checkPageBreak(8);
+  doc.text('Attendance = (Present + Late) / (Records - On Duty - Leave). Weekends are excluded.', 14, yPosition);
 
   // Employee Statistics
   doc.addPage();
@@ -412,9 +567,28 @@ function generatePDF(
   doc.text('Employee Statistics', 14, yPosition);
   yPosition += 8;
 
-  const empData = Object.entries(analytics.employeeStats).map(([name, stats]) => {
+  // Department per employee (for the column and for grouping)
+  const empDept: Record<string, string> = {};
+  data.forEach(record => {
+    empDept[getEmployeeName(record)] = extras.resolveDept(record.users?.department);
+  });
+
+  const empEntries = Object.entries(analytics.employeeStats).sort((a, b) => {
+    if (extras.showDepartments) {
+      const da = empDept[a[0]] || UNASSIGNED;
+      const dbb = empDept[b[0]] || UNASSIGNED;
+      if (da !== dbb) {
+        if (da === UNASSIGNED) return 1;
+        if (dbb === UNASSIGNED) return -1;
+        return da.localeCompare(dbb);
+      }
+    }
+    return a[0].localeCompare(b[0]);
+  });
+
+  const empData = empEntries.map(([name, stats]) => {
     const avgHours = stats.totalDays > 0 ? stats.totalHours / stats.totalDays : 0;
-    return [
+    const row = [
       name.substring(0, 25),
       stats.totalDays.toString(),
       stats.present.toString(),
@@ -422,90 +596,51 @@ function generatePDF(
       stats.absent.toString(),
       stats.onDuty.toString(),
       stats.leave.toString(),
-      `${avgHours.toFixed(1)}h`
+      `${avgHours.toFixed(1)}h`,
     ];
+    if (extras.showDepartments) {
+      row.splice(1, 0, (empDept[name] || UNASSIGNED).substring(0, 22));
+    }
+    return row;
   });
+
+  const empHead = extras.showDepartments
+    ? [['Employee', 'Department', 'Days', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Avg Hours']]
+    : [['Employee', 'Days', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Avg Hours']];
+
+  const empColumns: Record<string, Partial<Styles>> = extras.showDepartments
+    ? {
+        0: { cellWidth: 36, halign: 'left' },
+        1: { cellWidth: 30, halign: 'left' },
+        2: { cellWidth: 14, halign: 'center' },
+        3: { cellWidth: 16, halign: 'center' },
+        4: { cellWidth: 13, halign: 'center' },
+        5: { cellWidth: 15, halign: 'center' },
+        6: { cellWidth: 16, halign: 'center' },
+        7: { cellWidth: 14, halign: 'center' },
+        8: { cellWidth: 18, halign: 'center' },
+      }
+    : {
+        0: { cellWidth: 36, halign: 'left' },
+        1: { cellWidth: 17, halign: 'center' },
+        2: { cellWidth: 19, halign: 'center' },
+        3: { cellWidth: 15, halign: 'center' },
+        4: { cellWidth: 18, halign: 'center' },
+        5: { cellWidth: 19, halign: 'center' },
+        6: { cellWidth: 16, halign: 'center' },
+        7: { cellWidth: 21, halign: 'center' },
+      };
 
   autoTable(doc, {
     startY: yPosition,
-    head: [['Employee', 'Days', 'Present', 'Late', 'Absent', 'On Duty', 'Leave', 'Avg Hours']],
+    head: empHead,
     body: empData,
     theme: 'grid',
-    headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 8 },
+    headStyles: { ...headStyles, fontSize: 8 },
     alternateRowStyles: { fillColor: [243, 244, 246] },
     styles: { fontSize: 7, cellPadding: 2 },
-    columnStyles: {
-      0: { cellWidth: 36, halign: 'left' },
-      1: { cellWidth: 17, halign: 'center' },
-      2: { cellWidth: 19, halign: 'center' },
-      3: { cellWidth: 15, halign: 'center' },
-      4: { cellWidth: 18, halign: 'center' },
-      5: { cellWidth: 19, halign: 'center' },
-      6: { cellWidth: 16, halign: 'center' },
-      7: { cellWidth: 21, halign: 'center' },
-    },
+    columnStyles: empColumns,
   });
-
-  // Detailed Records
-  doc.addPage();
-  yPosition = 20;
-  doc.setFontSize(14);
-  doc.setTextColor(30, 64, 175);
-  doc.text('Detailed Attendance Records', 14, yPosition);
-  yPosition += 8;
-
-  const detailData = data.map(record => {
-    const empName = getEmployeeName(record);
-    const date = formatDate(record.date);
-    const isLeaveDay = LEAVE_STATUSES.includes(record.status.toLowerCase().trim());
-    const checkIn = isLeaveDay ? '-' : formatTime(record.check_in_time);
-    const checkOut = isLeaveDay ? '-' : formatTime(record.check_out_time);
-    const status = displayStatus(record.status.toLowerCase().trim());
-    const hours = calculateHours(record);
-    const hoursStr = hours > 0 ? `${hours.toFixed(1)}h` : '-';
-
-    return [
-      empName.substring(0, 20),
-      date,
-      checkIn,
-      checkOut,
-      status,
-      hoursStr
-    ];
-  });
-
-  // Split into chunks of 35 records per page
-  const chunkSize = 35;
-  for (let i = 0; i < detailData.length; i += chunkSize) {
-    if (i > 0) {
-      doc.addPage();
-      yPosition = 20;
-      doc.setFontSize(14);
-      doc.setTextColor(30, 64, 175);
-      doc.text('Detailed Attendance Records (continued)', 14, yPosition);
-      yPosition += 8;
-    }
-
-    const chunk = detailData.slice(i, i + chunkSize);
-
-    autoTable(doc, {
-      startY: yPosition,
-      head: [['Employee', 'Date', 'Check In', 'Check Out', 'Status', 'Hours']],
-      body: chunk,
-      theme: 'grid',
-      headStyles: { fillColor: [30, 64, 175], textColor: 255, fontSize: 7 },
-      alternateRowStyles: { fillColor: [249, 250, 251] },
-      styles: { fontSize: 6, cellPadding: 1.5 },
-      columnStyles: {
-        0: { cellWidth: 35, halign: 'left' },
-        1: { cellWidth: 25, halign: 'center' },
-        2: { cellWidth: 22, halign: 'center' },
-        3: { cellWidth: 22, halign: 'center' },
-        4: { cellWidth: 20, halign: 'center' },
-        5: { cellWidth: 15, halign: 'center' },
-      },
-    });
-  }
 
   // Add page numbers
   const pageCount = doc.getNumberOfPages();
@@ -533,6 +668,31 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { startDate, endDate } = body;
+    // Raw users.department value, or 'Unassigned'. Only admins can filter by department.
+    const department: string | undefined =
+      user.role === 'admin' && typeof body.department === 'string' && body.department.trim()
+        ? body.department.trim()
+        : undefined;
+
+    // users.department is free text that may hold a department name or code;
+    // resolve it to the display name from the departments table where possible
+    const deptRows = await db.departments.findMany({ select: { name: true, code: true } });
+    const deptLookup = new Map<string, string>();
+    deptRows.forEach(d => {
+      deptLookup.set(d.name.toLowerCase(), d.name);
+      deptLookup.set(d.code.toLowerCase(), d.name);
+    });
+    const resolveDept = (raw: string | null | undefined): string => {
+      const value = raw?.trim();
+      if (!value) return UNASSIGNED;
+      return deptLookup.get(value.toLowerCase()) || value;
+    };
+
+    const departmentFilter = department
+      ? department === UNASSIGNED
+        ? { users: { OR: [{ department: null }, { department: '' }] } }
+        : { users: { department } }
+      : {};
 
     const dateFilter: any = {};
     if (startDate) {
@@ -551,10 +711,13 @@ export async function POST(request: NextRequest) {
 
     if (user.role === 'admin') {
       attendanceData = await db.attendance.findMany({
-        where: Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {},
+        where: {
+          ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+          ...departmentFilter,
+        },
         include: {
           users: {
-            select: { id: true, name: true },
+            select: { id: true, name: true, department: true },
           },
         },
         orderBy: [
@@ -570,7 +733,7 @@ export async function POST(request: NextRequest) {
         },
         include: {
           users: {
-            select: { id: true, name: true },
+            select: { id: true, name: true, department: true },
           },
         },
         orderBy: { date: 'desc' },
@@ -588,15 +751,31 @@ export async function POST(request: NextRequest) {
     }
 
     const analytics = calculateAnalytics(attendanceData);
+    const showDepartments = user.role === 'admin' && !department;
+
+    const reportFor = user.role !== 'admin'
+      ? user.name
+      : department
+        ? `${department === UNASSIGNED ? UNASSIGNED : resolveDept(department)} Department`
+        : 'All Departments';
 
     const pdfBuffer = generatePDF(
       attendanceData,
       analytics,
       { startDate, endDate },
-      user.role === 'admin' ? 'All Employees' : user.name
+      reportFor,
+      {
+        departmentStats: showDepartments ? calculateDepartmentStats(attendanceData, resolveDept) : [],
+        lateDays: calculateLateDays(attendanceData),
+        showDepartments,
+        resolveDept,
+      }
     );
 
-    const filename = `attendance_report_${new Date().toISOString().split('T')[0]}.pdf`;
+    const deptSlug = department
+      ? department.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      : user.role === 'admin' ? 'all_departments' : 'personal';
+    const filename = `attendance_report_${deptSlug}_${new Date().toISOString().split('T')[0]}.pdf`;
 
     const arrayBuffer = pdfBuffer.buffer.slice(
       pdfBuffer.byteOffset,

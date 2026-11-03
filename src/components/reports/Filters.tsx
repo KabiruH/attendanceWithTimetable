@@ -17,12 +17,14 @@ interface FiltersProps {
   filters: FilterState;
   onFilterChange: (key: keyof FilterState, value: string) => void;
   resultCount: number;
+  departments: string[];
 }
 
 const Filters: React.FC<FiltersProps> = ({
   filters,
   onFilterChange,
   resultCount,
+  departments,
 }) => {
   const statusOptions: { value: AttendanceStatus; label: string }[] = [
     { value: 'all', label: 'All Status' },
@@ -43,8 +45,8 @@ const Filters: React.FC<FiltersProps> = ({
               {resultCount} results found
             </span>
           </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="relative">
               <Search className="absolute left-2 top-3 h-4 w-4 text-gray-500" />
               <Input
@@ -54,7 +56,7 @@ const Filters: React.FC<FiltersProps> = ({
                 className="pl-8"
               />
             </div>
-            
+
             <Select
               value={filters.status}
               onValueChange={(value) => onFilterChange('status', value)}
@@ -66,6 +68,23 @@ const Filters: React.FC<FiltersProps> = ({
                 {statusOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={filters.department}
+              onValueChange={(value) => onFilterChange('department', value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="All Departments" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Departments</SelectItem>
+                {departments.map((dept) => (
+                  <SelectItem key={dept} value={dept}>
+                    {dept}
                   </SelectItem>
                 ))}
               </SelectContent>

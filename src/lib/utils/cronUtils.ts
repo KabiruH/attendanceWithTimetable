@@ -1,4 +1,5 @@
 import { db } from "../db/db";
+import { buildSessionIndex, eatWallClockToInstant, eatToday } from "./classSessions";
 
 // Interface for attendance session
 interface AttendanceSession {
@@ -19,7 +20,7 @@ interface AttendanceSession {
 
 const ATTENDANCE_RULES = {
   AUTO_CHECKOUT: 15,       // 5 PM - automatic checkout time
-  CLASS_DURATION_HOURS: 2, // 2 hours - automatic class checkout after this duration
+  CLASS_DURATION_HOURS: 2, // fallback only: class rows with no timetable slot
 };
 
 export async function processAbsentRecords(date: Date = new Date()) {
@@ -147,38 +148,82 @@ export async function processMissedDays() {
   }
 }
 
-// NEW: Process class attendance auto-checkouts
+// Class auto-checkout at the end of each SESSION (a double runs to the end of
+// its last period). Rows not linked to a timetable slot keep the old rule.
 export async function processClassAutoCheckouts(currentTime: Date) {
   try {
-    const todayDate = new Date(currentTime.toISOString().split('T')[0]);
-    
-    // Find all active class sessions
-    const activeClassSessions = await db.classattendance.findMany({
+    // Nairobi calendar date — matches how class-checkin stores `date`
+    const todayDate = eatToday(currentTime);
+
+    const openRows = await db.classattendance.findMany({
       where: {
         date: todayDate,
-        check_out_time: null
+        check_out_time: null,
+        check_in_time: { not: null }
+      },
+      include: {
+        timetableslots: {
+          select: { term_id: true, day_of_week: true, employee_id: true }
+        }
       }
     });
 
+    if (openRows.length === 0) return 0;
+
+    // Load each trainer's slots for the day once, then group into sessions
+    const combos = new Map<string, { term_id: number; day_of_week: number; employee_id: number }>();
+    openRows.forEach(r => {
+      const t = r.timetableslots;
+      if (t) combos.set(`${t.term_id}-${t.day_of_week}-${t.employee_id}`, t);
+    });
+
+    const slots = combos.size > 0
+      ? await db.timetableslots.findMany({
+          where: { OR: Array.from(combos.values()) },
+          select: {
+            id: true,
+            class_id: true,
+            subject_id: true,
+            employee_id: true,
+            lessonperiods: { select: { start_time: true, end_time: true } }
+          }
+        })
+      : [];
+
+    const sessionIndex = buildSessionIndex(slots);
+
     let classCheckoutCount = 0;
 
-    for (const session of activeClassSessions) {
-      if (session.check_in_time) {
-        const timeDiff = currentTime.getTime() - session.check_in_time.getTime();
-        const hoursDiff = timeDiff / (1000 * 60 * 60);
-        
-        // Auto-checkout after 2 hours
-        if (hoursDiff >= ATTENDANCE_RULES.CLASS_DURATION_HOURS) {
-          await db.classattendance.update({
-            where: { id: session.id },
-            data: {
-              check_out_time: currentTime,
-              auto_checkout: true
-            }
-          });
-          classCheckoutCount++;
-          
+    for (const row of openRows) {
+      if (!row.check_in_time) continue;
+
+      let checkoutAt: Date | null = null;
+      const session = row.timetable_slot_id ? sessionIndex.get(row.timetable_slot_id) : undefined;
+
+      if (session && session.endMin !== null) {
+        // Close at the session's scheduled end, stamped with that end time
+        // (not "now"), so hours taught stay accurate even if this runs late
+        const sessionEnd = eatWallClockToInstant(row.date, session.endMin);
+        if (currentTime >= sessionEnd) {
+          checkoutAt = sessionEnd > row.check_in_time ? sessionEnd : row.check_in_time;
         }
+      } else {
+        // No timetable link: fall back to the fixed duration
+        const hoursDiff = (currentTime.getTime() - row.check_in_time.getTime()) / (1000 * 60 * 60);
+        if (hoursDiff >= ATTENDANCE_RULES.CLASS_DURATION_HOURS) {
+          checkoutAt = currentTime;
+        }
+      }
+
+      if (checkoutAt) {
+        await db.classattendance.update({
+          where: { id: row.id },
+          data: {
+            check_out_time: checkoutAt,
+            auto_checkout: true
+          }
+        });
+        classCheckoutCount++;
       }
     }
 

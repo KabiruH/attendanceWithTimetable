@@ -27,6 +27,7 @@ export interface AttendanceRecord {
   date: string | Date;
   check_in_time?: string | Date | null;
   check_out_time?: string | Date | null;
+  department?: string | null;  
   status: string;
   sessions?: AttendanceSession[] | boolean;  // ✅ Can be array or boolean
   
@@ -61,6 +62,7 @@ export interface WeeklyHoursDataPoint {
 export interface FilterState {
   employeeName: string;
   status: string;
+  department: string; 
   startDate: string;
   endDate: string;
 }

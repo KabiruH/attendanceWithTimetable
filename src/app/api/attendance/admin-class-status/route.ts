@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import jwt from 'jsonwebtoken';
+import { groupIntoSessions, minutesOfDay } from '@/lib/utils/classSessions';
 
 // Helper function to verify JWT and get user 
 async function getAuthenticatedUser(req: NextRequest) {
@@ -48,36 +49,16 @@ async function getCurrentTerm() {
   });
 }
 
-/** Lesson times are wall-clock digits stored in UTC fields — read with getUTC*. */
-function minutesOfDay(stored: Date): number {
-  return stored.getUTCHours() * 60 + stored.getUTCMinutes();
+/** "08:00"-style label from a stored lesson time */
+function hhmm(stored: Date): string {
+  return `${String(stored.getUTCHours()).padStart(2, '0')}:${String(stored.getUTCMinutes()).padStart(2, '0')}`;
 }
 
-/** Collapse doubles/triples into one session, keyed on the earliest period. */
-function groupIntoSessions<T extends {
-  id: string;
-  class_id: number;
-  session_group_id: string | null;
-  lessonperiods?: { start_time: Date; end_time: Date; duration: number } | null;
-}>(slots: T[]): Array<{ primary: T; siblings: T[] }> {
-  const groups = new Map<string, T[]>();
+// Check-in window defaults — must match app/api/attendance/class-checkin
+const DEFAULT_CHECKIN_WINDOW = 15;  // minutes before the session it opens
+const DEFAULT_LATE_THRESHOLD = 10;  // minutes after the start it closes
 
-  slots.forEach(slot => {
-    const key = slot.session_group_id
-      ? `${slot.session_group_id}-${slot.class_id}`
-      : `single-${slot.id}`;
-    groups.set(key, [...(groups.get(key) ?? []), slot]);
-  });
-
-  return Array.from(groups.values()).map(group => {
-    const sorted = [...group].sort(
-      (a, b) =>
-        (a.lessonperiods ? minutesOfDay(a.lessonperiods.start_time) : 0) -
-        (b.lessonperiods ? minutesOfDay(b.lessonperiods.start_time) : 0)
-    );
-    return { primary: sorted[0], siblings: sorted };
-  });
-}
+type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'missed' | 'absent';
 
 // GET - Get all class attendance status for admin dashboard
 export async function GET(req: NextRequest) {
@@ -133,12 +114,24 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    const enrichedTodayAttendance = todayAttendance.map(attendance => ({
-      ...attendance,
-      subject: attendance.timetableslots?.subjects ?? null,
-      room: attendance.timetableslots?.rooms ?? null,
-      lessonPeriod: attendance.timetableslots?.lessonperiods ?? null
+    // Same check-in window as the check-in route
+    const [settings, periodRows] = await Promise.all([
+      db.timetablesettings.findFirst(),
+      db.lessonperiods.findMany({
+        where: { is_active: true },
+        select: { id: true, name: true, start_time: true, end_time: true },
+        orderBy: { start_time: 'asc' }
+      })
+    ]);
+    // For the period filter on the dashboard
+    const lessonPeriods = periodRows.map(p => ({
+      id: p.id,
+      name: p.name,
+      startTime: hhmm(p.start_time),
+      endTime: hhmm(p.end_time)
     }));
+    const checkInOpensBefore = settings?.attendance_check_in_window || DEFAULT_CHECKIN_WINDOW;
+    const checkInClosesAfter = settings?.attendance_late_threshold || DEFAULT_LATE_THRESHOLD;
 
     // ── Today's schedule for all trainers
     const activeTerm = await getCurrentTerm();
@@ -176,6 +169,19 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Index today's attendance by slot, and by trainer+class for rows
+    // that aren't linked to a slot
+    const attendanceBySlot = new Map<string, typeof todayAttendance>();
+    const attendanceByTrainerClass = new Map<string, typeof todayAttendance>();
+    todayAttendance.forEach(a => {
+      if (a.timetable_slot_id) {
+        attendanceBySlot.set(a.timetable_slot_id, [...(attendanceBySlot.get(a.timetable_slot_id) ?? []), a]);
+      } else {
+        const key = `${a.trainer_id}-${a.class_id}`;
+        attendanceByTrainerClass.set(key, [...(attendanceByTrainerClass.get(key) ?? []), a]);
+      }
+    });
+
     // Collapse doubles/triples — a double is one session, not two
     const sessions = groupIntoSessions(todaySlots);
 
@@ -188,6 +194,32 @@ export async function GET(req: NextRequest) {
       const startMin = primary.lessonperiods ? minutesOfDay(primary.lessonperiods.start_time) : null;
       const endMin = lastPeriod ? minutesOfDay(lastPeriod.end_time) : null;
 
+      // Attendance for this session: linked to any of its slots, or an
+      // unlinked row for the same trainer+class checked in during the session
+      const linked = siblings.flatMap(s => attendanceBySlot.get(s.id) ?? []);
+      const unlinked = (attendanceByTrainerClass.get(`${primary.employee_id}-${primary.class_id}`) ?? [])
+        .filter(a => {
+          if (!a.check_in_time || startMin === null || endMin === null) return false;
+          const t = DateTime.fromJSDate(a.check_in_time).setZone('Africa/Nairobi');
+          const m = t.hour * 60 + t.minute;
+          return m >= startMin - checkInOpensBefore && m < endMin;
+        });
+      const records = [...linked, ...unlinked];
+      const checkedIn = records.find(a => a.check_in_time !== null);
+
+      let checkInState: CheckInState;
+      if (checkedIn) {
+        checkInState = checkedIn.check_out_time ? 'checked_out' : 'checked_in';
+      } else if (records.some(a => a.status === 'Absent')) {
+        checkInState = 'absent';
+      } else if (startMin !== null && nowMinutes > startMin + checkInClosesAfter) {
+        checkInState = 'missed';
+      } else if (startMin !== null && nowMinutes < startMin - checkInOpensBefore) {
+        checkInState = 'upcoming';   // check-in window not open yet
+      } else {
+        checkInState = 'awaiting';
+      }
+
       return {
         ...primary,
         lessonperiods: primary.lessonperiods
@@ -199,6 +231,14 @@ export async function GET(req: NextRequest) {
           : primary.lessonperiods,
         sessionSpan: siblings.length,
         sessionSlotIds: siblings.map(s => s.id),
+        startTime: primary.lessonperiods ? hhmm(primary.lessonperiods.start_time) : null,
+        endTime: lastPeriod ? hhmm(lastPeriod.end_time) : null,
+        checkIn: {
+          state: checkInState,
+          time: checkedIn?.check_in_time?.toISOString() ?? null,
+          status: checkedIn?.status ?? null,       // Present / Late
+          attendanceId: checkedIn?.id ?? null
+        },
         // Is this session running right now (by the timetable, not attendance)?
         inSessionNow:
           startMin !== null && endMin !== null &&
@@ -207,21 +247,54 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    // Slot id → its full session, so attendance rows report the session's
+    // real end (a double runs to the end of its second period, not its first)
+    const sessionBySlot = new Map<string, (typeof todaySchedule)[number]>();
+    todaySchedule.forEach(s => s.sessionSlotIds.forEach((id: string) => sessionBySlot.set(id, s)));
+
+    const enrichedTodayAttendance = todayAttendance.map(attendance => {
+      const session = attendance.timetable_slot_id ? sessionBySlot.get(attendance.timetable_slot_id) : undefined;
+      const period = attendance.timetableslots?.lessonperiods ?? null;
+
+      return {
+        ...attendance,
+        subject: attendance.timetableslots?.subjects ?? null,
+        room: attendance.timetableslots?.rooms ?? null,
+        lessonPeriod: period && session?.lessonperiods
+          ? { ...period, end_time: session.lessonperiods.end_time, duration: session.lessonperiods.duration }
+          : period,
+        sessionSpan: session?.sessionSpan ?? 1
+      };
+    });
+
     // ── Currently active sessions: actually checked in, not yet checked out.
     // Auto-marked 'Absent' rows have no check_in_time and must be excluded —
     // including them was reporting every absence as an in-progress class.
-    const activeClassSessions = enrichedTodayAttendance.filter(attendance =>
-      attendance.check_in_time !== null &&
-      attendance.check_out_time === null &&
-      attendance.status !== 'Absent'
-    );
+    // One row per session: a double with an attendance row per period shows once
+    const seenSessions = new Set<string>();
+    const activeClassSessions = enrichedTodayAttendance.filter(attendance => {
+      if (
+        attendance.check_in_time === null ||
+        attendance.check_out_time !== null ||
+        attendance.status === 'Absent'
+      ) return false;
+
+      const session = attendance.timetable_slot_id ? sessionBySlot.get(attendance.timetable_slot_id) : undefined;
+      const key = session ? `session-${session.id}` : `attendance-${attendance.id}`;
+      if (seenSessions.has(key)) return false;
+      seenSessions.add(key);
+      return true;
+    });
 
     // ── Metrics, computed the way the dashboard should read them
     const inSessionNow = todaySchedule.filter(s => s.inSessionNow);
     const scheduledSoFar = todaySchedule.filter(s => s.hasStarted);
     const completedToday = enrichedTodayAttendance.filter(a => a.check_out_time !== null);
     const absentToday = enrichedTodayAttendance.filter(a => a.status === 'Absent');
-    const checkedInSoFar = enrichedTodayAttendance.filter(a => a.check_in_time !== null);
+    // Sessions (not attendance rows) that were checked into, so doubles count once
+    const checkedInSoFar = scheduledSoFar.filter(
+      s => s.checkIn.state === 'checked_in' || s.checkIn.state === 'checked_out'
+    );
 
     const metrics = {
       inSessionNow: inSessionNow.length,               // lessons running right now
@@ -243,6 +316,8 @@ export async function GET(req: NextRequest) {
       activeClassSessions,
       inSessionNow,
       metrics,
+      checkInWindow: { opensBefore: checkInOpensBefore, closesAfter: checkInClosesAfter },
+      lessonPeriods,
       currentTime: nowInKenya.toISO(),
       activeTerm: activeTerm ? {
         id: activeTerm.id,

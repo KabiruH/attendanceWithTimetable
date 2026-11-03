@@ -1,7 +1,7 @@
 // components/dashboard/admin/AdminClassOverview.tsx
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import ActiveSessionsModal, { type ScheduledSession, type LessonPeriodOption } from './ActiveSessionsModal';
 
 const PAGE_SIZE = 15;
 
@@ -60,9 +61,10 @@ interface ActiveClassSession {
   lessonPeriod?: {
     name: string;
     start_time: string;
-    end_time: string;
+    end_time: string; // end of the whole session (last period for doubles/triples)
     duration: number;
   } | null;
+  sessionSpan?: number;
 }
 
 interface ClassMetrics {
@@ -105,12 +107,49 @@ const AdminClassOverview: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month'>('today');
 
+  // "In Session Now" modal
+  const [inSessionList, setInSessionList] = useState<ScheduledSession[]>([]);
+  const [todaySessions, setTodaySessions] = useState<ScheduledSession[]>([]);
+  const [lessonPeriods, setLessonPeriods] = useState<LessonPeriodOption[]>([]);
+  const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const [checkInWindow, setCheckInWindow] = useState<{ opensBefore: number; closesAfter: number } | null>(null);
+
+  const applyStatusData = (statusData: any) => {
+    setClassMetrics(statusData.metrics ?? emptyMetrics);
+    setActiveClassSessions(statusData.activeClassSessions || []);
+    setInSessionList(statusData.inSessionNow || []);
+    setTodaySessions(statusData.todaySchedule || []);
+    setLessonPeriods(statusData.lessonPeriods || []);
+    setCheckInWindow(statusData.checkInWindow ?? null);
+  };
+
+  // Refresh only the live status (used by the modal; skips the trainer report)
+  const refreshClassStatus = async () => {
+    setIsRefreshingStatus(true);
+    try {
+      const res = await fetch('/api/attendance/admin-class-status', {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (res.ok) applyStatusData(await res.json());
+    } catch (error) {
+      console.error('Error refreshing class status:', error);
+    } finally {
+      setIsRefreshingStatus(false);
+    }
+  };
+
   // Active sessions table controls
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
 
+  // Full-page loader only on the first load; background refreshes keep the
+  // page (and an open modal) mounted
+  const hasLoadedOnce = useRef(false);
+
   const fetchClassOverviewData = async () => {
-    setIsLoading(true);
+    if (!hasLoadedOnce.current) setIsLoading(true);
     try {
       const endDate = new Date();
       let startDate = new Date();
@@ -144,11 +183,8 @@ const AdminClassOverview: React.FC = () => {
         const reportData = await reportResponse.json();
         const statusData = await statusResponse.json();
 
-        // Metrics now come computed from the API
-        setClassMetrics(statusData.metrics ?? emptyMetrics);
-
-        // Subject and room arrive with the payload — no per-row fetching
-        setActiveClassSessions(statusData.activeClassSessions || []);
+        // Metrics, active sessions and the in-session list come from the API
+        applyStatusData(statusData);
 
         const trainerData = (reportData.summary || []).map((item: any) => ({
           trainer_id: item.trainer?.id || 0,
@@ -167,6 +203,7 @@ const AdminClassOverview: React.FC = () => {
     } catch (error) {
       console.error('Error fetching class overview:', error);
     } finally {
+      hasLoadedOnce.current = true;
       setIsLoading(false);
     }
   };
@@ -271,13 +308,27 @@ const AdminClassOverview: React.FC = () => {
     <div className="space-y-6">
       {/* Class Metrics Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card className="transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-xl">
+        <Card
+          role="button"
+          tabIndex={0}
+          onClick={() => setSessionsModalOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setSessionsModalOpen(true);
+            }
+          }}
+          className="cursor-pointer transform hover:scale-105 transition-all duration-300 shadow-lg hover:shadow-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+        >
           <CardContent className="pt-6">
             <div className="flex items-center justify-between p-4 bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-lg text-white">
               <div>
                 <p className="text-sm font-medium opacity-90">In Session Now</p>
                 <p className="text-3xl font-bold">{classMetrics.inSessionNow}</p>
-                <p className="text-xs opacity-75">On the timetable</p>
+                <p className="text-xs opacity-75 flex items-center">
+                  On the timetable · View details
+                  <ChevronRight className="w-3 h-3 ml-0.5" />
+                </p>
               </div>
               <Calendar className="w-12 h-12 opacity-80" />
             </div>
@@ -421,6 +472,11 @@ const AdminClassOverview: React.FC = () => {
                             {session.subject?.code && (
                               <div className="text-xs text-gray-500">{session.subject.code}</div>
                             )}
+                            {(session.sessionSpan ?? 1) > 1 && (
+                              <Badge variant="secondary" className="mt-1 text-xs">
+                                {session.sessionSpan === 2 ? 'Double' : session.sessionSpan === 3 ? 'Triple' : `${session.sessionSpan} periods`}
+                              </Badge>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -496,6 +552,17 @@ const AdminClassOverview: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      <ActiveSessionsModal
+        open={sessionsModalOpen}
+        onOpenChange={setSessionsModalOpen}
+        sessions={inSessionList}
+        todaySessions={todaySessions}
+        lessonPeriods={lessonPeriods}
+        onRefresh={refreshClassStatus}
+        isRefreshing={isRefreshingStatus}
+        checkInWindow={checkInWindow}
+      />
 
       {/* Trainer Performance Summary — unchanged */}
       <Card className="shadow-lg hover:shadow-xl transition-shadow duration-300">
