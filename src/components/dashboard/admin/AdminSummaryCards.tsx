@@ -1,7 +1,7 @@
 // components/dashboard/admin/AdminSummaryCards.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Clock, UserCheck, AlertTriangle, UserPlus, TrendingUp } from 'lucide-react';
 
@@ -13,89 +13,57 @@ interface AttendanceMetrics {
   totalHoursToday: string;
 }
 
-const AdminSummaryCards: React.FC = () => {
-  const [metrics, setMetrics] = useState<AttendanceMetrics>({
-    totalEmployees: 0,
-    presentToday: 0,
-    lateToday: 0,
-    attendanceRate: 0,
-    totalHoursToday: '0'
-  });
-  const [isLoading, setIsLoading] = useState(true);
+interface AdminSummaryCardsProps {
+  attendanceData: any[];  // from the dashboard's shared /api/attendance/status fetch
+  isLoading: boolean;
+}
 
-  const fetchMetrics = async () => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/attendance/status', {
-        method: 'GET',
-        credentials: 'include',
-      });
+const AdminSummaryCards: React.FC<AdminSummaryCardsProps> = ({ attendanceData, isLoading }) => {
+  const metrics: AttendanceMetrics = useMemo(() => {
+    const today = new Date().toDateString();
+    const todayRecords = attendanceData.filter((record: any) =>
+      new Date(record.date).toDateString() === today
+    );
 
-      if (response.ok) {
-        const data = await response.json();
-        const attendanceData = data.attendanceData || [];
-        
-        // Calculate metrics
-        const today = new Date().toDateString();
-        const todayRecords = attendanceData.filter((record: any) => 
-          new Date(record.date).toDateString() === today
-        );
+    const totalEmployees = new Set(attendanceData.map((a: any) => a.employee_id)).size;
+    const onTimeToday = todayRecords.filter((a: any) => a.status.toLowerCase() === 'present').length;
+    const lateToday = todayRecords.filter((a: any) => a.status.toLowerCase() === 'late').length;
+    // Attendance counts everyone who came in, on time or late
+    const attendanceRate = totalEmployees > 0
+      ? Math.round(((onTimeToday + lateToday) / totalEmployees) * 100)
+      : 0;
 
-        const totalEmployees = new Set(attendanceData.map((a: any) => a.employee_id)).size;
-        const presentToday = todayRecords.filter((a: any) => 
-          a.status.toLowerCase() === 'present' || a.status.toLowerCase() === 'late'
-        ).length;
-        const lateToday = todayRecords.filter((a: any) => 
-          a.status.toLowerCase() === 'late'
-        ).length;
-        const attendanceRate = totalEmployees > 0 ? Math.round((presentToday / totalEmployees) * 100) : 0;
-
-        // Calculate total hours
-        const totalHoursToday = todayRecords.reduce((total: number, record: any) => {
-          if (record.sessions && record.sessions.length > 0) {
-            let sessionHours = 0;
-            record.sessions.forEach((session: any) => {
-              if (session.check_in) {
-                const checkIn = new Date(session.check_in);
-                const checkOut = session.check_out ? new Date(session.check_out) : new Date();
-                const hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-                sessionHours += Math.max(0, hours);
-              }
-            });
-            return total + sessionHours;
-          } else if (record.check_in_time) {
-            const checkIn = new Date(record.check_in_time);
-            const checkOut = record.check_out_time ? new Date(record.check_out_time) : new Date();
+    const totalHoursToday = todayRecords.reduce((total: number, record: any) => {
+      if (record.sessions && record.sessions.length > 0) {
+        let sessionHours = 0;
+        record.sessions.forEach((session: any) => {
+          if (session.check_in) {
+            const checkIn = new Date(session.check_in);
+            const checkOut = session.check_out ? new Date(session.check_out) : new Date();
             const hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-            return total + Math.max(0, hours);
+            sessionHours += Math.max(0, hours);
           }
-          return total;
-        }, 0);
-
-        setMetrics({
-          totalEmployees,
-          presentToday,
-          lateToday,
-          attendanceRate,
-          totalHoursToday: totalHoursToday.toFixed(1)
         });
+        return total + sessionHours;
+      } else if (record.check_in_time) {
+        const checkIn = new Date(record.check_in_time);
+        const checkOut = record.check_out_time ? new Date(record.check_out_time) : new Date();
+        const hours = (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+        return total + Math.max(0, hours);
       }
-    } catch (error) {
-      console.error('Error fetching metrics:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      return total;
+    }, 0);
 
-  useEffect(() => {
-    fetchMetrics();
-    
-    // Refresh every 2 minutes
-    const interval = setInterval(fetchMetrics, 600000);
-    return () => clearInterval(interval);
-  }, []);
+    return {
+      totalEmployees,
+      presentToday: onTimeToday,
+      lateToday,
+      attendanceRate,
+      totalHoursToday: totalHoursToday.toFixed(1)
+    };
+  }, [attendanceData]);
 
-  if (isLoading) {
+  if (isLoading && attendanceData.length === 0) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         {Array.from({ length: 5 }).map((_, index) => (

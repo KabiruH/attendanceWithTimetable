@@ -63,111 +63,119 @@ type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'mi
 // GET - Get all class attendance status for admin dashboard
 export async function GET(req: NextRequest) {
   try {
-    const user = await getAuthenticatedUser(req);
-
     // Current date/time in Kenya
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     const currentDate = nowInKenya.toJSDate().toISOString().split('T')[0];
     const nowMinutes = nowInKenya.hour * 60 + nowInKenya.minute;
     const todayDayOfWeek = nowInKenya.weekday % 7; // Luxon Mon=1..Sun=7 → JS Sun=0..Sat=6
 
-    // ── Today's class attendance, with subject resolved in the same query
-    // (previously an N+1: one extra request per record)
-    const todayAttendance = await db.classattendance.findMany({
-      where: {
-        date: new Date(currentDate)
-      },
-      include: {
-        users: {
-          select: {
-            id: true,
-            name: true,
-            department: true,
-            email: true
-          }
-        },
-        classes: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-            department: true,
-            duration_hours: true
-          }
-        },
-        timetableslots: {
-          include: {
-            subjects: {
-              select: { id: true, name: true, code: true }
-            },
-            rooms: {
-              select: { id: true, name: true }
-            },
-            lessonperiods: {
-              select: { id: true, name: true, start_time: true, end_time: true, duration: true }
-            }
-          }
-        }
-      },
-      orderBy: {
-        check_in_time: 'desc'
-      }
+    // ── Round trips to the database are the cost here (~0.3–0.6s each), so:
+    //    plain queries (no `include`, which Prisma runs as extra sequential
+    //    queries), all independent ones in parallel, relations joined in code.
+    //    Critical path: term → slots → related names = 3 round trips.
+    const [, attendanceRows, settings, allPeriods, { activeTerm, slotRows }] = await Promise.all([
+      getAuthenticatedUser(req), // throws if not an admin
+      db.classattendance.findMany({
+        where: { date: new Date(currentDate) },
+        orderBy: { check_in_time: 'desc' }
+      }),
+      db.timetablesettings.findFirst(),
+      db.lessonperiods.findMany({
+        select: { id: true, name: true, start_time: true, end_time: true, duration: true, is_active: true },
+        orderBy: { start_time: 'asc' }
+      }),
+      getCurrentTerm().then(async term => ({
+        activeTerm: term,
+        slotRows: term
+          ? await db.timetableslots.findMany({
+              where: { term_id: term.id, day_of_week: todayDayOfWeek, status: 'scheduled' }
+            })
+          : []
+      }))
+    ]);
+
+    // Attendance linked to a slot outside today's timetable (rare) — fetch those slots
+    const slotIds = new Set(slotRows.map(sl => sl.id));
+    const missingSlotIds = Array.from(new Set(
+      attendanceRows
+        .map(a => a.timetable_slot_id)
+        .filter((id): id is string => !!id && !slotIds.has(id))
+    ));
+    const extraSlots = missingSlotIds.length > 0
+      ? await db.timetableslots.findMany({ where: { id: { in: missingSlotIds } } })
+      : [];
+    const allSlots = [...slotRows, ...extraSlots];
+
+    // Every related name in ONE parallel round trip
+    const uniq = (ids: number[]) => Array.from(new Set(ids));
+    const [userRows, classRows, subjectRows, roomRows] = await Promise.all([
+      db.users.findMany({
+        where: { id: { in: uniq([...allSlots.map(sl => sl.employee_id), ...attendanceRows.map(a => a.trainer_id)]) } },
+        select: { id: true, name: true, department: true, email: true }
+      }),
+      db.classes.findMany({
+        where: { id: { in: uniq([...allSlots.map(sl => sl.class_id), ...attendanceRows.map(a => a.class_id)]) } },
+        select: { id: true, name: true, code: true, department: true, duration_hours: true }
+      }),
+      db.subjects.findMany({
+        where: { id: { in: uniq(allSlots.map(sl => sl.subject_id)) } },
+        select: { id: true, name: true, code: true }
+      }),
+      db.rooms.findMany({
+        where: { id: { in: uniq(allSlots.map(sl => sl.room_id)) } },
+        select: { id: true, name: true }
+      })
+    ]);
+
+    const userById = new Map(userRows.map(u => [u.id, u]));
+    const classById = new Map(classRows.map(c => [c.id, c]));
+    const subjectById = new Map(subjectRows.map(x => [x.id, x]));
+    const roomById = new Map(roomRows.map(r => [r.id, r]));
+    const periodById = new Map(allPeriods.map(p => [p.id, {
+      id: p.id, name: p.name, start_time: p.start_time, end_time: p.end_time, duration: p.duration
+    }]));
+
+    const withSlotRelations = (sl: (typeof allSlots)[number]) => ({
+      ...sl,
+      subjects: subjectById.get(sl.subject_id) ?? null,
+      rooms: roomById.get(sl.room_id) ?? null,
+      lessonperiods: periodById.get(sl.lesson_period_id) ?? null
+    });
+    const slotById = new Map(allSlots.map(sl => [sl.id, withSlotRelations(sl)]));
+
+    // Same shapes the rest of this handler (and the dashboard) already use
+    const todayAttendance = attendanceRows.map(a => {
+      const c = classById.get(a.class_id);
+      return {
+        ...a,
+        users: userById.get(a.trainer_id) ?? { id: a.trainer_id, name: 'Unknown', department: null, email: null },
+        classes: c ?? { id: a.class_id, name: 'Unknown', code: '', department: '', duration_hours: 0 },
+        timetableslots: a.timetable_slot_id ? slotById.get(a.timetable_slot_id) ?? null : null
+      };
+    });
+
+    const todaySlots: any[] = slotRows.map(sl => {
+      const u = userById.get(sl.employee_id);
+      const c = classById.get(sl.class_id);
+      return {
+        ...slotById.get(sl.id)!,
+        users: u ? { id: u.id, name: u.name, department: u.department } : null,
+        classes: c ? { id: c.id, name: c.name, code: c.code, department: c.department } : null
+      };
     });
 
     // Same check-in window as the check-in route
-    const [settings, periodRows] = await Promise.all([
-      db.timetablesettings.findFirst(),
-      db.lessonperiods.findMany({
-        where: { is_active: true },
-        select: { id: true, name: true, start_time: true, end_time: true },
-        orderBy: { start_time: 'asc' }
-      })
-    ]);
     // For the period filter on the dashboard
-    const lessonPeriods = periodRows.map(p => ({
-      id: p.id,
-      name: p.name,
-      startTime: hhmm(p.start_time),
-      endTime: hhmm(p.end_time)
-    }));
+    const lessonPeriods = allPeriods
+      .filter(p => p.is_active)
+      .map(p => ({
+        id: p.id,
+        name: p.name,
+        startTime: hhmm(p.start_time),
+        endTime: hhmm(p.end_time)
+      }));
     const checkInOpensBefore = settings?.attendance_check_in_window || DEFAULT_CHECKIN_WINDOW;
     const checkInClosesAfter = settings?.attendance_late_threshold || DEFAULT_LATE_THRESHOLD;
-
-    // ── Today's schedule for all trainers
-    const activeTerm = await getCurrentTerm();
-    let todaySlots: any[] = [];
-
-    if (activeTerm) {
-      todaySlots = await db.timetableslots.findMany({
-        where: {
-          term_id: activeTerm.id,
-          day_of_week: todayDayOfWeek,
-          status: 'scheduled'
-        },
-        include: {
-          users: {
-            select: { id: true, name: true, department: true }
-          },
-          classes: {
-            select: { id: true, name: true, code: true, department: true }
-          },
-          subjects: {
-            select: { id: true, name: true, code: true }
-          },
-          rooms: {
-            select: { id: true, name: true }
-          },
-          lessonperiods: {
-            select: { id: true, name: true, start_time: true, end_time: true, duration: true }
-          }
-        },
-        orderBy: {
-          lessonperiods: {
-            start_time: 'asc'
-          }
-        }
-      });
-    }
 
     // Index today's attendance by slot, and by trainer+class for rows
     // that aren't linked to a slot

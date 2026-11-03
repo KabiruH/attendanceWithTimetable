@@ -1,7 +1,7 @@
 // components/dashboard/admin/AdminClassOverview.tsx
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -125,8 +125,11 @@ const AdminClassOverview: React.FC = () => {
   };
 
   // Refresh only the live status (used by the modal; skips the trainer report)
+  const lastStatusFetch = useRef(0);
+
   const refreshClassStatus = async () => {
     setIsRefreshingStatus(true);
+    lastStatusFetch.current = Date.now();
     try {
       const res = await fetch('/api/attendance/admin-class-status', {
         method: 'GET',
@@ -137,6 +140,11 @@ const AdminClassOverview: React.FC = () => {
       console.error('Error refreshing class status:', error);
     } finally {
       setIsRefreshingStatus(false);
+      // The page is usable once the live status has loaded the first time
+      if (!hasLoadedOnce.current) {
+        hasLoadedOnce.current = true;
+        setIsLoading(false);
+      }
     }
   };
 
@@ -148,8 +156,10 @@ const AdminClassOverview: React.FC = () => {
   // page (and an open modal) mounted
   const hasLoadedOnce = useRef(false);
 
-  const fetchClassOverviewData = async () => {
-    if (!hasLoadedOnce.current) setIsLoading(true);
+  // Trainer performance report — depends on the time range only. It changes
+  // slowly, so it is fetched when the range changes and every 10 minutes,
+  // not on every 2-minute status refresh.
+  const fetchTrainerReport = useCallback(async () => {
     try {
       const endDate = new Date();
       let startDate = new Date();
@@ -173,46 +183,55 @@ const AdminClassOverview: React.FC = () => {
         `group_by=trainer`,
         { method: 'GET', credentials: 'include' }
       );
+      if (!reportResponse.ok) return; // keep the last good table
 
-      const statusResponse = await fetch('/api/attendance/admin-class-status', {
-        method: 'GET',
-        credentials: 'include',
-      });
+      const reportData = await reportResponse.json();
+      const trainerData = (reportData.summary || []).map((item: any) => ({
+        trainer_id: item.trainer?.id || 0,
+        trainer_name: item.trainer?.name || item.label,
+        department: item.trainer?.department || 'N/A',
+        total_sessions: item.statistics.totalSessions,
+        completed_sessions: item.statistics.completedSessions,
+        total_hours: item.statistics.totalHours,
+        on_time_rate: item.statistics.onTimeRate,
+        has_active_session: item.statistics.inProgressSessions > 0
+      }));
 
-      if (reportResponse.ok && statusResponse.ok) {
-        const reportData = await reportResponse.json();
-        const statusData = await statusResponse.json();
-
-        // Metrics, active sessions and the in-session list come from the API
-        applyStatusData(statusData);
-
-        const trainerData = (reportData.summary || []).map((item: any) => ({
-          trainer_id: item.trainer?.id || 0,
-          trainer_name: item.trainer?.name || item.label,
-          department: item.trainer?.department || 'N/A',
-          total_sessions: item.statistics.totalSessions,
-          completed_sessions: item.statistics.completedSessions,
-          total_hours: item.statistics.totalHours,
-          on_time_rate: item.statistics.onTimeRate,
-          has_active_session: item.statistics.inProgressSessions > 0
-        }));
-
-        trainerData.sort((a: any, b: any) => b.total_sessions - a.total_sessions);
-        setTrainerSummary(trainerData);
-      }
+      trainerData.sort((a: any, b: any) => b.total_sessions - a.total_sessions);
+      setTrainerSummary(trainerData);
     } catch (error) {
-      console.error('Error fetching class overview:', error);
-    } finally {
-      hasLoadedOnce.current = true;
-      setIsLoading(false);
+      console.error('Error fetching trainer report:', error);
     }
-  };
-
-  useEffect(() => {
-    fetchClassOverviewData();
-    const interval = setInterval(fetchClassOverviewData, 120000); // 2 minutes
-    return () => clearInterval(interval);
   }, [timeRange]);
+
+  // Manual refresh button: both
+  const fetchClassOverviewData = () => Promise.all([refreshClassStatus(), fetchTrainerReport()]);
+
+  // Live status every 2 minutes — only while the tab is visible, plus a
+  // refresh when the admin comes back to the tab (if the data is stale)
+  useEffect(() => {
+    refreshClassStatus();
+    const isVisible = () => document.visibilityState === 'visible';
+    const interval = setInterval(() => { if (isVisible()) refreshClassStatus(); }, 120000);
+    const onVisible = () => {
+      if (isVisible() && Date.now() - lastStatusFetch.current > 60000) refreshClassStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Trainer report on range change, then every 10 minutes while visible
+  useEffect(() => {
+    fetchTrainerReport();
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchTrainerReport();
+    }, 600000);
+    return () => clearInterval(interval);
+  }, [fetchTrainerReport]);
 
   // ── Filtering + pagination for the active sessions table ──
   const filteredSessions = useMemo(() => {

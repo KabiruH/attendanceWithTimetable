@@ -125,39 +125,50 @@ const AdminClassAnalytics: React.FC = () => {
   const [department, setDepartment] = useState<string>(ALL);
   const [trainerPage, setTrainerPage] = useState(1);
 
-  const fetchClassAnalytics = useCallback(async () => {
+  const dateRange = useCallback(() => {
+    const endDate = new Date();
+    const startDate = new Date();
+    switch (timeRange) {
+      case 'week': startDate.setDate(endDate.getDate() - 7); break;
+      case 'month': startDate.setMonth(endDate.getMonth() - 1); break;
+      case 'term': startDate.setMonth(endDate.getMonth() - 3); break; // approximate term length
+    }
+    return `start_date=${startDate.toISOString().split('T')[0]}&` +
+      `end_date=${endDate.toISOString().split('T')[0]}&include_details=false`;
+  }, [timeRange]);
+
+  // Report for the chart / top cards — depends on range AND grouping
+  const fetchGroupReport = useCallback(async () => {
     try {
-      const endDate = new Date();
-      const startDate = new Date();
-      switch (timeRange) {
-        case 'week': startDate.setDate(endDate.getDate() - 7); break;
-        case 'month': startDate.setMonth(endDate.getMonth() - 1); break;
-        case 'term': startDate.setMonth(endDate.getMonth() - 3); break; // approximate term length
-      }
+      const res = await fetch(
+        `/api/attendance/class-attendance-report?${dateRange()}&group_by=${groupBy}`,
+        { credentials: 'include' }
+      );
+      // Keep whatever is already on screen rather than blanking to zeros
+      if (!res.ok) throw new Error('Could not load class analytics');
+      const data = await res.json();
+      setGroupRows((data.summary || []).map((item: any, i: number) => toGroupRow(item, groupBy, i)));
+      setLoadError(null);
+    } catch (error) {
+      console.error('Error fetching class analytics:', error);
+      setLoadError(error instanceof Error ? error.message : 'Could not load class analytics');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [dateRange, groupBy]);
 
-      const range =
-        `start_date=${startDate.toISOString().split('T')[0]}&` +
-        `end_date=${endDate.toISOString().split('T')[0]}&include_details=false`;
+  // Trainer table — depends on the range only, so changing the grouping
+  // no longer refetches it
+  const fetchTrainerReport = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/attendance/class-attendance-report?${dateRange()}&group_by=trainer`,
+        { credentials: 'include' }
+      );
+      if (!res.ok) throw new Error('Could not load trainer performance');
+      const data = await res.json();
 
-      // Both reports in parallel (trainer table always uses trainer grouping)
-      const [groupRes, trainerRes] = await Promise.all([
-        fetch(`/api/attendance/class-attendance-report?${range}&group_by=${groupBy}`, { credentials: 'include' }),
-        groupBy === 'trainer'
-          ? Promise.resolve(null)
-          : fetch(`/api/attendance/class-attendance-report?${range}&group_by=trainer`, { credentials: 'include' }),
-      ]);
-
-      if (!groupRes.ok || (trainerRes && !trainerRes.ok)) {
-        // Keep whatever is already on screen rather than blanking to zeros
-        throw new Error('Could not load class analytics');
-      }
-
-      const groupData = await groupRes.json();
-      const trainerData = trainerRes ? await trainerRes.json() : groupData;
-
-      setGroupRows((groupData.summary || []).map((item: any, i: number) => toGroupRow(item, groupBy, i)));
-
-      const trainerPerf: TrainerPerformanceData[] = (trainerData.summary || []).map((item: any) => ({
+      const trainerPerf: TrainerPerformanceData[] = (data.summary || []).map((item: any) => ({
         trainerId: item.trainer?.id || 0,
         trainerName: item.trainer?.name || item.label || 'Unknown',
         department: item.trainer?.department || UNASSIGNED,
@@ -171,23 +182,34 @@ const AdminClassAnalytics: React.FC = () => {
       }));
       trainerPerf.sort((a, b) => b.totalSessions - a.totalSessions);
       setTrainerPerformance(trainerPerf);
-
-      setLoadError(null);
     } catch (error) {
-      console.error('Error fetching class analytics:', error);
-      setLoadError(error instanceof Error ? error.message : 'Could not load class analytics');
-    } finally {
-      setIsLoading(false);
+      console.error('Error fetching trainer performance:', error);
+      setLoadError(error instanceof Error ? error.message : 'Could not load trainer performance');
     }
-  }, [timeRange, groupBy]);
+  }, [dateRange]);
 
-  // One effect: fetch on mount and whenever the range/grouping changes, and
-  // auto-refresh every 10 minutes with the CURRENT selections
+  const fetchClassAnalytics = useCallback(
+    () => Promise.all([fetchGroupReport(), fetchTrainerReport()]),
+    [fetchGroupReport, fetchTrainerReport]
+  );
+
+  // Each report refetches only when its own inputs change, and auto-refreshes
+  // every 10 minutes while the tab is visible
   useEffect(() => {
-    fetchClassAnalytics();
-    const interval = setInterval(fetchClassAnalytics, 600000);
+    fetchGroupReport();
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchGroupReport();
+    }, 600000);
     return () => clearInterval(interval);
-  }, [fetchClassAnalytics]);
+  }, [fetchGroupReport]);
+
+  useEffect(() => {
+    fetchTrainerReport();
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchTrainerReport();
+    }, 600000);
+    return () => clearInterval(interval);
+  }, [fetchTrainerReport]);
 
   // ── Department filter ──────────────────────────────────────────────────────
   const departments = useMemo(() => {

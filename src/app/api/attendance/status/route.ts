@@ -66,34 +66,18 @@ export async function GET(request: NextRequest) {
     const role = payload.role as string;
     const today = new Date().toISOString().split('T')[0];
 
+    const isToday = (d: Date) => d.toISOString().split('T')[0] === today;
+    const oneMonthAgo = new Date(new Date().setMonth(new Date().getMonth() - 1));
+
+    // Plain queries in ONE parallel round trip. Names come from a single users
+    // query instead of `include` (which Prisma runs as an extra sequential
+    // query per findMany), and today's record is picked out of the monthly
+    // list instead of being fetched separately.
     if (role === 'admin') {
-      const [personalAttendance, todayRecord, allAttendance] = await Promise.all([
+      const [personalAttendance, allAttendance, staff] = await Promise.all([
         db.attendance.findMany({
-          where: {
-            employee_id: userId,
-            date: {
-              gte: new Date(new Date().setMonth(new Date().getMonth() - 1))
-            }
-          },
-          include: {
-            users: {
-              select: {
-                name: true,
-                id_number: true,
-                department: true
-              }
-            }
-          },
+          where: { employee_id: userId, date: { gte: oneMonthAgo } },
           orderBy: { date: 'desc' }
-        }),
-        db.attendance.findFirst({
-          where: {
-            employee_id: userId,
-            date: {
-              gte: new Date(today),
-              lt: new Date(new Date(today).setDate(new Date(today).getDate() + 1))
-            }
-          }
         }),
         db.attendance.findMany({
           where: {
@@ -101,32 +85,33 @@ export async function GET(request: NextRequest) {
               gte: new Date(new Date().setDate(new Date().getDate() - 7))
             }
           },
-          include: {
-            users: {
-              select: {
-                name: true,
-                id_number: true,
-                department: true,
-                role: true
-              }
-            }
-          },
           orderBy: [
             { date: 'desc' },
             { employee_id: 'asc' }
           ]
+        }),
+        db.users.findMany({
+          select: { id: true, name: true, id_number: true, department: true, role: true }
         })
       ]);
 
+      const staffById = new Map(staff.map(u => [u.id, u]));
+      const nameOf = (id: number) => staffById.get(id)?.name ?? 'Unknown';
+
+      const todayRecord = personalAttendance.find(r => isToday(r.date));
       const isCheckedIn = !!(todayRecord?.check_in_time && !todayRecord?.check_out_time);
 
-      const processedPersonalAttendance = personalAttendance.map(record => ({
-        ...record,
-        employee_name: record.users.name,
-        date: record.date.toISOString(),
-        check_in_time: record.check_in_time?.toISOString() || null,
-        check_out_time: record.check_out_time?.toISOString() || null
-      }));
+      const processedPersonalAttendance = personalAttendance.map(record => {
+        const u = staffById.get(record.employee_id);
+        return {
+          ...record,
+          users: { name: u?.name ?? 'Unknown', id_number: u?.id_number ?? '', department: u?.department ?? null },
+          employee_name: u?.name ?? 'Unknown',
+          date: record.date.toISOString(),
+          check_in_time: record.check_in_time?.toISOString() || null,
+          check_out_time: record.check_out_time?.toISOString() || null
+        };
+      });
 
       const totalDays = personalAttendance.length;
       const presentDays = personalAttendance.filter(r => r.status?.toLowerCase() === 'present').length;
@@ -139,46 +124,38 @@ export async function GET(request: NextRequest) {
         isCheckedIn,
         personalAttendance: processedPersonalAttendance,
         stats: { totalDays, presentDays, lateDays, absentDays, attendanceRate },
-        attendanceData: allAttendance.map(record => ({
-          ...record,
-          employee_name: record.users.name,
-          employee_id_number: record.users.id_number,
-          employee_department: record.users.department,
-          date: record.date.toISOString(),
-          check_in_time: record.check_in_time?.toISOString() || null,
-          check_out_time: record.check_out_time?.toISOString() || null
-        }))
+        attendanceData: allAttendance.map(record => {
+          const u = staffById.get(record.employee_id);
+          return {
+            ...record,
+            users: {
+              name: u?.name ?? 'Unknown',
+              id_number: u?.id_number ?? '',
+              department: u?.department ?? null,
+              role: u?.role ?? ''
+            },
+            employee_name: nameOf(record.employee_id),
+            employee_id_number: u?.id_number ?? '',
+            employee_department: u?.department ?? null,
+            date: record.date.toISOString(),
+            check_in_time: record.check_in_time?.toISOString() || null,
+            check_out_time: record.check_out_time?.toISOString() || null
+          };
+        })
       });
     }
 
     // Employee
-    const [todayRecord, monthlyRecords] = await Promise.all([
-      db.attendance.findFirst({
-        where: {
-          employee_id: userId,
-          date: {
-            gte: new Date(today),
-            lt: new Date(new Date(today).setDate(new Date(today).getDate() + 1))
-          }
-        },
-        include: {
-          users: { select: { name: true } }
-        }
-      }),
+    const [monthlyRecords, me] = await Promise.all([
       db.attendance.findMany({
-        where: {
-          employee_id: userId,
-          date: {
-            gte: new Date(new Date().setMonth(new Date().getMonth() - 1))
-          }
-        },
-        include: {
-          users: { select: { name: true } }
-        },
+        where: { employee_id: userId, date: { gte: oneMonthAgo } },
         orderBy: { date: 'desc' }
-      })
+      }),
+      db.users.findUnique({ where: { id: userId }, select: { name: true } })
     ]);
+    const myName = me?.name ?? payload.name ?? 'Unknown';
 
+    const todayRecord = monthlyRecords.find(r => isToday(r.date));
     const isCheckedIn = !!(todayRecord?.check_in_time && !todayRecord?.check_out_time);
 
     const totalDays = monthlyRecords.length;
@@ -189,7 +166,8 @@ export async function GET(request: NextRequest) {
 
     const processedMonthlyRecords = monthlyRecords.map(record => ({
       ...record,
-      employee_name: record.users.name,
+      users: { name: myName },
+      employee_name: myName,
       date: record.date.toISOString(),
       check_in_time: record.check_in_time?.toISOString() || null,
       check_out_time: record.check_out_time?.toISOString() || null
@@ -201,7 +179,8 @@ export async function GET(request: NextRequest) {
       stats: { totalDays, presentDays, lateDays, absentDays, attendanceRate },
       todayRecord: todayRecord ? {
         ...todayRecord,
-        employee_name: todayRecord.users.name,
+        users: { name: myName },
+        employee_name: myName,
         date: todayRecord.date.toISOString(),
         check_in_time: todayRecord.check_in_time?.toISOString() || null,
         check_out_time: todayRecord.check_out_time?.toISOString() || null

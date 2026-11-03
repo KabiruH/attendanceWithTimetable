@@ -23,6 +23,10 @@ interface AdminPersonalAttendanceProps {
   employee_id: string | null;
   userRole?: string | null;
   isAdminTrainer?: boolean;
+  /** The dashboard's shared /api/attendance/status response */
+  statusData?: any;
+  /** Ask the dashboard to refetch status (after a check-in/out) */
+  onStatusRefresh?: () => Promise<void> | void;
 }
 
 interface UpcomingClass {
@@ -48,7 +52,9 @@ interface UpcomingClass {
 const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
   employee_id,
   userRole,
-  isAdminTrainer = false
+  isAdminTrainer = false,
+  statusData,
+  onStatusRefresh
 }) => {
   const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -130,25 +136,12 @@ const AdminPersonalAttendance: React.FC<AdminPersonalAttendanceProps> = ({
     }
   };
 
-const fetchPersonalAttendanceStatus = async () => {
-  if (!employee_id) return;
+// Personal status now comes from the dashboard's shared status fetch
+// (this component used to request /api/attendance/status itself)
+const applyPersonalAttendanceStatus = (data: any) => {
+  if (!employee_id || !data) return;
 
   try {
-    let response = await fetch('/api/attendance/status', {
-      method: 'GET',
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      response = await fetch('/api/attendance', {
-        method: 'GET',
-        credentials: 'include',
-      });
-    }
-
-    if (response.ok) {
-      const data = await response.json();
-      
       // MORE ROBUST CHECK FOR CHECKED IN STATUS
       let checkedInStatus = false;
       
@@ -206,11 +199,15 @@ const fetchPersonalAttendanceStatus = async () => {
       } else {
         setTodayHours('0h 0m');
       }
-    }
   } catch (error) {
-    console.error('Error fetching personal attendance:', error);
+    console.error('Error reading personal attendance:', error);
   }
 };
+
+  useEffect(() => {
+    applyPersonalAttendanceStatus(statusData);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusData, employee_id]);
 
   const calculateTotalHoursFromSessions = (sessions: any[]): number => {
     if (!sessions || sessions.length === 0) return 0;
@@ -267,8 +264,8 @@ const handleAttendance = async (action: 'check-in' | 'check-out') => {
     const newCheckedInState = action === 'check-in';
     setIsCheckedIn(newCheckedInState);
 
-    // THEN FETCH TO UPDATE HOURS
-    await fetchPersonalAttendanceStatus();
+    // THEN REFRESH THE SHARED STATUS TO UPDATE HOURS
+    await onStatusRefresh?.();
 
     toast({
       title: 'Success',
@@ -429,7 +426,6 @@ const handleAttendance = async (action: 'check-in' | 'check-out') => {
   );
 
   useEffect(() => {
-    fetchPersonalAttendanceStatus();
     checkUserLocation();
     
     if (isAdminTrainer) {
@@ -437,9 +433,10 @@ const handleAttendance = async (action: 'check-in' | 'check-out') => {
       fetchClassAttendanceStatus();
     }
     
-    // Refresh every 2 minutes
+    // Refresh every 2 minutes, only while the tab is visible
+    // (work status is refreshed by the dashboard, not here)
     const interval = setInterval(() => {
-      fetchPersonalAttendanceStatus();
+      if (document.visibilityState !== 'visible') return;
       checkUserLocation();
       if (isAdminTrainer) {
         fetchUpcomingClasses();
@@ -448,6 +445,7 @@ const handleAttendance = async (action: 'check-in' | 'check-out') => {
     }, 120000);
     
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employee_id, isAdminTrainer]);
 
   return (

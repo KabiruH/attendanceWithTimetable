@@ -1,8 +1,7 @@
 // components/dashboard/AdminDashboard.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useToast } from "@/components/ui/use-toast";
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from "@/components/ui/button";
 import { Clock, Users, GraduationCap, BarChart3 } from 'lucide-react';
 import AdminPersonalAttendance from './admin/AdminPersonalAttendance';
@@ -13,17 +12,62 @@ import AdminClassOverview from './admin/AdminClassOverview';
 import AdminClassAnalytics from './admin/AdminClassAnalytics';
 
 interface AdminDashboardProps {
-  data: unknown;
+  // The dashboard page has already authenticated; reuse its user instead of
+  // calling /api/auth/check a second time
+  data: {
+    id: number;
+    name: string;
+    role: string;
+    has_timetable_admin?: boolean;
+  };
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = () => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ data }) => {
   const [currentView, setCurrentView] = useState<'attendance' | 'classes' | 'analytics'>('attendance');
-  const [employeeName, setEmployeeName] = useState<string | null>(null);
-  const [employee_id, setEmployeeId] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [hasTimetableAdmin, setHasTimetableAdmin] = useState(false);
+  const employeeName = data?.name ?? null;
+  const employee_id = data?.id != null ? String(data.id) : null;
+  const userRole = data?.role ?? null;
+  const hasTimetableAdmin = !!data?.has_timetable_admin;
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
-  const { toast } = useToast();
+
+  // ── ONE /api/attendance/status request for the whole dashboard ──────────
+  // (the four work-attendance widgets used to fetch it separately, each on
+  // its own timer). Refreshes every 2 minutes while the tab is visible.
+  const [statusData, setStatusData] = useState<any>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const lastStatusFetch = useRef(0);
+
+  const fetchStatus = useCallback(async () => {
+    lastStatusFetch.current = Date.now();
+    try {
+      const response = await fetch('/api/attendance/status', {
+        method: 'GET',
+        credentials: 'include',
+      });
+      // On failure keep the last good data rather than blanking the widgets
+      if (response.ok) setStatusData(await response.json());
+    } catch (error) {
+      console.error('Error fetching attendance status:', error);
+    } finally {
+      setStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+    const isVisible = () => document.visibilityState === 'visible';
+    const interval = setInterval(() => { if (isVisible()) fetchStatus(); }, 120000);
+    const onVisible = () => {
+      if (isVisible() && Date.now() - lastStatusFetch.current > 60000) fetchStatus();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchStatus]);
+
+  const attendanceData: any[] = statusData?.attendanceData ?? [];
 
   // Update clock
   useEffect(() => {
@@ -37,37 +81,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       }));
     }, 1000);
     return () => clearInterval(timer);
-  }, []);
-
-  const fetchTokenAndUser = async () => {
-    try {
-      const response = await fetch('/api/auth/check', {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        throw new Error('Authentication failed');
-      }
-
-      const { user } = await response.json();
-      setEmployeeName(user.name);
-      setEmployeeId(user.id);
-      setUserRole(user.role);
-      setHasTimetableAdmin(user.has_timetable_admin || false);
-
-    } catch (error) {
-      console.error('Error:', error);
-      toast({
-        title: 'Authentication Error',
-        description: error instanceof Error ? error.message : 'Failed to authenticate',
-        variant: 'destructive',
-      });
-    }
-  };
-
-  useEffect(() => {
-    fetchTokenAndUser();
   }, []);
 
   // Check if admin is also a trainer (has timetable admin privileges or is employee role)
@@ -136,6 +149,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = () => {
           employee_id={employee_id}
           userRole={userRole}
           isAdminTrainer={isAdminTrainer}
+          statusData={statusData}
+          onStatusRefresh={fetchStatus}
         />
       )}
 
@@ -143,9 +158,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = () => {
       {currentView === 'attendance' && (
         <>
           {/* Work Attendance Overview */}
-          <AdminSummaryCards />
-          <AdminAttendanceAnalytics />
-          <AdminEmployeeTable />
+          <AdminSummaryCards attendanceData={attendanceData} isLoading={statusLoading} />
+          <AdminAttendanceAnalytics attendanceData={attendanceData} isLoading={statusLoading} />
+          <AdminEmployeeTable attendanceData={attendanceData} isLoading={statusLoading} onRefresh={fetchStatus} />
         </>
       )}
 

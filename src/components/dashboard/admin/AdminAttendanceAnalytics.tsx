@@ -1,7 +1,7 @@
 // components/dashboard/admin/AdminAttendanceAnalytics.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -30,32 +30,12 @@ interface TopPerformer {
   rate: number;
 }
 
-const AdminAttendanceAnalytics: React.FC = () => {
-  const [weeklyTrend, setWeeklyTrend] = useState<WeeklyTrendData[]>([]);
-  const [statusBreakdown, setStatusBreakdown] = useState<StatusBreakdownData[]>([]);
-  const [topPerformers, setTopPerformers] = useState<TopPerformer[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+interface AdminAttendanceAnalyticsProps {
+  attendanceData: any[];  // from the dashboard's shared /api/attendance/status fetch
+  isLoading: boolean;
+}
 
-  const fetchAnalyticsData = async () => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/attendance/status', {
-        method: 'GET',
-        credentials: 'include',
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const attendanceData = data.attendanceData || [];
-        
-        processAnalyticsData(attendanceData);
-      }
-    } catch (error) {
-      console.error('Error fetching analytics data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+const AdminAttendanceAnalytics: React.FC<AdminAttendanceAnalyticsProps> = ({ attendanceData, isLoading }) => {
 
   // Helper function to get Monday to Friday of current week
   const getCurrentWeekMondayToFriday = () => {
@@ -76,7 +56,7 @@ const AdminAttendanceAnalytics: React.FC = () => {
     return { monday, friday };
   };
 
-  const processAnalyticsData = (attendanceData: any[]) => {
+  const { weeklyTrend, statusBreakdown, topPerformers } = useMemo(() => {
     // Weekly attendance trend (last 7 days)
     const last7Days = Array.from({ length: 7 }, (_, i) => {
       const date = new Date();
@@ -146,19 +126,14 @@ const AdminAttendanceAnalytics: React.FC = () => {
       .sort((a, b) => b.rate - a.rate)
       .slice(0, 5);
 
-    setWeeklyTrend(weeklyTrendData);
-    setStatusBreakdown(statusBreakdownData);
-    setTopPerformers(topPerformersData);
-  };
+    return {
+      weeklyTrend: weeklyTrendData as WeeklyTrendData[],
+      statusBreakdown: statusBreakdownData as StatusBreakdownData[],
+      topPerformers: topPerformersData as TopPerformer[],
+    };
+  }, [attendanceData]);
 
-  useEffect(() => {
-    fetchAnalyticsData();
-    
-    const interval = setInterval(fetchAnalyticsData, 300000); // Refresh every 5 minutes
-    return () => clearInterval(interval);
-  }, []);
-
-  if (isLoading) {
+  if (isLoading && attendanceData.length === 0) {
     return (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {Array.from({ length: 3 }).map((_, index) => (

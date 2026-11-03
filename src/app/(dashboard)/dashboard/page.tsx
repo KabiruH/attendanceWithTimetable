@@ -20,6 +20,7 @@ interface UserData {
   email: string;
   name: string;
   role: string;
+  has_timetable_admin: boolean;
 }
 
 const Dashboard = () => {
@@ -31,7 +32,8 @@ const Dashboard = () => {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // Get user data from auth endpoint
+        // Single auth call for the whole dashboard — child components receive
+        // the user via props instead of calling /api/auth/check again
         const response = await fetch('/api/auth/check', {
           method: 'GET',
           credentials: 'include',
@@ -48,8 +50,9 @@ const Dashboard = () => {
         setUserData({
           id: decodedToken.id,
           email: decodedToken.email,
-          name: decodedToken.name,
+          name: data.user?.name ?? decodedToken.name,
           role: decodedToken.role,
+          has_timetable_admin: !!data.user?.has_timetable_admin,
         });
         
       } catch (error) {

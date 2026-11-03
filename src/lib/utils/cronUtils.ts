@@ -332,7 +332,25 @@ export async function processAutomaticAttendance() {
   }
 }
 
-export async function ensureCheckouts() {
+// ensureCheckouts is triggered by /api/attendance/status, which several
+// dashboard widgets call at once. Run it at most once a minute per server
+// instance, and let concurrent callers share the run already in progress.
+const CHECKOUT_MIN_INTERVAL_MS = 60_000;
+let lastCheckoutRun = 0;
+let checkoutRunInFlight: Promise<void> | null = null;
+
+export function ensureCheckouts(): Promise<void> {
+  if (checkoutRunInFlight) return checkoutRunInFlight;
+  if (Date.now() - lastCheckoutRun < CHECKOUT_MIN_INTERVAL_MS) return Promise.resolve();
+
+  lastCheckoutRun = Date.now();
+  checkoutRunInFlight = runEnsureCheckouts().finally(() => {
+    checkoutRunInFlight = null;
+  });
+  return checkoutRunInFlight;
+}
+
+async function runEnsureCheckouts() {
   try {
     const currentDate = new Date().toISOString().split('T')[0];
     const currentHour = new Date().getHours();

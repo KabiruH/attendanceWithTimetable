@@ -196,8 +196,25 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-// Mark absences for closed check-in windows (EAT-correct, one per session)
-async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) {
+// Mark absences for closed check-in windows (EAT-correct, one per session).
+// Runs at most once a minute per server instance: every schedule load from
+// every phone/kiosk used to re-run it with one query per session.
+const ABSENCE_MIN_INTERVAL_MS = 60_000;
+let lastAbsenceRun = 0;
+let absenceRunInFlight: Promise<void> | null = null;
+
+function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>): Promise<void> {
+  if (absenceRunInFlight) return absenceRunInFlight;
+  if (Date.now() - lastAbsenceRun < ABSENCE_MIN_INTERVAL_MS) return Promise.resolve();
+
+  lastAbsenceRun = Date.now();
+  absenceRunInFlight = runMarkMissedClassesAsAbsent(clock).finally(() => {
+    absenceRunInFlight = null;
+  });
+  return absenceRunInFlight;
+}
+
+async function runMarkMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) {
   try {
     const { eatNow, currentDate, dayOfWeek } = clock;
 
@@ -226,44 +243,45 @@ async function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) 
     // Collapse doubles/triples — one absence per session, keyed on the first period
     const sessions = groupIntoSessions(todaySlots as any[]);
 
-    for (const { primary, siblings } of sessions) {
-      if (!primary.lessonperiods) continue;
-
+    // Sessions whose check-in window has closed
+    const closedSessions = sessions.filter(({ primary }) => {
+      if (!primary.lessonperiods) return false;
       const lessonStart = lessonTimeToday(primary.lessonperiods.start_time, eatNow);
-
-      // Check-in window closes at start time + late threshold
       const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+      return eatNow >= checkInWindowClosed;
+    });
+    if (closedSessions.length === 0) return;
 
-      // Only process if check-in window has closed
-      if (eatNow < checkInWindowClosed) continue;
+    // ONE query for every attendance row already recorded against these slots
+    const slotIds = closedSessions.flatMap(({ siblings }) => siblings.map((sib: any) => sib.id));
+    const existing = await db.classattendance.findMany({
+      where: { date: currentDate, timetable_slot_id: { in: slotIds } },
+      select: { timetable_slot_id: true }
+    });
+    const recorded = new Set(existing.map(e => e.timetable_slot_id));
 
-      const existingAttendance = await db.classattendance.findFirst({
-        where: {
-          trainer_id: primary.employee_id,
-          class_id: primary.class_id,
-          date: currentDate,
-          // Any period of the session counts (older rows may sit on a later slot)
-          timetable_slot_id: { in: siblings.map((sib: any) => sib.id) }
-        }
-      });
+    // Any period of the session counts (older rows may sit on a later slot)
+    const missing = closedSessions.filter(
+      ({ siblings }) => !siblings.some((sib: any) => recorded.has(sib.id))
+    );
+    if (missing.length === 0) return;
 
-      if (!existingAttendance) {
-        await db.classattendance.create({
-          data: {
-            trainer_id: primary.employee_id,
-            class_id: primary.class_id,
-            date: currentDate,
-            timetable_slot_id: primary.id,
-            status: 'Absent',
-            location_verified: false,
-            is_online_attendance: primary.is_online_session || false,
-            check_in_time: null,
-            check_out_time: null,
-            work_attendance_id: null
-          }
-        });
-      }
-    }
+    // ONE insert; skipDuplicates covers a race with another server instance
+    await db.classattendance.createMany({
+      data: missing.map(({ primary }) => ({
+        trainer_id: primary.employee_id,
+        class_id: primary.class_id,
+        date: currentDate,
+        timetable_slot_id: primary.id,
+        status: 'Absent',
+        location_verified: false,
+        is_online_attendance: primary.is_online_session || false,
+        check_in_time: null,
+        check_out_time: null,
+        work_attendance_id: null
+      })),
+      skipDuplicates: true
+    });
   } catch (error) {
     console.error('❌ Error marking absences:', error);
   }

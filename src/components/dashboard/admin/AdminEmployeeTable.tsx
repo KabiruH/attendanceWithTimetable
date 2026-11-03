@@ -1,7 +1,7 @@
 // components/dashboard/admin/AdminEmployeeTable.tsx
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,73 +24,44 @@ interface AttendanceRecord {
   sessions?: AttendanceSession[];
 }
 
-const AdminEmployeeTable: React.FC = () => {
-  const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
-  const [filteredData, setFilteredData] = useState<AttendanceRecord[]>([]);
+interface AdminEmployeeTableProps {
+  attendanceData: AttendanceRecord[];  // from the dashboard's shared status fetch
+  isLoading: boolean;
+  onRefresh: () => void;
+}
+
+const AdminEmployeeTable: React.FC<AdminEmployeeTableProps> = ({ attendanceData: allAttendance, isLoading, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [isLoading, setIsLoading] = useState(true);
 
-  const fetchAttendanceData = async () => {
-    setIsLoading(true);
-    try {
-      const response = await fetch('/api/attendance/status', {
-        method: 'GET',
-        credentials: 'include',
+  // Today's records, earliest check-in first, not-checked-in at the bottom
+  const attendanceData = useMemo(() => {
+    const today = new Date().toDateString();
+    return allAttendance
+      .filter(record => new Date(record.date).toDateString() === today)
+      .sort((a, b) => {
+        if (!a.check_in_time && !b.check_in_time) return 0;
+        if (!a.check_in_time) return 1;
+        if (!b.check_in_time) return -1;
+        return new Date(a.check_in_time).getTime() - new Date(b.check_in_time).getTime();
       });
+  }, [allAttendance]);
 
-      if (response.ok) {
-        const data = await response.json();
-        const today = new Date().toDateString();
-        const todayAttendance = (data.attendanceData || []).filter((record: AttendanceRecord) => 
-          new Date(record.date).toDateString() === today
-        ).sort((a: AttendanceRecord, b: AttendanceRecord) => {
-          // Sort by check-in time, with those who haven't checked in at the bottom
-          if (!a.check_in_time && !b.check_in_time) return 0;
-          if (!a.check_in_time) return 1;
-          if (!b.check_in_time) return -1;
-          
-          const timeA = new Date(a.check_in_time).getTime();
-          const timeB = new Date(b.check_in_time).getTime();
-          return timeA - timeB; // Earliest first
-        });
-
-        setAttendanceData(todayAttendance);
-        setFilteredData(todayAttendance);
-      }
-    } catch (error) {
-      console.error('Error fetching attendance data:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Filter data based on search term and status
-  useEffect(() => {
+  // Filter by search term and status
+  const filteredData = useMemo(() => {
     let filtered = attendanceData;
-
-    // Filter by search term
     if (searchTerm) {
       filtered = filtered.filter(record =>
         record.employee_name.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-
-    // Filter by status
     if (statusFilter !== 'all') {
       filtered = filtered.filter(record =>
         record.status.toLowerCase() === statusFilter.toLowerCase()
       );
     }
-
-    setFilteredData(filtered);
+    return filtered;
   }, [searchTerm, statusFilter, attendanceData]);
-
-  useEffect(() => {
-    fetchAttendanceData();
-    const interval = setInterval(fetchAttendanceData, 600000);
-    return () => clearInterval(interval);
-  }, []);
 
   const formatTime = (dateString: string | null) => {
     if (!dateString) return '-';
@@ -215,6 +186,7 @@ const AdminEmployeeTable: React.FC = () => {
   };
 
   const exportToCSV = () => {
+    if (filteredData.length === 0) return;
     const csvData = filteredData.map(record => ({
       'Employee Name': record.employee_name,
       'Check In': formatTime(record.check_in_time),
@@ -236,7 +208,7 @@ const AdminEmployeeTable: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  if (isLoading) {
+  if (isLoading && allAttendance.length === 0) {
     return (
       <Card className="shadow-lg">
         <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600">
@@ -265,7 +237,7 @@ const AdminEmployeeTable: React.FC = () => {
             <Button
               variant="ghost"
               size="sm"
-              onClick={fetchAttendanceData}
+              onClick={onRefresh}
               className="text-white hover:bg-white/20"
             >
               <RefreshCw className="w-4 h-4" />
