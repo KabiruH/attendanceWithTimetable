@@ -177,20 +177,27 @@ export async function processClassAutoCheckouts(currentTime: Date) {
       if (t) combos.set(`${t.term_id}-${t.day_of_week}-${t.employee_id}`, t);
     });
 
-    const slots = combos.size > 0
-      ? await db.timetableslots.findMany({
-          where: { OR: Array.from(combos.values()) },
-          select: {
-            id: true,
-            class_id: true,
-            subject_id: true,
-            employee_id: true,
-            lessonperiods: { select: { start_time: true, end_time: true } }
-          }
-        })
-      : [];
+    const [slots, periods] = combos.size > 0
+      ? await Promise.all([
+          db.timetableslots.findMany({
+            where: { OR: Array.from(combos.values()) },
+            select: {
+              id: true,
+              class_id: true,
+              subject_id: true,
+              employee_id: true,
+              lessonperiods: { select: { start_time: true, end_time: true } }
+            }
+          }),
+          db.lessonperiods.findMany({
+            where: { is_active: true },
+            select: { start_time: true }
+          })
+        ])
+      : [[], []];
 
-    const sessionIndex = buildSessionIndex(slots);
+    // A double/triple checks out at the end of its LAST period, even across a break
+    const sessionIndex = buildSessionIndex(slots, periods);
 
     let classCheckoutCount = 0;
 

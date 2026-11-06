@@ -6,6 +6,7 @@ import { verifyMobileJWT } from '@/lib/auth/mobile-jwt';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { groupIntoSessions, minutesOfDay } from '@/lib/utils/classSessions';
+import { markMissedClassesAsAbsent } from '@/lib/utils/classAbsences';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EAT time helpers — Kenya is UTC+3 with no daylight saving
@@ -65,25 +66,36 @@ async function getCurrentTerm() {
   });
 }
 
+/** Active lesson periods — sessions are grouped by period order (doubles may span breaks) */
+function getActivePeriods() {
+  return db.lessonperiods.findMany({
+    where: { is_active: true },
+    select: { start_time: true }
+  });
+}
+
 /**
  * For a single slot the user acted on, find the session it belongs to and
  * return the primary (earliest) slot plus the session's last period.
  * Uses the shared grouping: same trainer + class + subject, back-to-back periods.
  */
 async function resolveSession(slot: any) {
-  const candidates = await db.timetableslots.findMany({
-    where: {
-      term_id: slot.term_id,
-      day_of_week: slot.day_of_week,
-      employee_id: slot.employee_id,
-      class_id: slot.class_id,
-      subject_id: slot.subject_id,
-      status: 'scheduled'
-    },
-    include: { lessonperiods: true }
-  });
+  const [candidates, periods] = await Promise.all([
+    db.timetableslots.findMany({
+      where: {
+        term_id: slot.term_id,
+        day_of_week: slot.day_of_week,
+        employee_id: slot.employee_id,
+        class_id: slot.class_id,
+        subject_id: slot.subject_id,
+        status: 'scheduled'
+      },
+      include: { lessonperiods: true }
+    }),
+    getActivePeriods()
+  ]);
 
-  const session = groupIntoSessions(candidates).find(g =>
+  const session = groupIntoSessions(candidates, periods).find(g =>
     g.siblings.some(s => s.id === slot.id)
   );
 
@@ -196,97 +208,6 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 }
 
-// Mark absences for closed check-in windows (EAT-correct, one per session).
-// Runs at most once a minute per server instance: every schedule load from
-// every phone/kiosk used to re-run it with one query per session.
-const ABSENCE_MIN_INTERVAL_MS = 60_000;
-let lastAbsenceRun = 0;
-let absenceRunInFlight: Promise<void> | null = null;
-
-function markMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>): Promise<void> {
-  if (absenceRunInFlight) return absenceRunInFlight;
-  if (Date.now() - lastAbsenceRun < ABSENCE_MIN_INTERVAL_MS) return Promise.resolve();
-
-  lastAbsenceRun = Date.now();
-  absenceRunInFlight = runMarkMissedClassesAsAbsent(clock).finally(() => {
-    absenceRunInFlight = null;
-  });
-  return absenceRunInFlight;
-}
-
-async function runMarkMissedClassesAsAbsent(clock: ReturnType<typeof getEATClock>) {
-  try {
-    const { eatNow, currentDate, dayOfWeek } = clock;
-
-    const activeTerm = await getCurrentTerm();
-    if (!activeTerm) return;
-
-    const settings = await db.timetablesettings.findFirst();
-    const lateThreshold = settings?.attendance_late_threshold || 10;
-
-    const todaySlots = await db.timetableslots.findMany({
-      where: {
-        term_id: activeTerm.id,
-        day_of_week: dayOfWeek,
-        status: 'scheduled'
-      },
-      include: {
-        lessonperiods: {
-          select: {
-            start_time: true,
-            end_time: true
-          }
-        }
-      }
-    });
-
-    // Collapse doubles/triples — one absence per session, keyed on the first period
-    const sessions = groupIntoSessions(todaySlots as any[]);
-
-    // Sessions whose check-in window has closed
-    const closedSessions = sessions.filter(({ primary }) => {
-      if (!primary.lessonperiods) return false;
-      const lessonStart = lessonTimeToday(primary.lessonperiods.start_time, eatNow);
-      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
-      return eatNow >= checkInWindowClosed;
-    });
-    if (closedSessions.length === 0) return;
-
-    // ONE query for every attendance row already recorded against these slots
-    const slotIds = closedSessions.flatMap(({ siblings }) => siblings.map((sib: any) => sib.id));
-    const existing = await db.classattendance.findMany({
-      where: { date: currentDate, timetable_slot_id: { in: slotIds } },
-      select: { timetable_slot_id: true }
-    });
-    const recorded = new Set(existing.map(e => e.timetable_slot_id));
-
-    // Any period of the session counts (older rows may sit on a later slot)
-    const missing = closedSessions.filter(
-      ({ siblings }) => !siblings.some((sib: any) => recorded.has(sib.id))
-    );
-    if (missing.length === 0) return;
-
-    // ONE insert; skipDuplicates covers a race with another server instance
-    await db.classattendance.createMany({
-      data: missing.map(({ primary }) => ({
-        trainer_id: primary.employee_id,
-        class_id: primary.class_id,
-        date: currentDate,
-        timetable_slot_id: primary.id,
-        status: 'Absent',
-        location_verified: false,
-        is_online_attendance: primary.is_online_session || false,
-        check_in_time: null,
-        check_out_time: null,
-        work_attendance_id: null
-      })),
-      skipDuplicates: true
-    });
-  } catch (error) {
-    console.error('❌ Error marking absences:', error);
-  }
-}
-
 // Get trainer's schedule for today from timetable
 async function getTodaySchedule(trainerId: number, dayOfWeek: number) {
   const activeTerm = await getCurrentTerm();
@@ -349,8 +270,17 @@ async function getTodaySchedule(trainerId: number, dayOfWeek: number) {
   return slots;
 }
 
-// Check if trainer can check in to this slot (all math in EAT wall-clock space)
-function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: any) {
+// Check if trainer can check in to this session (all math in EAT wall-clock space).
+// Check-in opens `attendance_check_in_window` minutes before the session and
+// stays open until the session ENDS (the end of its last period for a
+// double/triple) — trainers may check in however late, while the class is on.
+// Anything after the start time is recorded as Late.
+function canCheckIn(
+  slot: TimetableSlotWithRelations,
+  eatNow: Date,
+  settings: any,
+  lastPeriod?: { end_time: Date } | null
+) {
   if (!slot.lessonperiods) return { canCheckIn: false, reason: 'No lesson period found' };
 
   const lessonStart = lessonTimeToday(slot.lessonperiods.start_time, eatNow);
@@ -358,8 +288,8 @@ function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: an
   const checkInWindow = settings?.attendance_check_in_window || 15;
   const earliestCheckIn = new Date(lessonStart.getTime() - (checkInWindow * 60 * 1000));
 
-  const lateThreshold = settings?.attendance_late_threshold || 10;
-  const latestCheckIn = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
+  const sessionEnd = lessonTimeToday((lastPeriod ?? slot.lessonperiods).end_time, eatNow);
+  const latestCheckIn = sessionEnd;
 
   const now = eatNow.getTime();
 
@@ -372,10 +302,10 @@ function canCheckIn(slot: TimetableSlotWithRelations, eatNow: Date, settings: an
     };
   }
 
-  if (now > latestCheckIn.getTime()) {
+  if (now >= latestCheckIn.getTime()) {
     return {
       canCheckIn: false,
-      reason: 'Check-in window closed. Class has started',
+      reason: 'Class has ended',
       isLate: true
     };
   }
@@ -392,8 +322,8 @@ export async function GET(request: NextRequest) {
     const clock = getEATClock();
     const { utcNow, eatNow, currentDate, dayOfWeek } = clock;
 
-    // Mark absences for all trainers before returning schedule
-    await markMissedClassesAsAbsent(clock);
+    // Mark absences for all trainers before returning schedule (shared, throttled)
+    await markMissedClassesAsAbsent();
 
     const url = new URL(request.url);
     const queryEmployeeId = url.searchParams.get('employee_id');
@@ -401,9 +331,11 @@ export async function GET(request: NextRequest) {
     const userIdToUse = user.role === 'admin' && queryEmployeeId ?
       Number(queryEmployeeId) : user.id;
 
-    const settings = await db.timetablesettings.findFirst();
-
-    const todaySchedule = await getTodaySchedule(userIdToUse, dayOfWeek);
+    const [settings, periods, todaySchedule] = await Promise.all([
+      db.timetablesettings.findFirst(),
+      getActivePeriods(),
+      getTodaySchedule(userIdToUse, dayOfWeek)
+    ]);
 
     const todayAttendance = await db.classattendance.findMany({
       where: {
@@ -423,8 +355,8 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // Collapse doubles/triples into one entry per session
-    const sessions = groupIntoSessions(todaySchedule as any[]);
+    // Collapse doubles/triples (even across a break) into one entry per session
+    const sessions = groupIntoSessions(todaySchedule as any[], periods);
 
     // Enrich schedule with attendance status and check-in eligibility
     const enrichedSchedule = sessions.map(({ primary, siblings }) => {
@@ -441,7 +373,7 @@ export async function GET(request: NextRequest) {
       const attendance =
         sessionRows.find(att => att.check_in_time) ?? sessionRows[0];
 
-      const checkInStatus = canCheckIn(primary, eatNow, settings);
+      const checkInStatus = canCheckIn(primary, eatNow, settings, lastPeriod);
 
       // Pre-formatted Nairobi wall-clock times — the mobile app should display
       // these verbatim instead of converting the raw start_time/end_time Dates
@@ -464,8 +396,14 @@ export async function GET(request: NextRequest) {
         sessionSpan: siblings.length,          // 1 = single, 2 = double, 3 = triple
         sessionSlotIds: siblings.map(s => s.id),
         attendance,
-        canCheckIn: attendance?.status === 'Absent' ? false : checkInStatus.canCheckIn,
-        checkInReason: attendance?.status === 'Absent' ? 'Marked as absent' : checkInStatus.reason,
+        // An auto-Absent row is upgraded on check-in (see POST), so it only
+        // blocks once the session is over
+        canCheckIn: !attendance?.check_in_time && checkInStatus.canCheckIn,
+        checkInReason: attendance?.check_in_time
+          ? 'Already checked in'
+          : checkInStatus.canCheckIn
+            ? undefined
+            : attendance?.status === 'Absent' ? 'Marked as absent' : checkInStatus.reason,
         isLate: checkInStatus.isLate || false,
         hasCheckedIn: !!attendance?.check_in_time,
         hasCheckedOut: !!attendance?.check_out_time,
@@ -704,7 +642,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Verify check-in window — based on the session's FIRST period
-      const checkInStatus = canCheckIn(windowSlot, eatNow, settings);
+      const checkInStatus = canCheckIn(windowSlot, eatNow, settings, session.lastPeriod);
 
       if (!checkInStatus.canCheckIn) {
         return NextResponse.json(

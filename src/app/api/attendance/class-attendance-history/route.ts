@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import jwt from 'jsonwebtoken';
+import { markMissedClassesAsAbsent } from '@/lib/utils/classAbsences';
 
 // Helper function to verify JWT and get user
 async function getAuthenticatedUser(req: NextRequest) {
@@ -43,82 +44,6 @@ function calculateDuration(checkIn: Date, checkOut: Date): { hours: number; minu
   };
 }
 
-async function markMissedClassesAsAbsent(currentTime: Date) {
-  try {
-    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
-    const dayOfWeek = currentTime.getDay();
-    
-    const activeTerm = await db.terms.findFirst({
-      where: { is_active: true }
-    });
-
-    if (!activeTerm) return;
-
-    const settings = await db.timetablesettings.findFirst();
-    const lateThreshold = settings?.attendance_late_threshold || 10;
-
-    const todaySlots = await db.timetableslots.findMany({
-      where: {
-        term_id: activeTerm.id,
-        day_of_week: dayOfWeek,
-        status: 'scheduled'
-      },
-      include: {
-        lessonperiods: {
-          select: {
-            start_time: true,
-            end_time: true
-          }
-        }
-      }
-    });
-
-    for (const slot of todaySlots) {
-      if (!slot.lessonperiods) continue;
-
-      const startTime = new Date(slot.lessonperiods.start_time);
-      const lessonStart = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth(),
-        currentDate.getDate(),
-        startTime.getHours(),
-        startTime.getMinutes(),
-        0
-      );
-
-      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
-
-      if (currentTime < checkInWindowClosed) continue;
-
-      const existingAttendance = await db.classattendance.findFirst({
-        where: {
-          trainer_id: slot.employee_id,
-          class_id: slot.class_id,
-          date: currentDate,
-          timetable_slot_id: slot.id
-        }
-      });
-
-      if (!existingAttendance) {
-        await db.classattendance.create({
-          data: {
-            trainer_id: slot.employee_id,
-            class_id: slot.class_id,
-            date: currentDate,
-            timetable_slot_id: slot.id,
-            status: 'Absent',
-            location_verified: false,
-            is_online_attendance: slot.is_online_session || false,
-            // Use undefined instead of null if the schema doesn't allow null
-            work_attendance_id: null
-          }
-        });
-      }
-    }
-  } catch (error) {
-    console.error('❌ Error marking absences:', error);
-  }
-}
 
 // GET - Get class attendance history with filters
 export async function GET(req: NextRequest) {
@@ -140,7 +65,7 @@ export async function GET(req: NextRequest) {
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     
     // ✅ Mark absences before fetching
-    await markMissedClassesAsAbsent(nowInKenya.toJSDate());
+    await markMissedClassesAsAbsent(); // shared, session-aware, throttled
     
     // Default to current month if no dates provided
     const defaultStartDate = new Date(nowInKenya.year, nowInKenya.month - 1, 1);

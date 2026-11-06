@@ -30,7 +30,7 @@ import {
 import { Search, RefreshCw, Wifi, CalendarX, FileDown, Loader2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
-export type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'missed' | 'absent';
+export type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'late' | 'missed' | 'absent';
 
 export interface ScheduledSession {
   id: string;
@@ -79,12 +79,13 @@ const SPAN_LABEL: Record<number, string> = { 2: 'Double', 3: 'Triple' };
 
 // Not-checked-in sessions first, so the ones needing attention are on top
 const STATE_ORDER: Record<CheckInState, number> = {
-  missed: 0,
-  absent: 1,
-  awaiting: 2,
-  checked_in: 3,
-  checked_out: 4,
-  upcoming: 5,
+  late: 0,
+  missed: 1,
+  absent: 2,
+  awaiting: 3,
+  checked_in: 4,
+  checked_out: 5,
+  upcoming: 6,
 };
 
 const STATE_TEXT: Record<CheckInState, string> = {
@@ -92,7 +93,8 @@ const STATE_TEXT: Record<CheckInState, string> = {
   checked_out: 'Checked in (session ended)',
   upcoming: 'Not started',
   awaiting: 'Not yet (window open)',
-  missed: 'Not checked in',
+  late: 'Not checked in (late, can still check in)',
+  missed: 'Not checked in (lesson over)',
   absent: 'Marked absent',
 };
 
@@ -167,11 +169,18 @@ function CheckInBadge({ session }: { session: ScheduledSession }) {
           <div className="text-xs text-gray-500 mt-1">Check-in window open</div>
         </div>
       );
+    case 'late':
+      return (
+        <div>
+          <Badge className="bg-red-500 hover:bg-red-600">Not checked in</Badge>
+          <div className="text-xs text-gray-500 mt-1">Late, can still check in</div>
+        </div>
+      );
     case 'missed':
       return (
         <div>
           <Badge className="bg-red-500 hover:bg-red-600">Not checked in</Badge>
-          <div className="text-xs text-gray-500 mt-1">Window closed</div>
+          <div className="text-xs text-gray-500 mt-1">Lesson over</div>
         </div>
       );
     case 'absent':
@@ -326,7 +335,7 @@ const ActiveSessionsModal: React.FC<ActiveSessionsModalProps> = ({
         didParseCell: (data) => {
           if (data.section !== 'body') return;
           const s = filtered[data.row.index];
-          if (s && (s.checkIn.state === 'missed' || s.checkIn.state === 'absent')) {
+          if (s && (['late', 'missed', 'absent'].includes(s.checkIn.state))) {
             data.cell.styles.fillColor = [254, 226, 226];
           }
         },
@@ -476,7 +485,7 @@ const ActiveSessionsModal: React.FC<ActiveSessionsModalProps> = ({
                   <TableRow
                     key={s.id}
                     className={
-                      s.checkIn.state === 'missed' || s.checkIn.state === 'absent'
+                      ['late', 'missed', 'absent'].includes(s.checkIn.state)
                         ? 'bg-red-50/60 hover:bg-red-50'
                         : 'hover:bg-gray-50'
                     }

@@ -58,7 +58,7 @@ function hhmm(stored: Date): string {
 const DEFAULT_CHECKIN_WINDOW = 15;  // minutes before the session it opens
 const DEFAULT_LATE_THRESHOLD = 10;  // minutes after the start it closes
 
-type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'missed' | 'absent';
+type CheckInState = 'checked_in' | 'checked_out' | 'upcoming' | 'awaiting' | 'late' | 'missed' | 'absent';
 
 // GET - Get all class attendance status for admin dashboard
 export async function GET(req: NextRequest) {
@@ -220,8 +220,10 @@ export async function GET(req: NextRequest) {
         checkInState = checkedIn.check_out_time ? 'checked_out' : 'checked_in';
       } else if (records.some(a => a.status === 'Absent')) {
         checkInState = 'absent';
+      } else if (endMin !== null && nowMinutes >= endMin) {
+        checkInState = 'missed';     // session over, never checked in
       } else if (startMin !== null && nowMinutes > startMin + checkInClosesAfter) {
-        checkInState = 'missed';
+        checkInState = 'late';       // past the late threshold but can still check in
       } else if (startMin !== null && nowMinutes < startMin - checkInOpensBefore) {
         checkInState = 'upcoming';   // check-in window not open yet
       } else {

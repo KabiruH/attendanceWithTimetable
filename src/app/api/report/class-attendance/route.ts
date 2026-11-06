@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { DateTime } from 'luxon';
 import { db } from '@/lib/db/db';
 import jwt from 'jsonwebtoken';
+import { markMissedClassesAsAbsent } from '@/lib/utils/classAbsences';
+import { groupIntoSessions } from '@/lib/utils/classSessions';
 
 // Helper function to verify JWT and get user
 async function getAuthenticatedUser(req: NextRequest) {
@@ -29,82 +31,6 @@ async function getAuthenticatedUser(req: NextRequest) {
   }
 }
 
-// Mark absences before fetching
-async function markMissedClassesAsAbsent(currentTime: Date) {
-  try {
-    const currentDate = new Date(currentTime.toISOString().split('T')[0]);
-    const dayOfWeek = currentTime.getDay();
-    
-    const activeTerm = await db.terms.findFirst({
-      where: { is_active: true }
-    });
-
-    if (!activeTerm) return;
-
-    const settings = await db.timetablesettings.findFirst();
-    const lateThreshold = settings?.attendance_late_threshold || 10;
-
-    const todaySlots = await db.timetableslots.findMany({
-      where: {
-        term_id: activeTerm.id,
-        day_of_week: dayOfWeek,
-        status: 'scheduled'
-      },
-      include: {
-        lessonperiods: {
-          select: {
-            start_time: true,
-            end_time: true
-          }
-        }
-      }
-    });
-
-    for (const slot of todaySlots) {
-      if (!slot.lessonperiods) continue;
-
-      const startTime = new Date(slot.lessonperiods.start_time);
-      const lessonStart = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth(),
-        currentDate.getDate(),
-        startTime.getHours(),
-        startTime.getMinutes(),
-        0
-      );
-
-      const checkInWindowClosed = new Date(lessonStart.getTime() + (lateThreshold * 60 * 1000));
-
-      if (currentTime < checkInWindowClosed) continue;
-
-      const existingAttendance = await db.classattendance.findFirst({
-        where: {
-          trainer_id: slot.employee_id,
-          class_id: slot.class_id,
-          date: currentDate,
-          timetable_slot_id: slot.id
-        }
-      });
-
-      if (!existingAttendance) {
-        await db.classattendance.create({
-          data: {
-            trainer_id: slot.employee_id,
-            class_id: slot.class_id,
-            date: currentDate,
-            timetable_slot_id: slot.id,
-            status: 'Absent',
-            location_verified: false,
-            is_online_attendance: slot.is_online_session || false,
-            work_attendance_id: null
-          }
-        });
-      }
-    }
-  } catch (error) {
-    console.error('❌ Error marking absences:', error);
-  }
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -119,7 +45,7 @@ export async function GET(req: NextRequest) {
     const nowInKenya = DateTime.now().setZone('Africa/Nairobi');
     
     // Mark absences for today
-    await markMissedClassesAsAbsent(nowInKenya.toJSDate());
+    await markMissedClassesAsAbsent(); // shared, session-aware, throttled
     
     // Default to current week
     const defaultStartDate = nowInKenya.startOf('week').toJSDate();
@@ -171,68 +97,91 @@ export async function GET(req: NextRequest) {
       ]
     });
     
-    // Enrich with timetable slot data
-    const enrichedData = await Promise.all(
-      classAttendance.map(async (record) => {
-        let slotData = null;
-        
-        if (record.timetable_slot_id) {
-          const slot = await db.timetableslots.findUnique({
-            where: { id: record.timetable_slot_id },
-            include: {
-              subjects: {
-                select: {
-                  id: true,
-                  name: true,
-                  code: true
-                }
-              },
-              rooms: {
-                select: {
-                  id: true,
-                  name: true
-                }
-              },
-              lessonperiods: {
-                select: {
-                  id: true,
-                  name: true,
-                  start_time: true,
-                  end_time: true
-                }
-              },
-              terms: {
-                select: {
-                  id: true,
-                  name: true
-                }
-              }
+    // Enrich with timetable slot data — batched (this used to be one query per
+    // record), and session-aware: a double/triple reports its full span, not
+    // just its first period
+    const slotIds = Array.from(new Set(
+      classAttendance.map(r => r.timetable_slot_id).filter((id): id is string => !!id)
+    ));
+
+    const slots = slotIds.length > 0
+      ? await db.timetableslots.findMany({
+          where: { id: { in: slotIds } },
+          include: {
+            subjects: { select: { id: true, name: true, code: true } },
+            rooms: { select: { id: true, name: true } },
+            lessonperiods: { select: { id: true, name: true, start_time: true, end_time: true } },
+            terms: { select: { id: true, name: true } }
+          }
+        })
+      : [];
+
+    // The other periods of each record's session (same term, day, trainer,
+    // class and subject), so the session's real end can be found
+    const combos = new Map<string, { term_id: number; day_of_week: number; employee_id: number; class_id: number; subject_id: number }>();
+    slots.forEach(sl => {
+      const c = { term_id: sl.term_id, day_of_week: sl.day_of_week, employee_id: sl.employee_id, class_id: sl.class_id, subject_id: sl.subject_id };
+      combos.set(Object.values(c).join('-'), c);
+    });
+
+    const [siblingSlots, periods] = combos.size > 0
+      ? await Promise.all([
+          db.timetableslots.findMany({
+            where: { OR: Array.from(combos.values()), status: 'scheduled' },
+            select: {
+              id: true, term_id: true, day_of_week: true, employee_id: true, class_id: true, subject_id: true,
+              lessonperiods: { select: { start_time: true, end_time: true } }
             }
-          });
-          
-          slotData = slot ? {
-            subject: slot.subjects,
-            room: slot.rooms,
-            lessonPeriod: slot.lessonperiods,
-            term: slot.terms,
-            dayOfWeek: slot.day_of_week,
-            isOnline: slot.is_online_session
-          } : null;
-        }
-        
-        return {
-          id: record.id,
-          trainer: record.users,
-          class: record.classes,
-          date: record.date,
-          status: record.status,
-          checkInTime: record.check_in_time,
-          checkOutTime: record.check_out_time,
-          isOnline: record.is_online_attendance,
-          slot: slotData
-        };
-      })
-    );
+          }),
+          db.lessonperiods.findMany({ where: { is_active: true }, select: { start_time: true } })
+        ])
+      : [[], []];
+
+    // Group per term + day, then map every slot to its session's end and span
+    const byTermDay = new Map<string, typeof siblingSlots>();
+    siblingSlots.forEach(sl => {
+      const k = `${sl.term_id}-${sl.day_of_week}`;
+      byTermDay.set(k, [...(byTermDay.get(k) ?? []), sl]);
+    });
+    const sessionOf = new Map<string, { end_time: Date | null; span: number }>();
+    byTermDay.forEach(daySlots => {
+      groupIntoSessions(daySlots, periods).forEach(({ siblings }) => {
+        const last = siblings[siblings.length - 1];
+        const info = { end_time: last.lessonperiods?.end_time ?? null, span: siblings.length };
+        siblings.forEach(sib => sessionOf.set(sib.id, info));
+      });
+    });
+
+    const slotById = new Map<string, (typeof slots)[number]>(slots.map(sl => [sl.id, sl]));
+
+    const enrichedData = classAttendance.map(record => {
+      const slot = record.timetable_slot_id ? slotById.get(record.timetable_slot_id) : undefined;
+      const session = slot ? sessionOf.get(slot.id) : undefined;
+
+      const slotData = slot ? {
+        subject: slot.subjects,
+        room: slot.rooms,
+        lessonPeriod: slot.lessonperiods
+          ? { ...slot.lessonperiods, end_time: session?.end_time ?? slot.lessonperiods.end_time }
+          : null,
+        sessionSpan: session?.span ?? 1,   // 1 = single, 2 = double, 3 = triple
+        term: slot.terms,
+        dayOfWeek: slot.day_of_week,
+        isOnline: slot.is_online_session
+      } : null;
+
+      return {
+        id: record.id,
+        trainer: record.users,
+        class: record.classes,
+        date: record.date,
+        status: record.status,
+        checkInTime: record.check_in_time,
+        checkOutTime: record.check_out_time,
+        isOnline: record.is_online_attendance,
+        slot: slotData
+      };
+    });
     
     // Group by date for easier display
     const groupedByDate = enrichedData.reduce((acc, record) => {
